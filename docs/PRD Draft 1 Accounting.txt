@@ -1,0 +1,69 @@
+PRD — Draft 1: Accounting AI Agent for Electric Motor Workshops
+1. Overview
+A multi-tenant SaaS that lets workshop staff record day-to-day accounting by speaking, typing, or uploading invoices. An AI agent converts unstructured input into validated double-entry accounting transactions stored in a central database. A back-office web dashboard provides data views, analytics, reports, and one-way sync to TallyPrime (local or cloud) for GST filing.
+2. Goals & Non-Goals
+Goals
+
+Frictionless data capture (voice / text / image) in Hinglish, English, and regional languages
+Correct double-entry bookkeeping behind a simple UX
+Reliable Tally sync for GST compliance
+Multi-tenant, scalable, low per-transaction cost
+
+Non-Goals (v1)
+
+Replacing Tally / direct GST portal filing (Tally remains the filing tool)
+Serial-number-level inventory
+Daily-wage / piece-rate payroll
+Customer-facing invoicing portal
+
+3. User Roles
+
+Owner / Admin — full access, approvals, payroll, reports, Tally sync
+Authorized data-entry user — capture transactions, view limited data
+(Platform) Super-admin — manages tenants, billing, monitoring
+
+4. Core Modules
+A. Capture Agent (the heart of the product)
+
+Pipeline: Capture → Transcribe/OCR → Parse to intent+entities → Resolve (SKU, vendor, ledger) → Confirm with user → Post double-entry → Store. Always show a confirmation card before posting; low-confidence fields get highlighted for correction.
+Supported transaction types: motor sale, service (repair/rewinding), stock purchase, vendor payment, staff attendance, payroll, staff advance, misc expense.
+B. Ledgers & Accounting Engine
+
+Double-entry core: every transaction generates balanced debit/credit journal entries against a chart of accounts. Maintains party ledgers (customers, vendors, staff), trial balance, and GST output/input tax tracking.
+C. Inventory — composite-SKU motor catalog (see Q9 above), stock-in on purchase, stock-out on sale, low-stock view.
+D. Staff & Payroll — staff master, monthly attendance, advances ledger, monthly salary run that auto-deducts advances and posts the payroll journal entry.
+E. Back-Office Dashboard — transactions list with filters/search, analytics (sales, service revenue, expenses, profit, outstanding payables/receivables), reports (day book, GST summary, P&L snapshot), and the Tally sync console.
+F. Tally Sync — exports validated transactions as Tally XML. Local TallyPrime via its HTTP/XML gateway on LAN; cloud Tally via a lightweight connector/agent. One-way (app → Tally) in v1 with idempotent, deduplicated pushes and a sync-status log.
+5. Data Model (high level)
+tenants, users, motor_catalog (SKU), inventory_stock, parties (customer/vendor/staff unified or split), transactions, journal_entries (the double-entry lines), attendance, advances, payroll_runs, tax_lines, tally_sync_log, audit_log. Every row is tenant-scoped.
+6. AI / Agent Design
+
+STT: streaming speech-to-text supporting Hinglish + regional (evaluate a model with strong Indian-language coverage).
+OCR: document model that handles both printed GST invoices and handwritten chits.
+Parsing: LLM with a strict JSON schema (function-calling) that outputs transaction type + entities + confidence. Inject the tenant's SKU/vendor/ledger catalog into context so it resolves names correctly.
+Cost control: tiered models (small model default, escalate on low confidence), confirmation step to catch errors cheaply, batch/async OCR.
+Guardrail: nothing posts to ledgers or Tally without passing balance validation + (for sensitive items like payroll) user confirmation.
+
+7. Tech Stack (suggested, you decide)
+Multi-tenant backend (your language of choice; row-level tenant isolation in Postgres is the safest default), object storage for invoice images/audio, a queue for async AI jobs, React/Next back-office, and a mobile app (React Native or Flutter) for capture. Alexa-style speaker is a later phase — start with the mobile app where you control mic, confirmation UI, and image upload; voice-only smart-speaker UX is hard to get right for financial confirmation.
+8. Phasing
+
+Phase 1 (MVP): mobile capture (text + voice + image), parsing → confirmation → double-entry store, back-office transaction list, basic reports. Single language (Hinglish/English).
+Phase 2: full inventory, payroll, advances, analytics, Tally local sync.
+Phase 3: regional languages, Tally cloud, GST summary reports, multi-tenant billing.
+Phase 4: smart-speaker interface, two-way Tally reconciliation.
+
+9. Key Risks / Open Questions
+
+Confirmation UX — voice-only confirmation of money amounts is risky; mobile-first solves this.
+Tally XML edge cases — Tally is finicky; budget real time for the connector.
+Multi-tenant data isolation — get this right from day one (row-level security).
+Handwritten OCR accuracy — will need a human-correction loop; treat low-confidence OCR as draft, never auto-post.
+
+
+A few things I deliberately left open for us to brainstorm next. Which do you want to dig into first:
+
+The capture-agent flow in detail (the parse → confirm → post state machine)?
+The double-entry chart of accounts mapped to each transaction type?
+The Tally XML sync mechanics?
+The motor catalog / fuzzy SKU resolution logic?
