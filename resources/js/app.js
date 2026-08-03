@@ -1,5 +1,5 @@
 import auth from './auth-client';
-import { applyPermissionGates, setGrants } from './permissions';
+import { applyPermissionGates, setGrants, setWorkspace } from './permissions';
 import { $, $$, initModals, toast } from './ui';
 
 /* -------------------------------------------------------------------------
@@ -28,6 +28,27 @@ function renderUser(user) {
         el.textContent = user.name.split(' ')[0];
         // Drop the loading skeleton once there is real text to show.
         el.classList.remove('min-w-24', 'rounded', 'bg-muted', 'text-transparent');
+    });
+
+    renderWorkspace(user);
+}
+
+/**
+ * Which workshop's books this session is looking at — or that it is looking at
+ * none, for a platform super-admin.
+ *
+ * Worth showing plainly: a platform admin holds every permission, so without
+ * this the only signal that they are outside any workshop is a failed request.
+ */
+function renderWorkspace(user) {
+    const workshop = user.tenant ?? null;
+
+    $$('[data-workspace-name]').forEach((el) => {
+        el.textContent = workshop?.name ?? 'Platform administration';
+    });
+
+    $$('[data-workspace-scope]').forEach((el) => {
+        el.textContent = workshop ? 'Workshop' : 'No workshop · manages tenants';
     });
 }
 
@@ -88,12 +109,16 @@ function initLogout() {
 }
 
 /* -------------------------------------------------------------------------
- | Login page
+ | Unauthenticated forms: sign in, sign up
  | ---------------------------------------------------------------------- */
 
-function initLogin(form) {
-    const banner = $('#login-error');
-    const submit = $('[data-submit]', form);
+/**
+ * Shared plumbing for the two credential forms: field errors, banner, busy
+ * state and the password reveal. Only the request and the destination differ.
+ */
+function initAuthForm(form, { bannerId, idleLabel, busyLabel, submit, redirectTo }) {
+    const banner = $(bannerId);
+    const button = $('[data-submit]', form);
     const spinner = $('[data-spinner]', form);
     const label = $('[data-submit-label]', form);
 
@@ -125,9 +150,9 @@ function initLogin(form) {
     };
 
     const setBusy = (busy) => {
-        submit.disabled = busy;
+        button.disabled = busy;
         spinner.classList.toggle('hidden', !busy);
-        label.textContent = busy ? 'Signing in…' : 'Sign in';
+        label.textContent = busy ? busyLabel : idleLabel;
     };
 
     const toggle = $('[data-toggle-password]', form);
@@ -147,13 +172,43 @@ function initLogin(form) {
         setBusy(true);
 
         try {
-            await auth.login($('#email', form).value.trim(), $('#password', form).value);
+            await submit(form);
 
-            window.location.assign('/dashboard');
+            window.location.assign(redirectTo);
         } catch (error) {
             showError(error);
             setBusy(false);
         }
+    });
+}
+
+function initLogin(form) {
+    initAuthForm(form, {
+        bannerId: '#login-error',
+        idleLabel: 'Sign in',
+        busyLabel: 'Signing in…',
+        redirectTo: '/dashboard',
+        submit: () => auth.login($('#email', form).value.trim(), $('#password', form).value),
+    });
+}
+
+function initRegister(form) {
+    initAuthForm(form, {
+        bannerId: '#register-error',
+        idleLabel: 'Create workshop',
+        busyLabel: 'Creating…',
+        // Straight to the workspace settings, which is where a new owner has
+        // something left to do: confirm the GSTIN and the financial year before
+        // anything is posted.
+        redirectTo: '/workspace?welcome=1',
+        submit: () => auth.register({
+            workshop_name: $('#workshop_name', form).value.trim(),
+            gstin: $('#gstin', form).value.trim().toUpperCase() || null,
+            name: $('#name', form).value.trim(),
+            email: $('#email', form).value.trim(),
+            password: $('#password', form).value,
+            password_confirmation: $('#password_confirmation', form).value,
+        }),
     });
 }
 
@@ -163,8 +218,24 @@ function initLogin(form) {
 
 /** Page modules are loaded lazily so the dashboard never ships the CRUD code. */
 const PAGES = {
+    accounts: () => import('./pages/accounts'),
+    audit: () => import('./pages/audit'),
+    bills: () => import('./pages/bills'),
+    // Two screens over one `parties` table — both are thin wrappers around
+    // ./pages/counterparty, which is where the shared behaviour lives.
+    customers: () => import('./pages/customers'),
+    vendors: () => import('./pages/vendors'),
+    items: () => import('./pages/items'),
+    journal: () => import('./pages/journal'),
+    ledger: () => import('./pages/ledger'),
+    opening: () => import('./pages/opening'),
+    reports: () => import('./pages/reports'),
+    stock: () => import('./pages/stock'),
+    tenants: () => import('./pages/tenants'),
+    uploads: () => import('./pages/uploads'),
     users: () => import('./pages/users'),
     roles: () => import('./pages/roles'),
+    workspace: () => import('./pages/workspace'),
 };
 
 async function initAuthenticatedPage() {
@@ -180,6 +251,10 @@ async function initAuthenticatedPage() {
 
     renderUser(user);
     setGrants(user.permissions ?? []);
+    // Tenancy gates independently of permissions: a platform super-admin holds
+    // every grant but belongs to no workshop, so the workshop nav must stay
+    // hidden for them.
+    setWorkspace(user.tenant_id ?? null);
     applyPermissionGates();
 
     initChrome();
@@ -207,6 +282,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (loginForm) {
         initLogin(loginForm);
+
+        return;
+    }
+
+    const registerForm = $('#register-form');
+
+    if (registerForm) {
+        initRegister(registerForm);
 
         return;
     }

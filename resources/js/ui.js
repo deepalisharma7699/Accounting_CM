@@ -37,6 +37,80 @@ export function formatDate(value) {
     });
 }
 
+/**
+ * How long ago, in words: "15 min ago", "3 hours ago", "yesterday".
+ *
+ * For the one place a relative time beats an absolute one — a worklist, where
+ * the question is which draft has gone stale rather than what day it was
+ * started. Everywhere else uses {@see formatDate}, because "12 Jul 2024" is
+ * what a voucher says and a voucher's date does not drift as you read it.
+ *
+ * Falls back to the date past a week, where "23 days ago" has stopped being
+ * easier to think about than the day itself.
+ */
+export function formatRelative(value) {
+    if (!value) return '—';
+
+    const then = new Date(value);
+    const seconds = Math.round((Date.now() - then.getTime()) / 1000);
+
+    if (Number.isNaN(seconds)) return '—';
+    // A clock a few seconds ahead of the server should not read "in 4 seconds".
+    if (seconds < 60) return 'just now';
+
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes} min ago`;
+
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+
+    const days = Math.floor(hours / 24);
+    if (days === 1) return 'yesterday';
+    if (days < 7) return `${days} days ago`;
+
+    return formatDate(value);
+}
+
+/* -------------------------------------------------------------------------
+ | Money
+ | ---------------------------------------------------------------------- */
+
+/**
+ * Group a decimal-string amount for display: "1234567.5" -> "12,34,567.50".
+ *
+ * The API sends amounts as strings and they stay strings the whole way here —
+ * `Number('0.10')` is a binary float, and a page that adds a column of those
+ * shows a total a paisa out from the one the ledger holds. Grouping is done on
+ * the digits themselves, so nothing is ever parsed.
+ *
+ * Indian grouping: the last three digits, then twos — 12,34,567 rather than
+ * 1,234,567.
+ */
+export function formatMoney(amount, { sign = false } = {}) {
+    if (amount === null || amount === undefined || amount === '') return '—';
+
+    const text = String(amount).trim();
+    const negative = text.startsWith('-');
+    const [whole = '0', fraction = ''] = text.replace(/^[-+]/, '').split('.');
+
+    const paise = (fraction + '00').slice(0, 2);
+
+    const last3 = whole.slice(-3);
+    const rest = whole.slice(0, -3);
+    const grouped = rest
+        ? `${rest.replace(/\B(?=(\d{2})+(?!\d))/g, ',')},${last3}`
+        : last3;
+
+    const prefix = negative ? '-' : (sign && whole !== '0' ? '+' : '');
+
+    return `${prefix}${grouped}.${paise}`;
+}
+
+/** True when a decimal-string amount is zero, without parsing it. */
+export function isZeroAmount(amount) {
+    return /^-?0+(\.0*)?$/.test(String(amount ?? '0').trim());
+}
+
 /* -------------------------------------------------------------------------
  | Toast
  | ---------------------------------------------------------------------- */

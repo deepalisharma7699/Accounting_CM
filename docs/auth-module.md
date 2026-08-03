@@ -3,6 +3,11 @@
 JWT authentication with dual tokens, dynamic RBAC, and administrative user
 management for the Accounting CM Laravel 13 application.
 
+> Multi-tenancy layers on top of this module and changes two things about it:
+> `POST /auth/register` now provisions a workshop, and user lookups are split
+> into tenant-scoped and cross-tenant families. See
+> [tenancy-module.md](tenancy-module.md).
+
 ## Stack mapping
 
 The brief was written against a Node/Prisma stack. Laravel equivalents used:
@@ -51,7 +56,7 @@ Controllers never touch Eloquent; services never touch the request or response.
 
 | Table | Purpose |
 | --- | --- |
-| `users` | `+ status`, `custom_role_id`, `failed_login_attempts`, `locked_until`, `last_login_at/ip`, `deleted_at`. `password` **is** the hash column. |
+| `users` | `+ tenant_id` (nullable — NULL is a platform super-admin), `status`, `custom_role_id`, `failed_login_attempts`, `locked_until`, `last_login_at/ip`, `deleted_at`. `password` **is** the hash column. |
 | `roles` | `name`, `slug`, `description`, `is_system_role`, soft deletes |
 | `permissions` | `action`, `resource`, `description`; unique on (action, resource) |
 | `role_permission` | Junction, unique on (role_id, permission_id), cascade delete |
@@ -63,13 +68,16 @@ Base path `/api/v1`. Access tokens go in `Authorization: Bearer <token>`.
 
 | Method | Path | Guard | Required permission |
 | --- | --- | --- | --- |
-| POST | `/auth/register` | `throttle:auth-register` | — |
+| POST | `/auth/register` | `throttle:auth-register` | — (provisions a workshop + its owner) |
 | POST | `/auth/login` | `throttle:auth-login` | — |
 | POST | `/auth/refresh` | `throttle:auth-refresh` + refresh cookie | — |
 | POST | `/auth/logout` | refresh cookie | — |
 | POST | `/auth/logout-all` | `auth.jwt` | — |
 | GET | `/auth/me` | `auth.jwt` | — |
 | GET | `/permissions` | `auth.jwt` | `READ:PERMISSIONS` |
+| — | `/workspace` | `auth.jwt` | `READ`/`UPDATE:WORKSPACE` — see [tenancy-module.md](tenancy-module.md) |
+| — | `/tenants…` | `auth.jwt` | `*:TENANTS` — see [tenancy-module.md](tenancy-module.md) |
+| — | `/accounts…` | `auth.jwt` | `*:ACCOUNTS` — see [accounting-module.md](accounting-module.md) |
 | GET | `/roles` | `auth.jwt` | `READ:ROLES` |
 | GET | `/roles/{id}` | `auth.jwt` | `READ:ROLES` |
 | POST | `/roles` | `auth.jwt` | `WRITE:ROLES` |
@@ -97,14 +105,19 @@ Base path `/api/v1`. Access tokens go in `Authorization: Bearer <token>`.
 | Status | Error code(s) |
 | --- | --- |
 | 401 | `AUTH_TOKEN_MISSING`, `AUTH_TOKEN_INVALID`, `AUTH_TOKEN_EXPIRED`, `AUTH_TOKEN_REVOKED`, `AUTH_TOKEN_REUSED`, `AUTH_TOKEN_WRONG_TYPE`, `AUTH_INVALID_CREDENTIALS` |
-| 403 | `AUTH_FORBIDDEN`, `AUTH_ACCOUNT_INACTIVE`, `RBAC_SYSTEM_ROLE_IMMUTABLE` |
+| 403 | `AUTH_FORBIDDEN`, `AUTH_ACCOUNT_INACTIVE`, `RBAC_SYSTEM_ROLE_IMMUTABLE`, `TENANT_INACTIVE`, `TENANT_CROSS_WRITE`, `TENANT_IMMUTABLE`, `SIGNUP_DISABLED`, `NO_WORKSPACE`, `ACCOUNT_SYSTEM_IMMUTABLE` |
 | 404 | `RESOURCE_NOT_FOUND`, `ENDPOINT_NOT_FOUND` |
 | 405 | `METHOD_NOT_ALLOWED` |
-| 409 | `AUTH_EMAIL_TAKEN`, `USER_EMAIL_TAKEN`, `USER_SELF_DELETE`, `RBAC_ROLE_EXISTS`, `RBAC_ROLE_IN_USE` |
+| 409 | `AUTH_EMAIL_TAKEN`, `USER_EMAIL_TAKEN`, `USER_SELF_DELETE`, `RBAC_ROLE_EXISTS`, `RBAC_ROLE_IN_USE`, `TENANT_GSTIN_TAKEN`, `TENANT_IN_USE`, `ACCOUNT_CODE_OUT_OF_BAND`, `ACCOUNT_CODE_TAKEN`, `ACCOUNT_NAME_TAKEN` |
 | 422 | `VALIDATION_FAILED` (field errors under `error.details.fields`) |
 | 423 | `AUTH_ACCOUNT_LOCKED` (with `Retry-After`) — a locked account is not the same as bad credentials, so it gets its own status |
 | 429 | `TOO_MANY_REQUESTS` |
-| 500 | `INTERNAL_SERVER_ERROR` (message suppressed unless `APP_DEBUG`) |
+| 500 | `INTERNAL_SERVER_ERROR`, `TENANT_CONTEXT_MISSING` (always a bug) |
+
+**Any 5xx suppresses its message** outside `APP_DEBUG`, including a typed
+`ApiException` that carries one. The stable error code is still returned, but
+the text is written for a developer — `TENANT_CONTEXT_MISSING` names the model
+class — and is logged rather than sent. Only the code is contractual for a 5xx.
 
 ## Tokens
 
@@ -216,9 +229,10 @@ php artisan user:password admin@example.com --name="..." --password=... --unlock
 
 ## Tests
 
-71 tests / 254 assertions covering registration, login, lockout, rate limiting,
+219 tests / 848 assertions covering registration, login, lockout, rate limiting,
 token rotation, reuse detection, the permission guard (including wildcards),
-role CRUD, and user management.
+role CRUD, user management, tenant isolation, workshop self-service, and the
+chart of accounts.
 
 ```bash
 php artisan test

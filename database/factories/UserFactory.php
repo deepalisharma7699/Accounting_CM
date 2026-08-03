@@ -4,6 +4,7 @@ namespace Database\Factories;
 
 use App\Enums\UserStatus;
 use App\Models\Role;
+use App\Models\Tenant;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Facades\Hash;
@@ -27,6 +28,10 @@ class UserFactory extends Factory
     public function definition(): array
     {
         return [
+            // Platform user by default. Tests that care about tenancy say so
+            // with forTenant(), which keeps every existing test meaningful:
+            // "no tenant" is a real state, not an unset one.
+            'tenant_id' => null,
             'name' => fake()->name(),
             'email' => fake()->unique()->safeEmail(),
             'email_verified_at' => now(),
@@ -35,6 +40,20 @@ class UserFactory extends Factory
             'status' => UserStatus::Active,
             'custom_role_id' => null,
         ];
+    }
+
+    /**
+     * Attach the user to a workshop, creating one if none is given.
+     */
+    public function forTenant(Tenant|int|null $tenant = null): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'tenant_id' => match (true) {
+                $tenant instanceof Tenant => $tenant->getKey(),
+                is_int($tenant) => $tenant,
+                default => Tenant::factory()->create()->getKey(),
+            },
+        ]);
     }
 
     /**

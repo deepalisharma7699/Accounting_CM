@@ -33,6 +33,13 @@ class ApiExceptionRenderer
         }
 
         return match (true) {
+            // A 5xx ApiException is still a bug, and its message is written for
+            // a developer — MissingTenantContextException names the model class,
+            // for instance. Route those through the same suppression as an
+            // unhandled exception so internals never reach a client, while
+            // keeping the stable error code the envelope promises.
+            $e instanceof ApiException && $e->status() >= 500 => $this->renderUnexpected($e, $e->errorCode(), $e->status()),
+
             $e instanceof ApiException => ApiResponse::error(
                 $e->getMessage(),
                 $e->status(),
@@ -107,14 +114,18 @@ class ApiExceptionRenderer
     }
 
     /**
-     * 500 — an actual bug. The message is logged in full but never returned
-     * to the client outside local/testing, since stack traces and driver
-     * errors leak schema and file paths.
+     * 5xx — an actual bug. The message is logged in full but never returned
+     * to the client outside local/testing, since stack traces, driver errors
+     * and internal class names leak schema and file paths.
      */
-    private function renderUnexpected(Throwable $e): JsonResponse
-    {
+    private function renderUnexpected(
+        Throwable $e,
+        string $code = 'INTERNAL_SERVER_ERROR',
+        int $status = 500,
+    ): JsonResponse {
         Log::error('api.unhandled_exception', [
             'exception' => $e::class,
+            'code' => $code,
             'message' => $e->getMessage(),
             'file' => $e->getFile(),
             'line' => $e->getLine(),
@@ -124,8 +135,8 @@ class ApiExceptionRenderer
 
         return ApiResponse::error(
             $debug ? $e->getMessage() : 'An unexpected error occurred. Please try again later.',
-            500,
-            'INTERNAL_SERVER_ERROR',
+            $status,
+            $code,
             $debug ? [
                 'exception' => $e::class,
                 'file' => $e->getFile().':'.$e->getLine(),

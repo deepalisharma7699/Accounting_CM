@@ -31,7 +31,7 @@ class AuthController extends Controller
         return $this->withRefreshCookie(
             ApiResponse::created(
                 $this->sessionPayload($user, $tokens),
-                'Account created successfully.'
+                'Workspace created successfully.'
             ),
             $tokens
         );
@@ -107,7 +107,7 @@ class AuthController extends Controller
         $user = $request->user();
 
         return ApiResponse::success(
-            (new UserResource($user->load('customRole')))->withPermissions()
+            (new UserResource($user->load(['customRole', 'tenant'])))->withPermissions()
         );
     }
 
@@ -117,7 +117,9 @@ class AuthController extends Controller
     private function sessionPayload(User $user, TokenPair $tokens): array
     {
         return [
-            'user' => (new UserResource($user->load('customRole')))->withPermissions()->resolve(request()),
+            'user' => (new UserResource($user->load(['customRole', 'tenant'])))
+                ->withPermissions()
+                ->resolve(request()),
             ...$tokens->toArray(),
         ];
     }

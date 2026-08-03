@@ -101,7 +101,16 @@
             </form>
         </div>
 
-        <p class="mt-6 text-center text-[0.8125rem] text-muted-foreground">
+        @if (config('tenancy.allow_public_signup', true))
+            <p class="mt-6 text-center text-[0.8125rem] text-muted-foreground">
+                New here?
+                <a href="{{ route('register') }}" class="font-medium text-primary hover:underline">
+                    Create your workshop
+                </a>
+            </p>
+        @endif
+
+        <p class="mt-3 text-center text-[0.8125rem] text-muted-foreground">
             Protected by rate limiting and account lockout.
         </p>
     </div>

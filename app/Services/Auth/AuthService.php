@@ -3,16 +3,16 @@
 namespace App\Services\Auth;
 
 use App\DataTransferObjects\TokenPair;
-use App\Enums\UserStatus;
+use App\Exceptions\ApiException;
 use App\Exceptions\Auth\AccountInactiveException;
 use App\Exceptions\Auth\InvalidCredentialsException;
 use App\Exceptions\Auth\InvalidTokenException;
-use App\Exceptions\ConflictException;
+use App\Exceptions\Tenancy\TenantInactiveException;
+use App\Models\Tenant;
 use App\Models\User;
 use App\Repositories\Contracts\RefreshTokenRepositoryInterface;
-use App\Repositories\Contracts\RoleRepositoryInterface;
 use App\Repositories\Contracts\UserRepositoryInterface;
-use Illuminate\Database\QueryException;
+use App\Services\Tenancy\TenantService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
@@ -27,54 +27,58 @@ class AuthService
 {
     public function __construct(
         private readonly UserRepositoryInterface $users,
-        private readonly RoleRepositoryInterface $roles,
         private readonly RefreshTokenRepositoryInterface $refreshTokens,
         private readonly TokenService $tokens,
         private readonly LoginThrottleService $throttle,
+        private readonly TenantService $tenants,
     ) {}
 
     /**
-     * Register a new account and sign it straight in.
+     * Sign up a new workshop and its owner, then sign them straight in.
      *
-     * @param  array{name: string, email: string, password: string, role_slug?: string|null}  $data
-     * @return array{user: User, tokens: TokenPair}
+     * Registration is tenant provisioning: there is no such thing as a user
+     * without a workshop in this product, so the two are created together or
+     * not at all. Joining an existing workshop is an invitation, issued by its
+     * owner through the user-management API — never self-serve, or anyone
+     * could type their way into someone else's books.
+     *
+     * @param  array{workshop_name: string, name: string, email: string, password: string, gstin?: string|null, state_code?: string|null}  $data
+     * @return array{user: User, tenant: Tenant, tokens: TokenPair}
      */
     public function register(array $data, ?Request $request = null): array
     {
-        $email = strtolower(trim($data['email']));
+        if (! (bool) config('tenancy.allow_public_signup', true)) {
+            throw new ApiException(
+                message: 'Self-serve sign-up is disabled. Contact sales to have a workspace created.',
+                status: 403,
+                errorCode: 'SIGNUP_DISABLED',
+            );
+        }
 
-        $role = isset($data['role_slug']) && $data['role_slug'] !== null
-            ? $this->roles->findBySlug($data['role_slug'])
-            : null;
-
-        try {
-            $user = DB::transaction(fn () => $this->users->create([
+        ['tenant' => $tenant, 'owner' => $user] = $this->tenants->provisionWithOwner(
+            [
+                'name' => $data['workshop_name'],
+                'gstin' => $data['gstin'] ?? null,
+                'state_code' => $data['state_code'] ?? null,
+            ],
+            [
                 'name' => $data['name'],
-                'email' => $email,
+                'email' => $data['email'],
                 // The `hashed` cast applies bcrypt with the configured cost
                 // (BCRYPT_ROUNDS=12); the plain value never reaches the DB.
                 'password' => $data['password'],
-                'status' => UserStatus::Active,
-                'custom_role_id' => $role?->id,
-            ]));
-        } catch (QueryException $e) {
-            // Unique index on users.email is the source of truth: validation
-            // can lose a race between two concurrent registrations.
-            if ($this->isUniqueViolation($e)) {
-                throw new ConflictException(
-                    'An account with this email address already exists.',
-                    'AUTH_EMAIL_TAKEN',
-                    ['field' => 'email'],
-                );
-            }
+            ],
+        );
 
-            throw $e;
-        }
-
-        Log::info('auth.registered', ['user_id' => $user->id, 'ip' => $request?->ip()]);
+        Log::info('auth.registered', [
+            'user_id' => $user->id,
+            'tenant_id' => $tenant->id,
+            'ip' => $request?->ip(),
+        ]);
 
         return [
             'user' => $user,
+            'tenant' => $tenant,
             'tokens' => $this->tokens->issueTokenPair($user, $request),
         ];
     }
@@ -123,6 +127,12 @@ class AuthService
             throw new AccountInactiveException($user->status);
         }
 
+        // Checked after the password so a suspended workshop cannot be used to
+        // probe whether a given email exists.
+        if ($user->tenant !== null && ! $user->tenant->isActive()) {
+            throw new TenantInactiveException($user->tenant->status);
+        }
+
         // Rehash transparently if the configured cost has since increased.
         if (Hash::needsRehash($user->password)) {
             $user->forceFill(['password' => Hash::make($credentials['password'])])->save();
@@ -159,7 +169,8 @@ class AuthService
 
         $record = $this->tokens->verifyRefreshToken($refreshToken);
 
-        $user = $this->users->findById($record->user_id);
+        // Cross-tenant: a refresh happens before any tenant is established.
+        $user = $this->users->findAuthenticatable($record->user_id);
 
         if ($user === null) {
             $this->refreshTokens->revokeFamily($record->family_id, 'user_missing');
@@ -173,6 +184,14 @@ class AuthService
             $this->refreshTokens->revokeAllForUser((int) $user->getKey(), 'account_inactive');
 
             throw new AccountInactiveException($user->status);
+        }
+
+        // Same for the workshop: suspending a tenant must not leave its users
+        // able to mint fresh access tokens for the next seven days.
+        if ($user->tenant !== null && ! $user->tenant->isActive()) {
+            $this->refreshTokens->revokeAllForUser((int) $user->getKey(), 'tenant_inactive');
+
+            throw new TenantInactiveException($user->tenant->status);
         }
 
         $tokens = DB::transaction(fn () => $this->tokens->rotate($record, $user, $request));
@@ -210,12 +229,6 @@ class AuthService
         Log::info('auth.logout_all', ['user_id' => $user->id, 'sessions' => $count]);
 
         return $count;
-    }
-
-    private function isUniqueViolation(QueryException $e): bool
-    {
-        // 23000/23505 cover MySQL, SQLite and PostgreSQL integrity violations.
-        return in_array((string) $e->getCode(), ['23000', '23505'], true);
     }
 
     /**

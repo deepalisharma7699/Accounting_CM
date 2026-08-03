@@ -22,7 +22,14 @@ let refreshPromise = null;
 async function request(path, { method = 'GET', body, auth = true, credentials = 'same-origin' } = {}) {
     const headers = { Accept: 'application/json' };
 
-    if (body !== undefined) {
+    // FormData goes through untouched — M14's uploads. Deliberately *without* a
+    // Content-Type header: multipart needs a boundary parameter, and the browser
+    // is the only thing that knows the one it is about to generate. Setting the
+    // header by hand produces a request the server cannot parse at all, and the
+    // symptom is an empty $request->file() rather than an error.
+    const isMultipart = typeof FormData !== 'undefined' && body instanceof FormData;
+
+    if (body !== undefined && !isMultipart) {
         headers['Content-Type'] = 'application/json';
     }
 
@@ -34,7 +41,7 @@ async function request(path, { method = 'GET', body, auth = true, credentials = 
         method,
         headers,
         credentials,
-        body: body === undefined ? undefined : JSON.stringify(body),
+        body: body === undefined || isMultipart ? body : JSON.stringify(body),
     });
 
     // 204s and empty bodies still need to resolve to something.
@@ -66,6 +73,31 @@ export async function login(email, password) {
     const { response, payload } = await request('/auth/login', {
         method: 'POST',
         body: { email, password },
+        auth: false,
+        // Required so the browser stores the Set-Cookie refresh token.
+        credentials: 'include',
+    });
+
+    if (!response.ok) {
+        throw toError(response, payload);
+    }
+
+    accessToken = payload.data.access_token;
+
+    return payload.data.user;
+}
+
+/**
+ * Sign up a workshop and its owner, and start their session.
+ *
+ * Registration provisions a tenant and its first user together — there is no
+ * user without a workshop — so this returns an authenticated owner exactly as
+ * login() does.
+ */
+export async function register(fields) {
+    const { response, payload } = await request('/auth/register', {
+        method: 'POST',
+        body: fields,
         auth: false,
         // Required so the browser stores the Set-Cookie refresh token.
         credentials: 'include',
@@ -200,6 +232,7 @@ export async function bootstrapSession() {
 
 export default {
     login,
+    register,
     logout,
     logoutEverywhere,
     refresh,

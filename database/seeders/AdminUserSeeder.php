@@ -11,7 +11,11 @@ use Illuminate\Support\Str;
 use RuntimeException;
 
 /**
- * Seeds the initial administrator.
+ * Seeds the initial platform administrator.
+ *
+ * This account has no tenant: it exists above the workshops, to provision and
+ * suspend them. It deliberately owns no books — day-to-day accounting is done
+ * by a workshop's OWNER, created when that workshop is provisioned.
  *
  * Credentials come from the environment. Outside local/testing a password
  * must be supplied explicitly — seeding a known default into a production
@@ -60,6 +64,8 @@ class AdminUserSeeder extends Seeder
         }
 
         User::create([
+            // NULL — a platform user, not a member of any workshop.
+            'tenant_id' => null,
             'name' => (string) env('ADMIN_NAME', 'System Administrator'),
             'email' => $email,
             'password' => $password, // hashed by the model's `hashed` cast

@@ -27,7 +27,9 @@
         <span class="text-2xl" aria-hidden="true">👋</span>
     </h2>
     <p class="mt-2 text-[0.9375rem] text-muted-foreground">
-        Welcome back to {{ $workspace }}. Here's what needs your attention today.
+        {{-- Painted client-side from /auth/me, like the sidebar: the shell is
+             public, and which workshop a session belongs to is session data. --}}
+        Welcome back to <span data-workspace-name>your workspace</span>. Here's what needs your attention today.
     </p>
 </header>
 

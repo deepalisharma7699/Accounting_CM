@@ -35,6 +35,19 @@ class UserResource extends JsonResource
             'name' => $this->name,
             'email' => $this->email,
             'status' => $this->status->value,
+            // null identifies a platform super-admin, who belongs to no
+            // workshop. Clients use it to decide whether to show the
+            // tenant-administration surface at all.
+            'tenant_id' => $this->tenant_id,
+            'tenant' => $this->whenLoaded(
+                'tenant',
+                fn () => $this->tenant === null ? null : [
+                    'id' => $this->tenant->id,
+                    'name' => $this->tenant->name,
+                    'slug' => $this->tenant->slug,
+                    'status' => $this->tenant->status->value,
+                ]
+            ),
             // The password hash is excluded at the model level (#[Hidden]) and
             // is never referenced here.
             'role' => $this->whenLoaded(

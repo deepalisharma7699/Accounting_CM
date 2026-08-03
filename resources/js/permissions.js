@@ -7,9 +7,27 @@
  */
 
 let grants = [];
+let tenantId = null;
 
 export function setGrants(list) {
     grants = Array.isArray(list) ? list : [];
+}
+
+/**
+ * Which workshop the signed-in user belongs to, or null for a platform
+ * super-admin.
+ *
+ * Permissions and tenancy are separate gates. A platform admin holds the `*`/`*`
+ * wildcard, so a permission check alone would happily show them "Accounting" —
+ * and then every request behind it fails, because they have no books. Authority
+ * is not membership.
+ */
+export function setWorkspace(id) {
+    tenantId = id ?? null;
+}
+
+export function hasWorkspace() {
+    return tenantId !== null;
 }
 
 export function can(action, resource) {
@@ -22,13 +40,22 @@ export function can(action, resource) {
 }
 
 /**
- * Hide any element tagged `data-requires-permission="ACTION:RESOURCE"` whose
- * grant the signed-in user does not hold.
+ * Hide any element the signed-in user should not see:
+ *
+ *   data-requires-permission="ACTION:RESOURCE"  — needs that grant
+ *   data-requires-workspace                     — needs to belong to a workshop
+ *
+ * Both gates apply independently, and an element carrying both must satisfy
+ * both.
  */
 export function applyPermissionGates(root = document) {
-    root.querySelectorAll('[data-requires-permission]').forEach((el) => {
-        const [action, resource] = el.dataset.requiresPermission.split(':');
+    root.querySelectorAll('[data-requires-permission], [data-requires-workspace]').forEach((el) => {
+        const grant = el.dataset.requiresPermission;
+        const [action, resource] = grant ? grant.split(':') : [];
 
-        el.classList.toggle('hidden', !can(action, resource));
+        const allowed = (!grant || can(action, resource))
+            && (el.dataset.requiresWorkspace === undefined || hasWorkspace());
+
+        el.classList.toggle('hidden', !allowed);
     });
 }

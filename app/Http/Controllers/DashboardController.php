@@ -21,7 +21,9 @@ class DashboardController extends Controller
         return view('dashboard', [
             'heading' => 'Home',
             'greeting' => $this->greeting(),
-            'workspace' => 'XYZ Workshop',
+            // The workshop name is not passed from here: the shell is public
+            // and which workshop a session belongs to is session data, so it is
+            // painted client-side from /auth/me like the rest of the identity.
 
             'quickActions' => [
                 ['title' => 'Record Transaction', 'description' => 'Log a sale, purchase, or service entry', 'icon' => 'file-plus',       'tone' => 'blue'],
