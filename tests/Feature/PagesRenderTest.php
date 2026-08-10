@@ -31,15 +31,38 @@ class PagesRenderTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_the_login_page_renders(): void
+    public function test_the_public_page_renders_the_shop_and_carries_the_sign_in_form(): void
     {
-        $response = $this->get('/login')->assertOk();
+        $response = $this->get('/')->assertOk();
 
-        $response->assertSee('Welcome back', escape: false)
+        // What a visitor came for: the trade, and how to reach the shop.
+        $response->assertSee('Motor rewinding', escape: false)
+            ->assertSee('Submersible pump repairs', escape: false)
+            ->assertSee('Visit the shop', escape: false)
+            ->assertSee('data-page="welcome"', escape: false);
+
+        // And the way in, in a modal on the same page rather than on a screen
+        // of its own. The ids are what initLogin() binds to, so they are
+        // asserted rather than left to the markup.
+        $response->assertSee('id="login-modal"', escape: false)
+            ->assertSee('data-login-open', escape: false)
+            ->assertSee('Welcome back', escape: false)
             ->assertSee('Sign in to your AI Accounting Back Office', escape: false)
             ->assertSee('id="login-form"', escape: false)
             ->assertSee('name="email"', escape: false)
             ->assertSee('name="password"', escape: false);
+    }
+
+    public function test_the_login_url_lands_on_the_public_page_with_the_form_open(): void
+    {
+        /*
+        | /login is where the whole application sends somebody whose session has
+        | ended — app.js on a failed bootstrap, and initLogout() after signing
+        | out. It must still lead to a form, and to one that is already open:
+        | landing on a marketing page and having to find the button would be a
+        | worse ending to a session than the one it replaces.
+        */
+        $this->get('/login')->assertRedirect('/?login=1');
     }
 
     public function test_the_dashboard_renders_every_section(): void
@@ -77,9 +100,13 @@ class PagesRenderTest extends TestCase
             ->assertSee('aria-current="page"', escape: false);
     }
 
-    public function test_the_root_path_redirects_to_the_dashboard(): void
+    public function test_the_root_path_is_the_public_page_rather_than_the_dashboard(): void
     {
-        $this->get('/')->assertRedirect('/dashboard');
+        // It used to redirect. The site is what lives at the root now, and the
+        // dashboard is behind the sign-in modal on it.
+        $this->get('/')
+            ->assertOk()
+            ->assertSee('Choudhary Motors', escape: false);
     }
 
     public function test_the_users_page_renders_its_table_and_modal(): void
@@ -577,13 +604,13 @@ class PagesRenderTest extends TestCase
         $this->get('/register')->assertNotFound();
     }
 
-    public function test_the_login_page_only_offers_sign_up_when_it_is_enabled(): void
+    public function test_the_sign_in_modal_only_offers_sign_up_when_it_is_enabled(): void
     {
-        $this->get('/login')->assertOk()->assertSee('Create your workshop', escape: false);
+        $this->get('/')->assertOk()->assertSee('Create your workshop', escape: false);
 
         config()->set('tenancy.allow_public_signup', false);
 
-        $this->get('/login')->assertOk()->assertDontSee('Create your workshop', escape: false);
+        $this->get('/')->assertOk()->assertDontSee('Create your workshop', escape: false);
     }
 
     public function test_the_tenants_page_renders_its_table_and_owner_block(): void

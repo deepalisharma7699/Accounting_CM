@@ -1,4 +1,5 @@
 import auth from '../auth-client';
+import { can } from '../permissions';
 import {
     $, $$, clearFormErrors, esc, formatDate, formatMoney,
     hideModal, setSubmitting, showFormErrors, showModal, tableMessage, toast,
@@ -50,9 +51,16 @@ const state = {
 
     kind: 'sale',        // which direction the shared form is open for
     parties: [],
-    variants: [],        // priced catalogue, for the line picker
+    items: [],           // the catalogue, variants included
+    choices: [],         // what a line may name, derived from the above
+    itemMeta: null,      // types, their attribute schemas, and the units
     expenseAccounts: [],
     paymentModes: [],
+
+    // Which line opened the catalogue form, and — once it has been created —
+    // which family the specification is being added to. Held here rather than on
+    // the modal so a failed variant post cannot end up creating the item twice.
+    quick: { lineId: null, itemId: null, existing: false },
 
     // The chooser's two answers. Cleared every time it opens: a half-made
     // choice from last time is not a default, it is a trap.
@@ -72,31 +80,107 @@ const state = {
  * banner over the page they can.
  */
 async function loadReferenceData() {
-    const [parties, variants, accounts, meta] = await Promise.allSettled([
+    const [parties, items, accounts, meta, itemMeta] = await Promise.allSettled([
         auth.call('/parties?per_page=200'),
         auth.call('/items?per_page=200&with_variants=1'),
         auth.call('/accounts?per_page=200'),
         auth.call('/transactions/meta'),
+        auth.call('/items/meta'),
     ]);
 
     state.parties = parties.status === 'fulfilled' ? parties.value.data : [];
 
-    state.variants = variants.status === 'fulfilled'
-        ? variants.value.data.flatMap((item) => (item.variants ?? []).map((variant) => ({
-            ...variant,
-            item_name: item.name,
-            item_id: item.id,
-            tracks_stock: item.tracks_stock,
-            gst_rate: item.gst_rate,
-            unit: item.base_uom_symbol,
-        })))
-        : [];
+    state.items = items.status === 'fulfilled' ? items.value.data : [];
+    buildChoices();
 
     state.expenseAccounts = accounts.status === 'fulfilled'
         ? accounts.value.data.filter((account) => account.type === 'expense' && account.is_active)
         : [];
 
     state.paymentModes = meta.status === 'fulfilled' ? meta.value.data.payment_modes : [];
+    state.itemMeta = itemMeta.status === 'fulfilled' ? itemMeta.value.data : null;
+}
+
+/** The catalogue again, after something has been added to it. */
+async function refreshCatalogue() {
+    try {
+        const { data } = await auth.call('/items?per_page=200&with_variants=1');
+
+        state.items = data;
+        buildChoices();
+        refreshLinePickers();
+    } catch (error) {
+        // The item was still created — the picker is simply a page behind, and
+        // an error banner over a bill somebody is in the middle of writing would
+        // be about the wrong thing.
+        toast(error.message, 'error');
+    }
+}
+
+/* -------------------------------------------------------------------------
+ | What a line may name
+ | ---------------------------------------------------------------------- */
+
+/**
+ * Flatten the catalogue into the things a bill line can point at.
+ *
+ * A line names a **variant** wherever one exists, because that is what stock is
+ * counted against: "a motor" leaves the position of every rating unknowable, so
+ * the API refuses it for a stocked item.
+ *
+ * An item with no variants is still offered, and what happens when it is picked
+ * depends on whether it holds stock. A service can be billed as it stands — an
+ * hour of rewinding has nothing to vary — and goes on the line as `item_id`.
+ * Anything stocked cannot, so picking it opens the specification form instead of
+ * quietly selecting something the server will reject on save. The old picker
+ * listed variants only, which is why a catalogue of families with no variants
+ * yet showed an empty dropdown and no way out of it.
+ */
+function buildChoices() {
+    state.choices = [];
+
+    state.items
+        .filter((item) => item.is_active)
+        .forEach((item) => {
+            const variants = (item.variants ?? []).filter((variant) => variant.is_active);
+
+            if (variants.length) {
+                variants.forEach((variant) => state.choices.push({
+                    value: `v:${variant.id}`,
+                    // display_label falls back to the family name where a variant
+                    // has neither a label nor attributes to build one from, and
+                    // "Rewinding · Rewinding" reads like a bug.
+                    label: variant.display_label === item.name
+                        ? item.name
+                        : `${item.name} · ${variant.display_label}`,
+                    price: variant.sell_price ?? '',
+                    gstRate: item.gst_rate,
+                    item,
+                    variant,
+                    needsVariant: false,
+                }));
+
+                return;
+            }
+
+            state.choices.push({
+                value: `i:${item.id}`,
+                label: item.tracks_stock ? `${item.name} — add a specification` : item.name,
+                price: '',
+                gstRate: item.gst_rate,
+                item,
+                variant: null,
+                needsVariant: item.tracks_stock,
+            });
+        });
+}
+
+function findChoice(value) {
+    return state.choices.find((choice) => choice.value === value) ?? null;
+}
+
+function mayCreateItems() {
+    return can('WRITE', 'ITEMS');
 }
 
 /* -------------------------------------------------------------------------
@@ -408,26 +492,65 @@ function partyOptions(role) {
         .join('');
 }
 
-function variantOptions() {
-    return state.variants
-        .filter((variant) => variant.is_active)
-        .map((variant) => `
-            <option value="${variant.id}" data-price="${esc(variant.sell_price ?? '')}">
-                ${esc(variant.item_name)} · ${esc(variant.display_label)}
+/**
+ * The picker's options, with the way out of an empty catalogue at the top.
+ *
+ * "Create a new item" sits above the list rather than beside the select: the
+ * moment somebody discovers a part is missing is while they are typing the bill
+ * that needs it, and sending them to another screen loses the bill.
+ */
+function itemOptions() {
+    const create = mayCreateItems()
+        ? '<option value="__new">＋ Create a new item…</option>'
+        : '';
+
+    return create + state.choices
+        .map((choice) => `
+            <option value="${esc(choice.value)}" data-price="${esc(choice.price)}">
+                ${esc(choice.label)}
             </option>`)
         .join('');
+}
+
+/** Re-offer the catalogue on every open line, keeping what each already names. */
+function refreshLinePickers() {
+    $$('#bill-lines [data-line]').forEach((row) => {
+        const select = $('[name=pick]', row);
+        const chosen = select.value;
+
+        select.innerHTML = `<option value="">Choose…</option>${itemOptions()}`;
+        select.value = chosen;
+    });
+
+    renderCatalogueHint();
+}
+
+function renderCatalogueHint() {
+    const hint = $('#bill-catalogue-hint');
+    const empty = state.choices.length === 0;
+
+    hint.classList.toggle('hidden', !empty);
+
+    if (empty) {
+        hint.textContent = mayCreateItems()
+            ? 'Nothing in the catalogue yet. Choose “Create a new item” on the line above and it will be '
+                + 'added to Items as well.'
+            : 'Nothing in the catalogue yet, and your account cannot add to it. Ask someone who can to '
+                + 'create the item first.';
+    }
 }
 
 function billLine() {
     const id = ++lineSeq;
 
     return `
-        <div class="grid gap-2 rounded-[10px] border border-border p-3 sm:grid-cols-[2fr_1fr_1fr_1fr_auto]" data-line="${id}">
+        <div class="grid gap-2 rounded-[10px] border border-border p-3 sm:grid-cols-[2fr_1fr_1fr_1fr_auto]"
+             data-line="${id}" data-pick="">
             <label class="field">
                 <span class="field-label">Item</span>
-                <select name="variant_id" class="field-input" required>
+                <select name="pick" class="field-input" required>
                     <option value="">Choose…</option>
-                    ${variantOptions()}
+                    ${itemOptions()}
                 </select>
             </label>
 
@@ -530,6 +653,7 @@ function openBillForm(kind, { partyId = null } = {}) {
 
     $('#bill-lines').innerHTML = billLine();
     $('#bill-payments').innerHTML = '';
+    renderCatalogueHint();
     renderTotals();
 
     showModal('#bill-form-modal');
@@ -547,11 +671,9 @@ function renderTotals() {
     let tax = 0;
 
     $$('#bill-lines [data-line]').forEach((line) => {
-        const variant = state.variants.find(
-            (item) => String(item.id) === $('[name=variant_id]', line).value,
-        );
+        const choice = findChoice($('[name=pick]', line).value);
 
-        if (!variant) return;
+        if (!choice) return;
 
         const quantity = Number($('[name=quantity]', line).value) || 0;
         const price = Number($('[name=unit_price]', line).value) || 0;
@@ -559,7 +681,7 @@ function renderTotals() {
         const base = Math.max(quantity * price - discount, 0);
 
         taxable += base;
-        tax += base * (Number(variant.gst_rate) || 0) / 100;
+        tax += base * (Number(choice.gstRate) || 0) / 100;
     });
 
     $('#bill-totals').innerHTML = `
@@ -597,10 +719,15 @@ async function submitBill(event) {
 
     clearFormErrors(form);
 
-    const items = collect('#bill-lines [data-line]', ['variant_id', 'quantity', 'unit_price', 'discount'])
-        .filter((line) => line.variant_id && line.quantity !== '')
+    // Each line names one of two things and the API takes either: a variant
+    // where the catalogue has one, and the family itself for a service, which has
+    // nothing to vary and no stock to count.
+    const items = collect('#bill-lines [data-line]', ['pick', 'quantity', 'unit_price', 'discount'])
+        .map((line) => ({ ...line, choice: findChoice(line.pick) }))
+        .filter((line) => line.choice && line.quantity !== '')
         .map((line) => ({
-            variant_id: Number(line.variant_id),
+            item_id: line.choice.item.id,
+            variant_id: line.choice.variant?.id ?? null,
             quantity: line.quantity,
             unit_price: line.unit_price || '0',
             discount: line.discount || null,
@@ -643,6 +770,266 @@ async function submitBill(event) {
     } finally {
         setSubmitting(form, false, post ? 'Post the bill' : 'Save as draft');
     }
+}
+
+/* -------------------------------------------------------------------------
+ | Adding to the catalogue from the bill
+ | ---------------------------------------------------------------------- */
+
+/**
+ * The vocabulary of the catalogue, fetched late if the first attempt failed.
+ *
+ * Which fields describe a motor is the server's answer — a copy of that schema
+ * here would drift, and the drift shows up as a motor saved without its rating,
+ * which nobody can recover afterwards.
+ */
+async function ensureItemMeta() {
+    if (state.itemMeta) return state.itemMeta;
+
+    try {
+        const { data } = await auth.call('/items/meta');
+        state.itemMeta = data;
+    } catch {
+        state.itemMeta = { types: [], units: [] };
+    }
+
+    return state.itemMeta;
+}
+
+function quickTypeMeta(value) {
+    return state.itemMeta?.types?.find((type) => type.value === value) ?? null;
+}
+
+/**
+ * Reflect the chosen type into the rest of the form.
+ *
+ * The type decides which word the tax code goes by, which unit it is counted in,
+ * whether stock is possible at all, and which specification fields appear.
+ * Saying so as it is picked beats refusing the save afterwards.
+ */
+function applyQuickType() {
+    const type = quickTypeMeta($('#quick-type').value);
+
+    if (!type) return;
+
+    $('#quick-hsn-label').textContent = `${type.tax_code_label} code`;
+    $('#quick-uom').value = type.default_uom;
+    $('#quick-type-hint').textContent = `Described by ${describeQuickAttributes(type)}.`;
+
+    const checkbox = $('#quick-stock');
+
+    checkbox.disabled = !type.can_hold_stock;
+    if (!type.can_hold_stock) checkbox.checked = false;
+
+    $('#quick-stock-hint').textContent = type.can_hold_stock
+        ? 'Turn this off for something you buy to order and never hold.'
+        : 'A service cannot be held in stock — an hour is produced when it is sold.';
+
+    renderQuickAttributes(type);
+}
+
+function describeQuickAttributes(type) {
+    const keys = Object.keys(type.attributes ?? {});
+
+    return keys.length
+        ? keys.map((key) => type.attributes[key].label.toLowerCase()).join(', ')
+        : 'nothing — a service has no variations';
+}
+
+/** A select where the values are genuinely fixed, a text box where they are not. */
+function renderQuickAttributes(type) {
+    const schema = type?.attributes ?? {};
+    const keys = Object.keys(schema);
+    const host = $('#quick-item-attributes');
+
+    $('#quick-variant-hint').textContent = keys.length
+        ? 'Stock is counted per specification, so the bill needs the exact one.'
+        : 'Nothing to describe — this goes on the bill as it stands.';
+
+    host.innerHTML = keys.map((key) => {
+        const field = schema[key];
+        const suffix = field.suffix
+            ? ` <span class="font-normal text-muted-foreground">(${esc(field.suffix)})</span>`
+            : '';
+
+        const input = field.values
+            ? `<select class="field-input" data-attribute="${esc(key)}">
+                   <option value="">Choose…</option>
+                   ${field.values.map((option) =>
+                       `<option value="${esc(option)}">${esc(option)}</option>`).join('')}
+               </select>`
+            : `<input type="text" class="field-input" data-attribute="${esc(key)}" autocomplete="off">`;
+
+        return `
+            <div>
+                <label class="field-label">
+                    ${esc(field.label)}${suffix}
+                    ${field.required ? '' : '<span class="font-normal text-muted-foreground">(optional)</span>'}
+                </label>
+                ${input}
+            </div>`;
+    }).join('');
+}
+
+function collectQuickAttributes() {
+    const bag = {};
+
+    $$('[data-attribute]', $('#quick-item-attributes')).forEach((input) => {
+        const value = input.value.trim();
+
+        // Blank is absent, not "". A form submits every field it renders, and an
+        // untouched box stored as an empty string is noise every later reader has
+        // to filter out.
+        if (value !== '') bag[input.dataset.attribute] = value;
+    });
+
+    return bag;
+}
+
+/**
+ * Open the catalogue form over the bill.
+ *
+ * Two ways in, one form. With no item it creates a family and its first
+ * specification; with one — reached by picking an item that has no variants yet —
+ * it adds only the specification, and the family's own fields are hidden because
+ * they are already settled.
+ */
+async function openQuickItem(row, item = null) {
+    await ensureItemMeta();
+
+    const form = $('#quick-item-form');
+
+    clearFormErrors(form);
+    form.reset();
+
+    state.quick = {
+        lineId: row.dataset.line,
+        itemId: item?.id ?? null,
+        existing: item !== null,
+    };
+
+    showQuickItemFields(item === null);
+
+    if (item) {
+        $('#quick-item-title').textContent = `Which ${item.name}?`;
+        $('#quick-item-subtitle').textContent =
+            'The family is in your catalogue but nothing says which one is on the shelf. '
+            + 'Stock is counted per specification, so a bill needs the exact one.';
+
+        renderQuickAttributes(quickTypeMeta(item.type));
+    } else {
+        $('#quick-item-title').textContent = 'New item';
+        $('#quick-item-subtitle').textContent =
+            'Added to your catalogue, so it appears on Items too — not just on this bill.';
+
+        $('#quick-type').value = state.itemMeta?.types?.[0]?.value ?? '';
+        applyQuickType();
+    }
+
+    showModal('#quick-item-modal');
+}
+
+/** Hidden, not disabled: once the family exists its fields are answered. */
+function showQuickItemFields(visible) {
+    $('#quick-item-fields').classList.toggle('hidden', !visible);
+    $('#quick-item-fields').classList.toggle('grid', visible);
+}
+
+/**
+ * Create the item, then its first specification.
+ *
+ * Two requests, because they are two resources — the same two the Items screen
+ * posts, which is what makes this a catalogue item rather than something that
+ * only exists on a bill. The item's id is kept the moment it comes back: if the
+ * specification is refused, the retry adds one to the family that now exists
+ * instead of creating a second family with the same name.
+ */
+async function submitQuickItem(event) {
+    event.preventDefault();
+
+    const form = event.target;
+
+    clearFormErrors(form);
+    setSubmitting(form, true, 'Saving…');
+
+    try {
+        if (state.quick.itemId === null) {
+            const created = await auth.call('/items', {
+                method: 'POST',
+                body: {
+                    name: $('#quick-name').value.trim(),
+                    type: $('#quick-type').value,
+                    hsn_sac: $('#quick-hsn').value.trim() || null,
+                    gst_rate: $('#quick-gst').value.trim() || '0',
+                    base_uom: $('#quick-uom').value,
+                    is_stock: $('#quick-stock').checked,
+                },
+            });
+
+            state.quick.itemId = created.data.id;
+            showQuickItemFields(false);
+        }
+
+        const response = await auth.call(`/items/${state.quick.itemId}/variants`, {
+            method: 'POST',
+            body: {
+                attributes: collectQuickAttributes(),
+                sku: $('#quick-sku').value.trim() || null,
+                sell_price: $('#quick-price').value.trim() || null,
+            },
+        });
+
+        hideModal('#quick-item-modal');
+        toast(state.quick.existing ? 'Specification added.' : 'Item added to your catalogue.');
+
+        // A second specification matching one that already exists is saved and
+        // reported, never refused: two brands at one rating is a real
+        // arrangement, and the commoner cause is the same thing entered twice.
+        (response.meta?.warnings ?? []).forEach((warning) => toast(warning.message, 'info'));
+
+        await refreshCatalogue();
+        selectInLine(state.quick.lineId, `v:${response.data.id}`);
+    } catch (error) {
+        showFormErrors(form, error);
+    } finally {
+        setSubmitting(form, false);
+    }
+}
+
+/**
+ * Close the catalogue form without saving.
+ *
+ * The catalogue is still refetched where the family was created before the
+ * specification failed — that item exists now, and a picker that did not list it
+ * would invite somebody to create it a second time.
+ */
+async function cancelQuickItem() {
+    const orphaned = state.quick.itemId !== null && !state.quick.existing;
+
+    hideModal('#quick-item-modal');
+    state.quick = { lineId: null, itemId: null, existing: false };
+
+    if (orphaned) await refreshCatalogue();
+}
+
+/** Put a freshly created variant on the line that asked for it. */
+function selectInLine(lineId, value) {
+    const row = $(`#bill-lines [data-line="${lineId}"]`);
+
+    if (!row) return;
+
+    const select = $('[name=pick]', row);
+
+    select.value = value;
+    row.dataset.pick = value;
+
+    const choice = findChoice(value);
+    const price = $('[name=unit_price]', row);
+
+    if (price && !price.value && choice?.price) price.value = choice.price;
+
+    renderTotals();
+    select.focus();
 }
 
 /* -------------------------------------------------------------------------
@@ -821,9 +1208,34 @@ export default async function initBills() {
     // never overwrites a rate somebody has typed: a rewind is quoted per job, and
     // a stored price silently replacing what was agreed would put the wrong
     // figure on the customer's invoice.
+    //
+    // Two of the options are not selections at all. "Create a new item" opens the
+    // catalogue form, and a family with no specification yet opens the same form
+    // to add one — both put the select back where it was first, so a cancelled
+    // detour leaves the line exactly as it found it.
     $('#bill-lines').addEventListener('change', (event) => {
-        if (event.target.name === 'variant_id') {
+        if (event.target.name === 'pick') {
             const row = event.target.closest('[data-line]');
+            const chosen = event.target.value;
+
+            if (chosen === '__new') {
+                event.target.value = row.dataset.pick ?? '';
+                openQuickItem(row);
+
+                return;
+            }
+
+            const choice = findChoice(chosen);
+
+            if (choice?.needsVariant) {
+                event.target.value = row.dataset.pick ?? '';
+                openQuickItem(row, choice.item);
+
+                return;
+            }
+
+            row.dataset.pick = chosen;
+
             const price = $('[name=unit_price]', row);
             const suggested = event.target.selectedOptions[0]?.dataset.price;
 
@@ -834,6 +1246,27 @@ export default async function initBills() {
     });
 
     $('#bill-lines').addEventListener('input', renderTotals);
+
+    $('#quick-item-form').addEventListener('submit', submitQuickItem);
+    $('#quick-type').addEventListener('change', applyQuickType);
+
+    // Its own close handler rather than data-modal-close: cancelling may still
+    // have left a new family in the catalogue.
+    $('#quick-item-modal').addEventListener('click', (event) => {
+        if (event.target.closest('[data-quick-cancel]') || event.target.matches('[data-modal]')) {
+            cancelQuickItem();
+        }
+    });
+
+    // Escape, taken in the capture phase and stopped there, so the shell's own
+    // handler does not go on to close the bill underneath as well.
+    document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape') return;
+        if ($('#quick-item-modal').classList.contains('hidden')) return;
+
+        event.stopPropagation();
+        cancelQuickItem();
+    }, true);
 
     $('#add-bill-payment').addEventListener('click', () => paymentLine($('#bill-payments')));
     $('#add-expense-payment').addEventListener('click', () => paymentLine($('#expense-payments')));

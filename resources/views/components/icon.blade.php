@@ -70,6 +70,18 @@
         // Out of stock. A crossed circle rather than a second warning triangle,
         // so "none left" never reads as a louder "running low".
         'x-circle' => '<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>',
+        // The shopfront — resources/views/welcome.blade.php. The trade the
+        // workshop is known for needs its own vocabulary: a spanner for a
+        // rewind, a droplet for a submersible, a van for a site call.
+        'wrench' => '<path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>',
+        'droplet' => '<path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z"/>',
+        'truck' => '<path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/><path d="M15 18H9"/><path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.62l-3.48-4.35A1 1 0 0 0 17.52 8H14"/><circle cx="17" cy="18" r="2"/><circle cx="7" cy="18" r="2"/>',
+        'map-pin' => '<path d="M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/>',
+        'star' => '<path d="M11.48 3.5a.55.55 0 0 1 1.04 0l2.02 4.1a.55.55 0 0 0 .41.3l4.52.66a.55.55 0 0 1 .3.94l-3.27 3.19a.55.55 0 0 0-.16.48l.77 4.5a.55.55 0 0 1-.8.58l-4.04-2.12a.55.55 0 0 0-.51 0l-4.04 2.12a.55.55 0 0 1-.8-.58l.77-4.5a.55.55 0 0 0-.16-.48L4.26 9.5a.55.55 0 0 1 .3-.94l4.52-.66a.55.55 0 0 0 .41-.3z"/>',
+        'quote' => '<path d="M9 5H6a3 3 0 0 0-3 3v3a3 3 0 0 0 3 3h2v1a3 3 0 0 1-3 3"/><path d="M20 5h-3a3 3 0 0 0-3 3v3a3 3 0 0 0 3 3h2v1a3 3 0 0 1-3 3"/>',
+        'menu' => '<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>',
+        'award' => '<circle cx="12" cy="9" r="6"/><path d="m15.5 14.5 1.4 6.6a.5.5 0 0 1-.77.52l-3.83-2.5a.5.5 0 0 0-.6 0l-3.83 2.5a.5.5 0 0 1-.77-.52l1.4-6.6"/>',
+        'gauge' => '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>',
         default => '<circle cx="12" cy="12" r="10"/>',
     };
 @endphp

@@ -278,6 +278,17 @@ async function initAuthenticatedPage() {
  | ---------------------------------------------------------------------- */
 
 document.addEventListener('DOMContentLoaded', () => {
+    /*
+    | The public page carries the sign-in form in a modal rather than being a
+    | sign-in page, so it boots two things: its own behaviour, and — below,
+    | through the same branch every credential form takes — the unchanged login
+    | handler. Loaded lazily, so none of the marketing page's code is shipped to
+    | the screens behind the login.
+    */
+    if (document.body.dataset.page === 'welcome') {
+        import('./pages/welcome').then((module) => module.default());
+    }
+
     const loginForm = $('#login-form');
 
     if (loginForm) {

@@ -11,7 +11,21 @@ use Illuminate\Support\Facades\Route;
 | unauthenticated visitor exposes nothing.
 */
 
-Route::view('/login', 'auth.login')->name('login');
+/*
+| The shopfront, and the way in.
+|
+| The public page is the site itself — what the workshop does, where it is and
+| how to reach it — with the sign-in form on it as a modal rather than as a
+| screen of its own. So there is no separate login page to route to.
+|
+| /login is kept, and kept named, because it is the destination the whole
+| application already redirects to when a session ends: resources/js/app.js on a
+| failed bootstrap, initLogout() after signing out, and route('login') from the
+| sign-up page. It lands on the same page with the modal already open, so
+| somebody who was working a moment ago is not made to hunt for the button.
+*/
+Route::view('/', 'welcome')->name('home');
+Route::redirect('/login', '/?login=1')->name('login');
 
 /*
 | Sign-up. Gated server-side rather than merely hidden: with self-serve
@@ -72,5 +86,3 @@ Route::view('/audit', 'audit.index')->name('audit.index');
 Route::view('/tenants', 'tenants.index')->name('tenants.index');
 Route::view('/users', 'users.index')->name('users.index');
 Route::view('/roles', 'roles.index')->name('roles.index');
-
-Route::redirect('/', '/dashboard');

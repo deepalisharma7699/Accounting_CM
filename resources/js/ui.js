@@ -148,14 +148,21 @@ export function toast(message, tone = 'success') {
  | Modal
  | ---------------------------------------------------------------------- */
 
-let openModal = null;
+/**
+ * A stack rather than a single reference, because a modal can legitimately open
+ * over another one — the bill form's "create a new item" is a form inside a
+ * form. Escape has to close the top one and leave the one underneath open, and a
+ * single reference would forget the first dialog the moment the second appeared.
+ */
+const openModals = [];
 
 export function showModal(id) {
     const modal = typeof id === 'string' ? $(id) : id;
     if (!modal) return;
 
     modal.classList.remove('hidden');
-    openModal = modal;
+
+    if (!openModals.includes(modal)) openModals.push(modal);
 
     // Focus the first usable control so the dialog is keyboard-ready.
     setTimeout(() => $('input:not([type=hidden]), select, textarea, button', modal)?.focus(), 30);
@@ -167,7 +174,9 @@ export function hideModal(id) {
 
     modal.classList.add('hidden');
 
-    if (openModal === modal) openModal = null;
+    const at = openModals.indexOf(modal);
+
+    if (at !== -1) openModals.splice(at, 1);
 }
 
 /** Backdrop click + Escape close whichever modal is open. */
@@ -190,7 +199,9 @@ export function initModals() {
     });
 
     document.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape' && openModal) hideModal(openModal);
+        if (event.key === 'Escape' && openModals.length) {
+            hideModal(openModals[openModals.length - 1]);
+        }
     });
 }
 
