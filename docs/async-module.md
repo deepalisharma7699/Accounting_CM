@@ -3,10 +3,17 @@
 The ground M15 stands on: work that happens after the response, and files that
 live somewhere other than the database.
 
-**Status:** ✅ done
+**Status:** ✅ done — **card switched off**, awaiting §2A conversion
 **Depends on:** M2 (tenancy), M13 (the trail records a deleted file)
 **Required before:** M15
 **Test:** `php artisan test --filter='Async'`
+
+> Nothing else in the application attaches a file to anything, so with the
+> Uploads card off, `/attachments` and this module's `/jobs` polling endpoint
+> have no consumer at all. When it is converted, note that it is **not**
+> read-mostly: uploading is the create act, so it takes the ordinary §2A.1
+> form-first shape with the library behind "Show list". See
+> [hidden-modules.md](hidden-modules.md).
 
 ---
 

@@ -4,6 +4,7 @@ namespace App\Http\Requests\Transaction;
 
 use App\Enums\PaymentMode;
 use App\Services\Accounting\PostingEngine;
+use App\Http\Requests\Transaction\Concerns\CarriesClientRef;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
@@ -17,6 +18,8 @@ use Illuminate\Validation\Rule;
  */
 class StoreExpenseRequest extends FormRequest
 {
+    use CarriesClientRef;
+
     /** Matches DECIMAL(15, 2). */
     private const MAX_AMOUNT = '9999999999999.99';
 
@@ -34,6 +37,9 @@ class StoreExpenseRequest extends FormRequest
             'date' => ['required', 'date_format:Y-m-d'],
             'notes' => ['nullable', 'string', 'max:500'],
             'post' => ['required', 'boolean'],
+
+            // A retry after a timeout must not become a second document — M17.
+            ...$this->clientRefRules(),
 
             // Optional, and defaulted to Misc Expense. "We spent money and I do
             // not want to categorise it right now" is a real state, and refusing
@@ -80,6 +86,7 @@ class StoreExpenseRequest extends FormRequest
             'date' => (string) $this->string('date'),
             'notes' => $this->filled('notes') ? trim((string) $this->string('notes')) : null,
             'post' => $this->boolean('post'),
+            'client_ref' => $this->clientRef(),
             'account_id' => $this->filled('account_id') ? (int) $this->input('account_id') : null,
             'party_id' => $this->filled('party_id') ? (int) $this->input('party_id') : null,
             'amount' => $this->input('amount'),

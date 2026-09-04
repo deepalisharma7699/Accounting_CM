@@ -2,7 +2,6 @@
 
 namespace App\Models;
 
-use App\Enums\ItemType;
 use App\Models\Concerns\Auditable;
 use App\Models\Concerns\BelongsToTenant;
 use App\Support\Money;
@@ -29,17 +28,19 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property int $tenant_id
  * @property int $item_id
  * @property string|null $sku
+ * @property string|null $barcode
  * @property string|null $label
  * @property array<string, string>|null $attributes
  * @property string|null $sell_price
  * @property string|null $markup_percent
  * @property string|null $reorder_level
+ * @property string|null $min_stock
  * @property bool $is_draft
  * @property bool $is_active
  */
 #[Fillable([
-    'tenant_id', 'item_id', 'sku', 'label', 'attributes',
-    'sell_price', 'markup_percent', 'reorder_level', 'is_draft', 'is_active',
+    'tenant_id', 'item_id', 'sku', 'barcode', 'label', 'attributes',
+    'sell_price', 'markup_percent', 'reorder_level', 'min_stock', 'is_draft', 'is_active',
 ])]
 class ItemVariant extends Model
 {
@@ -61,8 +62,8 @@ class ItemVariant extends Model
     public function auditAttributes(): array
     {
         return [
-            'sku', 'label', 'attributes', 'sell_price',
-            'markup_percent', 'reorder_level', 'is_draft', 'is_active',
+            'sku', 'barcode', 'label', 'attributes', 'sell_price',
+            'markup_percent', 'reorder_level', 'min_stock', 'is_draft', 'is_active',
         ];
     }
 
@@ -92,6 +93,7 @@ class ItemVariant extends Model
             'sell_price' => 'decimal:2',
             'markup_percent' => 'decimal:2',
             'reorder_level' => 'decimal:3',
+            'min_stock' => 'decimal:3',
             'is_draft' => 'boolean',
             'is_active' => 'boolean',
         ];
@@ -166,25 +168,35 @@ class ItemVariant extends Model
      */
     public function derivedLabel(): ?string
     {
-        $type = $this->item?->type;
+        $category = $this->item?->category;
         $bag = $this->attributeBag();
 
-        if ($type === null || $bag === []) {
+        if ($bag === []) {
             return null;
+        }
+
+        // No category to order by — an item filed under nothing, which is only
+        // reachable between the migration that added the column and the backfill
+        // that fills it. The bag's own order is worse than the schema's and much
+        // better than showing the customer nothing.
+        if ($category === null) {
+            return implode(' / ', array_map('strval', array_values($bag)));
         }
 
         $parts = [];
 
-        foreach ($type->attributeSchema() as $key => $field) {
-            $value = $bag[$key] ?? null;
+        foreach ($category->resolvedAttributes() as $attribute) {
+            $value = $bag[$attribute->key] ?? null;
 
             if ($value === null || $value === '') {
                 continue;
             }
 
-            $parts[] = isset($field['suffix'])
-                ? sprintf('%s %s', $value, $field['suffix'])
-                : (string) $value;
+            $suffix = $attribute->suffix();
+
+            $parts[] = $suffix === null
+                ? (string) $value
+                : sprintf('%s %s', $value, $suffix);
         }
 
         return $parts === [] ? null : implode(' / ', $parts);
@@ -261,10 +273,17 @@ class ItemVariant extends Model
     }
 
     /**
-     * Whether this variant's item type can describe it with attributes at all.
+     * Whether this variant's category describes it with attributes at all.
+     *
+     * False for a category nobody has given fields to — labour, most obviously,
+     * where an hour of rewinding is an hour of rewinding and a bag of attributes
+     * would only ever be filled in wrong. The form uses this to decide whether to
+     * draw a specification section or say there is nothing to describe.
      */
     public function acceptsAttributes(): bool
     {
-        return ($this->item?->type ?? ItemType::Service)->hasAttributes();
+        $category = $this->item?->category;
+
+        return $category !== null && $category->resolvedAttributes()->isNotEmpty();
     }
 }

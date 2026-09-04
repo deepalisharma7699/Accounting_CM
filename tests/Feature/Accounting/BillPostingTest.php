@@ -2,10 +2,10 @@
 
 namespace Tests\Feature\Accounting;
 
-use App\Enums\ItemType;
 use App\Enums\PartyRole;
 use App\Enums\SystemAccount;
 use App\Enums\TransactionType;
+use App\Exceptions\Accounting\InsufficientStockException;
 use App\Exceptions\Accounting\InvalidJournalException;
 use App\Exceptions\Accounting\ItemInUseException;
 use App\Models\ItemVariant;
@@ -121,7 +121,7 @@ class BillPostingTest extends TestCase
     public function a_sale_posts_template_a_exactly(): void
     {
         [$tenant] = $this->tenantWithUser();
-        $motor = $this->variantFor($tenant, ItemType::Motor);
+        $motor = $this->variantFor($tenant, 'motor');
         $customer = $this->customer($tenant);
 
         $this->receiveStock($tenant, $motor, '4', '8000.00');
@@ -145,7 +145,7 @@ class BillPostingTest extends TestCase
     public function a_purchase_posts_template_c_and_recomputes_the_weighted_average(): void
     {
         [$tenant] = $this->tenantWithUser();
-        $copper = $this->variantFor($tenant, ItemType::BulkMaterial);
+        $copper = $this->variantFor($tenant, 'bulk_material');
         $vendor = $this->vendor($tenant);
 
         $this->buy($tenant, $vendor, [$this->line($copper, '10', '700.00')]);
@@ -174,8 +174,8 @@ class BillPostingTest extends TestCase
         [$tenant] = $this->tenantWithUser();
         $customer = $this->customer($tenant);
 
-        $copper = $this->variantFor($tenant, ItemType::BulkMaterial);
-        $bearing = $this->variantFor($tenant, ItemType::Part);
+        $copper = $this->variantFor($tenant, 'bulk_material');
+        $bearing = $this->variantFor($tenant, 'part');
         $labour = $this->serviceVariantFor($tenant);
 
         // Bought in, rather than adjusted in: an adjustment *credits* COGS, so
@@ -235,7 +235,7 @@ class BillPostingTest extends TestCase
     {
         // The workshop is in 27; the two customers are in 27 and 29.
         [$tenant] = $this->tenantWithUser();
-        $motor = $this->variantFor($tenant, ItemType::Motor);
+        $motor = $this->variantFor($tenant, 'motor');
 
         $this->receiveStock($tenant, $motor, '4', '8000.00');
 
@@ -286,7 +286,7 @@ class BillPostingTest extends TestCase
     public function selling_below_cost_warns_and_still_posts(): void
     {
         [$tenant] = $this->tenantWithUser();
-        $motor = $this->variantFor($tenant, ItemType::Motor);
+        $motor = $this->variantFor($tenant, 'motor');
 
         $this->receiveStock($tenant, $motor, '2', '9000.00');
 
@@ -315,8 +315,8 @@ class BillPostingTest extends TestCase
         $away = $this->customer($tenant, '29');
         $vendor = $this->vendor($tenant);
 
-        $motor = $this->variantFor($tenant, ItemType::Motor);
-        $copper = $this->variantFor($tenant, ItemType::BulkMaterial);
+        $motor = $this->variantFor($tenant, 'motor');
+        $copper = $this->variantFor($tenant, 'bulk_material');
         $labour = $this->serviceVariantFor($tenant);
 
         for ($i = 0; $i < 25; $i++) {
@@ -388,7 +388,7 @@ class BillPostingTest extends TestCase
     public function a_stocked_item_billed_without_a_variant_is_refused(): void
     {
         [$tenant] = $this->tenantWithUser();
-        $motor = $this->variantFor($tenant, ItemType::Motor);
+        $motor = $this->variantFor($tenant, 'motor');
 
         $this->expectException(InvalidJournalException::class);
         $this->expectExceptionMessage('say which variant');
@@ -402,8 +402,8 @@ class BillPostingTest extends TestCase
     public function a_line_naming_a_variant_of_another_item_is_refused(): void
     {
         [$tenant] = $this->tenantWithUser();
-        $motor = $this->variantFor($tenant, ItemType::Motor);
-        $bearing = $this->variantFor($tenant, ItemType::Part);
+        $motor = $this->variantFor($tenant, 'motor');
+        $bearing = $this->variantFor($tenant, 'part');
 
         $this->expectException(InvalidJournalException::class);
         $this->expectExceptionMessage('belongs to a different item');
@@ -462,7 +462,7 @@ class BillPostingTest extends TestCase
     public function the_transaction_total_is_the_invoice_not_the_sum_of_its_debits(): void
     {
         [$tenant] = $this->tenantWithUser();
-        $motor = $this->variantFor($tenant, ItemType::Motor);
+        $motor = $this->variantFor($tenant, 'motor');
 
         $this->receiveStock($tenant, $motor, '2', '8000.00');
 
@@ -478,7 +478,7 @@ class BillPostingTest extends TestCase
     public function a_draft_bill_writes_no_lines_and_is_re_priced_when_it_posts(): void
     {
         [$tenant] = $this->tenantWithUser();
-        $motor = $this->variantFor($tenant, ItemType::Motor);
+        $motor = $this->variantFor($tenant, 'motor');
 
         $this->receiveStock($tenant, $motor, '2', '8000.00');
 
@@ -504,7 +504,7 @@ class BillPostingTest extends TestCase
     public function reversing_a_sale_returns_the_stock_and_nets_every_account_to_nothing(): void
     {
         [$tenant] = $this->tenantWithUser();
-        $motor = $this->variantFor($tenant, ItemType::Motor);
+        $motor = $this->variantFor($tenant, 'motor');
 
         // Bought in rather than adjusted in, so COGS starts at zero and "nets to
         // nothing" means what it says.
@@ -525,13 +525,58 @@ class BillPostingTest extends TestCase
         $this->assertBooksBalance($tenant);
     }
 
+    /**
+     * M17's decision D6, which reverses M8's.
+     *
+     * M8 allowed the sale and warned about it, on the grounds that refusing does
+     * not produce the bearing. That is still true, and it is still not what the
+     * counter wants — so the refusal is on by default and the workshop can turn
+     * it off. Both halves are asserted here and in the test below.
+     */
     #[Test]
-    public function a_sale_may_go_ahead_when_the_shelf_says_there_is_nothing_there(): void
+    public function a_sale_is_refused_when_the_shelf_does_not_hold_the_stock(): void
     {
-        // The decision M8 made, seen from a bill: refusing the sale does not
-        // produce the bearing, it produces a workshop that stops recording sales.
         [$tenant] = $this->tenantWithUser();
-        $bearing = $this->variantFor($tenant, ItemType::Part);
+        $bearing = $this->variantFor($tenant, 'part');
+
+        $this->receiveStock($tenant, $bearing, '1', '400.00');
+
+        $this->expectException(InsufficientStockException::class);
+        // The brief's own words, in the brief's own units.
+        $this->expectExceptionMessageMatches('/Only 1 pc available in stock/');
+
+        $this->sell($tenant, $this->customer($tenant), [$this->line($bearing, '3', '600.00')]);
+    }
+
+    #[Test]
+    public function a_refused_sale_moves_nothing_at_all(): void
+    {
+        [$tenant] = $this->tenantWithUser();
+        $bearing = $this->variantFor($tenant, 'part');
+
+        $this->receiveStock($tenant, $bearing, '1', '400.00');
+
+        try {
+            $this->sell($tenant, $this->customer($tenant), [$this->line($bearing, '3', '600.00')]);
+        } catch (InsufficientStockException) {
+            // The point of refusing before the write rather than during it.
+        }
+
+        $this->assertSame('1.000', $this->stockPositionOf($tenant, $bearing)['quantity']);
+        $this->assertSame('0.00', $this->balanceOf($tenant, SystemAccount::Sales));
+        $this->assertBooksBalance($tenant);
+    }
+
+    #[Test]
+    public function a_workshop_that_bills_ahead_of_its_paperwork_can_allow_it(): void
+    {
+        // The escape hatch M8's reasoning earned. A fitter records Tuesday's sale
+        // and the supplier's invoice reaches the office on Friday; this workshop
+        // has said so, and the bill posts.
+        [$tenant] = $this->tenantWithUser();
+        $this->actingForTenant($tenant, fn () => $tenant->forceFill(['allow_negative_stock' => true])->save());
+
+        $bearing = $this->variantFor($tenant, 'part');
 
         $this->receiveStock($tenant, $bearing, '1', '400.00');
 
@@ -539,6 +584,9 @@ class BillPostingTest extends TestCase
 
         $this->assertSame('-2.000', $this->stockPositionOf($tenant, $bearing)['quantity']);
 
+        // Allowed is not the same as unremarked: the bill still carries the
+        // warning, because somebody has to be told the shelf and the books
+        // disagree.
         $warnings = $this->actingForTenant($tenant, fn () => app(BillService::class)->warningsFor($bill));
 
         $this->assertContains('STOCK_NEGATIVE', array_column($warnings, 'code'));
@@ -571,7 +619,7 @@ class BillPostingTest extends TestCase
     public function a_bills_margin_comes_from_the_movement_rather_than_a_stored_copy(): void
     {
         [$tenant] = $this->tenantWithUser();
-        $motor = $this->variantFor($tenant, ItemType::Motor);
+        $motor = $this->variantFor($tenant, 'motor');
 
         $this->receiveStock($tenant, $motor, '2', '8000.00');
 

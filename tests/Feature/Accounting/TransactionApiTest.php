@@ -354,6 +354,56 @@ class TransactionApiTest extends TestCase
     }
 
     #[Test]
+    public function the_list_can_be_searched_by_the_counterpartys_name(): void
+    {
+        // What the search box on every document list actually promises: "Invoice
+        // number, customer or note". A clerk holding a paper slip has the
+        // customer's name far more often than the document number, and a search
+        // that quietly matched only the number would answer "no such invoice"
+        // for an invoice that is right there.
+        $alpha = $this->actingForTenant($this->tenant, fn () => Party::factory()->create([
+            'name' => 'Alpha Motors',
+            'roles' => [PartyRole::Customer->value],
+        ]));
+
+        $beta = $this->actingForTenant($this->tenant, fn () => Party::factory()->create([
+            'name' => 'Beta Rewinding',
+            'roles' => [PartyRole::Customer->value],
+        ]));
+
+        foreach ([[$alpha, '250.00'], [$beta, '400.00']] as [$party, $amount]) {
+            $this->withHeaders($this->authHeader($this->owner))
+                ->postJson('/api/v1/transactions/receipt', [
+                    'date' => now()->toDateString(),
+                    'post' => true,
+                    'party_id' => $party->id,
+                    'payments' => [['mode' => 'cash', 'amount' => $amount]],
+                ])
+                ->assertCreated();
+        }
+
+        $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/transactions?search=Beta')
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.party.name', 'Beta Rewinding');
+
+        // Part of a name, the way somebody types who is half-reading a slip.
+        $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/transactions?search=rewind')
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.party.name', 'Beta Rewinding');
+
+        // And a name nobody here is called still answers nothing, rather than
+        // everything — the failure a loosened LIKE makes on the way past.
+        $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/transactions?search=Gamma')
+            ->assertOk()
+            ->assertJsonCount(0, 'data');
+    }
+
+    #[Test]
     public function the_list_reports_what_was_settled_on_each_document(): void
     {
         $customer = $this->actingForTenant($this->tenant, fn () => Party::factory()->create([
@@ -378,8 +428,13 @@ class TransactionApiTest extends TestCase
             ->assertOk()
             // Both tenders, added on the digits — a receipt settled two ways is
             // one document that touched two accounts.
-            ->assertJsonPath('data.0.paid', '5000.00')
-            ->assertJsonPath('data.0.balance', '0.00');
+            ->assertJsonPath('data.0.paid_on_document', '5000.00')
+            // A receipt has no payment status of its own: it *is* the payment.
+            // Since M16, `paid` and `due` are answers about a bill, and reporting
+            // them here would invite somebody to read a receipt as an unpaid one.
+            ->assertJsonMissingPath('data.0.paid')
+            ->assertJsonMissingPath('data.0.due')
+            ->assertJsonMissingPath('data.0.payment_status');
 
         // A manual journal cannot carry a split at all, so it reports neither
         // figure. Zero here would read as "nothing has been paid", which invites
@@ -390,7 +445,7 @@ class TransactionApiTest extends TestCase
             ->getJson('/api/v1/transactions?types[]=journal')
             ->assertOk()
             ->assertJsonMissingPath('data.0.paid')
-            ->assertJsonMissingPath('data.0.balance');
+            ->assertJsonMissingPath('data.0.paid_on_document');
     }
 
     #[Test]
@@ -431,10 +486,14 @@ class TransactionApiTest extends TestCase
         // A type appears here exactly when its posting template is registered,
         // which is what stops a client offering a form for something the engine
         // would refuse. `journal` from M4, the two settlements from M6, the stock
-        // adjustment from M8, the two bills from M9, the expense from M10 and
-        // M11's opening balance.
+        // adjustment from M8, the two bills from M9, the expense from M10, M11's
+        // opening balance, M18's two returns, and M22's staff advance and
+        // payroll.
         $this->assertSame(
-            ['journal', 'payment', 'receipt', 'stock_adjustment', 'sale', 'purchase', 'expense', 'opening'],
+            [
+                'journal', 'payment', 'receipt', 'stock_adjustment', 'sale', 'purchase', 'expense', 'opening',
+                'sales_return', 'purchase_return', 'staff_advance', 'payroll',
+            ],
             collect($response->json('data.types'))->pluck('value')->all(),
         );
 

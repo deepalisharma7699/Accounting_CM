@@ -1,5 +1,14 @@
 # Opening Balances
 
+> **Card status: switched off**, and this is the module whose absence is worst in
+> combination. With Opening balances and Settings both off, **a real workshop
+> cannot go live**: its existing debtors, creditors, stock and cash have no way
+> in, so every figure the product reports starts from zero on the day the
+> software is first opened. The module itself is complete and tested and waits
+> only on the §2A conversion. When it is converted, keep the preview-then-post
+> discipline exactly as it is — it is the safety property, not a courtesy. See
+> [hidden-modules.md](hidden-modules.md).
+
 Getting a running workshop's existing position into the books — M11.
 
 A workshop that has been trading for eleven years does not open at zero. It has

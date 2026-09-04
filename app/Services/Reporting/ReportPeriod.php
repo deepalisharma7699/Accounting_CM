@@ -197,6 +197,55 @@ final class ReportPeriod
     }
 
     /**
+     * The window immediately before this one, the same length — what every
+     * headline figure is compared against.
+     *
+     * A number on its own is not an insight. "₹4,20,000" says nothing a
+     * workshop can act on; "₹4,20,000, up 18% on last month" says whether the
+     * month went well. That comparison is the difference between this module and
+     * the statements it sits beside, so it is computed once here rather than in
+     * each panel.
+     *
+     * **The length is what is preserved, not the calendar name.** The window
+     * before 1–31 March is 29 January to 28 February, not "February" — comparing
+     * a 31-day month against a 28-day one would report a 10% fall in a shop that
+     * traded identically every day. February is what the picker is for.
+     *
+     * Null where there is nothing to compare against:
+     *
+     *   * **all time** has no before;
+     *   * an **open-ended** custom range — "from 1 April", "up to today" — has
+     *     no length to step back by.
+     *
+     * A caller that gets null reports the figure with no delta beside it, which
+     * is the honest outcome. Inventing a baseline would put a percentage on the
+     * screen that means nothing.
+     */
+    public function previous(): ?self
+    {
+        if ($this->from === null || $this->to === null) {
+            return null;
+        }
+
+        $from = CarbonImmutable::parse($this->from);
+        $to = CarbonImmutable::parse($this->to);
+
+        // Inclusive of both ends: 1–31 March is 31 days, not 30. The window
+        // before it therefore ends on 28 February and starts 31 days earlier.
+        $days = $from->diffInDays($to) + 1;
+
+        $previousTo = $from->subDay();
+        $previousFrom = $previousTo->subDays($days - 1);
+
+        return new self(
+            'previous',
+            $previousFrom->toDateString(),
+            $previousTo->toDateString(),
+            self::describe($previousFrom->toDateString(), $previousTo->toDateString()),
+        );
+    }
+
+    /**
      * @return array{preset: string, from: string|null, to: string|null, label: string}
      */
     public function toArray(): array

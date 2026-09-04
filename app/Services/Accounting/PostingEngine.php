@@ -10,6 +10,8 @@ use App\Enums\TransactionType;
 use App\Exceptions\Accounting\BooksClosedException;
 use App\Exceptions\Accounting\InvalidJournalException;
 use App\Exceptions\Accounting\InvalidStockMovementException;
+use App\Exceptions\Accounting\ReversalWouldGoNegativeException;
+use App\Exceptions\Accounting\RevisionWouldRestateCostException;
 use App\Exceptions\Accounting\TransactionImmutableException;
 use App\Exceptions\Accounting\UnbalancedJournalException;
 use App\Models\ChartOfAccount;
@@ -34,7 +36,9 @@ use App\Services\Accounting\Posting\PostingTemplateRegistry;
 use App\Services\Accounting\Posting\SettlesThroughPaymentModes;
 use App\Services\Accounting\Posting\StatesItsOwnTotal;
 use App\Services\Accounting\Posting\StockChange;
+use App\Services\Inventory\StockLedgerService;
 use App\Support\Money;
+use App\Support\Quantity;
 use App\Support\Tenancy\TenantContext;
 use Carbon\CarbonImmutable;
 use DateTimeInterface;
@@ -76,6 +80,12 @@ class PostingEngine
         private readonly TransactionLineRepositoryInterface $documentLines,
         private readonly ItemVariantRepositoryInterface $variants,
         private readonly PostingTemplateRegistry $templates,
+        private readonly DocumentNumberService $numbers,
+        // M17's negative-stock refusal. The engine already owns every other
+        // invariant a posting has to satisfy, and "the shelf does not hold this"
+        // is one of them — see assertStockAvailable(). Named for the ledger it
+        // reads, because `$stock` above is the movement *repository* it writes.
+        private readonly StockLedgerService $stockLedger,
         private readonly TenantContext $context,
     ) {}
 
@@ -130,6 +140,16 @@ class PostingEngine
             documentTotal: $template instanceof StatesItsOwnTotal
                 ? $template->documentTotal($input)
                 : null,
+            // The client's own name for this document, so a retry after a
+            // timeout lands on the row the first attempt wrote rather than a
+            // second bill — M17.
+            clientRef: $input['client_ref'] ?? null,
+            // The bill a credit note takes part of back — M18. Set only by
+            // `ReturnService`; no store request maps this key, because deciding
+            // what a return is against is the service's job and not a caller's.
+            againstTransactionId: isset($input['against_transaction_id'])
+                ? (int) $input['against_transaction_id']
+                : null,
         );
     }
 
@@ -145,7 +165,13 @@ class PostingEngine
      */
     private function payloadOf(array $input): array
     {
-        return array_diff_key($input, array_flip(['date', 'notes', 'party_id', 'source', 'payments']));
+        // `client_ref` is stripped alongside them, and for a sharper reason: it
+        // is on a column of its own with a unique index behind it, and a second
+        // copy in the stored payload would be re-composed onto a *different*
+        // transaction the day a draft was duplicated.
+        return array_diff_key($input, array_flip([
+            'date', 'notes', 'party_id', 'source', 'payments', 'client_ref',
+        ]));
     }
 
     /* ---------------------------------------------------------------------
@@ -200,6 +226,19 @@ class PostingEngine
             $transaction = $this->transactions->create([
                 'type' => $batch->type,
                 'status' => TransactionStatus::Posted,
+                // Taken here, inside the wrapper, so a batch that fails any of
+                // the writes below puts its number back rather than leaving a
+                // gap in the series — M16.
+                'doc_no' => $this->numbers->assign($batch->type, $batch->date),
+                // In the same INSERT as everything else, so a retry that arrives
+                // while this is still committing collides on the unique index
+                // rather than writing a second bill — M17.
+                'client_ref' => $batch->clientRef,
+                // The bill this takes part of back — M18. Never set alongside
+                // `reverses_id`: cancelling a document and crediting part of one
+                // are different acts, and a row claiming both would be readable
+                // as neither.
+                'against_transaction_id' => $batch->againstTransactionId,
                 'source' => $batch->source,
                 'party_id' => $batch->partyId,
                 'date' => $batch->date,
@@ -249,6 +288,10 @@ class PostingEngine
         return $this->transactions->create([
             'type' => $batch->type,
             'status' => TransactionStatus::Draft,
+            // A draft takes no document number and *does* take a client_ref:
+            // double-tapping Save on an unfinished bill produces two drafts,
+            // which is a smaller mess than two invoices and still a mess.
+            'client_ref' => $batch->clientRef,
             'source' => $batch->source,
             'party_id' => $batch->partyId,
             'date' => $batch->date,
@@ -325,6 +368,10 @@ class PostingEngine
             // the composed-from payload.
             return $this->transactions->update($draft, [
                 'status' => TransactionStatus::Posted,
+                // The draft had no number; this is the moment it earns one. A
+                // number issued any earlier would be a gap in the series the day
+                // somebody discarded the draft — M16.
+                'doc_no' => $this->numbers->assign($draft->type, $draft->date),
                 'total' => $batch->total()->amount(),
                 'draft_lines' => null,
                 'draft_payments' => null,
@@ -366,6 +413,7 @@ class PostingEngine
         ?DateTimeInterface $date = null,
         ?string $reason = null,
         ?User $actor = null,
+        bool $acknowledgeNegativeStock = false,
     ): Transaction {
         if ($original->isDraft()) {
             throw TransactionImmutableException::draftNotReversible($original->id);
@@ -430,10 +478,20 @@ class PostingEngine
         // permanently in the books.
         $this->assertPostable($batch, allowArchivedParty: true);
 
+        // The one thing that exemption must not carry with it: silence. See
+        // assertReversalKeepsStockWhole().
+        $this->assertReversalKeepsStockWhole($original, $batch, $acknowledgeNegativeStock);
+
         $reversal = DB::transaction(function () use ($batch, $original, $actor) {
             $reversal = $this->transactions->create([
                 'type' => $batch->type,
                 'status' => TransactionStatus::Posted,
+                // A number of its own, in the same series as the document it
+                // cancels. Reusing the original's would put one number on two
+                // records, and leaving it blank would make the correction the
+                // only posted document nobody can refer to — which is the one
+                // everybody ends up needing to refer to.
+                'doc_no' => $this->numbers->assign($batch->type, $batch->date),
                 'source' => $batch->source,
                 'party_id' => $batch->partyId,
                 'date' => $batch->date,
@@ -462,6 +520,245 @@ class PostingEngine
         ]);
 
         return $reversal->load(['entries.account', 'payments', 'lines.stockMovement', 'stockMovements', 'creator']);
+    }
+
+    /**
+     * Correct a posted purchase by cancelling it and posting the corrected
+     * document in its place — one act, one database transaction.
+     *
+     * ## Why this exists at all
+     *
+     * A posted transaction is immutable, and that is not negotiable: every
+     * report already run off it would silently change, and a ledger that can be
+     * edited after the fact is not a ledger. But "you cannot edit it" was being
+     * enforced by simply not offering an Edit, which left somebody who had typed
+     * 20 instead of 30 to work out on their own that the way to fix it is a
+     * partial debit note, or a reversal followed by re-entering the whole bill
+     * from scratch. Most people conclude the product cannot do it.
+     *
+     * So the immutability stays and the dead end goes. The two documents this
+     * writes are exactly the two documents a careful bookkeeper would have
+     * written by hand — the reversal, and the replacement — and the audit trail
+     * is the same either way. What is different is that they are one act, so it
+     * cannot half-happen, and the stock delta is the arithmetic of the two
+     * rather than something the user has to reason about.
+     *
+     * ## Bills only, and the two are not corrected on the same terms
+     *
+     * The caller has already refused everything that is not a purchase bill or
+     * an invoice. Those two are here for the same reason and held to different
+     * rules, which is worth stating plainly because the difference is invisible
+     * from the outside.
+     *
+     * A **purchase** states its own cost. The replacement arrives at whatever
+     * the corrected bill says, and changing that figure is the point of
+     * correcting one.
+     *
+     * A **sale** does not. Stock leaves at the weighted average on the day it
+     * went out, and the replacement issues it at the average *now*. Where
+     * nothing has touched those parts in between the two are the same number and
+     * the correction is exact — an invoice fixed within the hour, which is the
+     * ordinary case. Where a delivery has arrived at a different price since,
+     * they are not, and reverse-and-repost would restate the cost of goods sold
+     * on an invoice whose goods left months ago.
+     *
+     * So the sale is checked rather than trusted: see
+     * {@see assertRevisionKeepsTheCostItSoldAt()}, which rolls the whole thing
+     * back and names the repair that values the goods properly — a return, then
+     * a fresh invoice. `docs/purchase-module.md` has the longer version of why
+     * the two differ.
+     *
+     * ## The negative-stock question, asked once and at the end
+     *
+     * The intermediate state is nobody's: inside this wrapper the reversal has
+     * taken the whole delivery off the shelf and the replacement has not yet put
+     * it back, so a purchase of 10 corrected to 12 would trip
+     * {@see assertReversalKeepsStockWhole()} over a position that never exists.
+     * The reversal is therefore acknowledged internally, and the question is
+     * asked of the *result* instead — which is the state somebody will actually
+     * see, and which catches the case that matters: 10 corrected down to 3 when
+     * 7 have already gone out.
+     *
+     * @param  array<string, mixed>  $input  The corrected document, in the same
+     *                                       vocabulary `create()` takes.
+     *
+     * @throws ReversalWouldGoNegativeException
+     */
+    public function revise(
+        Transaction $original,
+        array $input,
+        ?User $actor = null,
+        bool $acknowledgeNegativeStock = false,
+    ): Transaction {
+        $original->loadMissing('stockMovements');
+
+        // Read before anything moves: after the replacement posts, the original's
+        // movements are still on the record but the variants the *correction*
+        // touches may be different ones, and both sets have to be checked.
+        $touched = $original->stockMovements->pluck('variant_id')->map(fn ($id) => (int) $id)->all();
+
+        $revision = DB::transaction(function () use ($original, $input, $actor, $acknowledgeNegativeStock, &$touched) {
+            $this->reverse(
+                $original,
+                date: null,
+                reason: sprintf('Reversed by a correction to %s', $original->doc_no ?? "#{$original->id}"),
+                actor: $actor,
+                // See the note above: the shelf mid-revision is not a shelf.
+                acknowledgeNegativeStock: true,
+            );
+
+            $replacement = $this->post($this->compose($original->type, $input), $actor);
+
+            $touched = array_unique(array_merge(
+                $touched,
+                $replacement->stockMovements()->pluck('variant_id')->map(fn ($id) => (int) $id)->all(),
+            ));
+
+            $this->assertRevisionLeavesStockWhole($original, $touched, $acknowledgeNegativeStock);
+            $this->assertRevisionKeepsTheCostItSoldAt($original, $replacement);
+
+            return $replacement;
+        });
+
+        Log::info('ledger.revised', [
+            'transaction_id' => $original->id,
+            'revision_id' => $revision->id,
+            'tenant_id' => $revision->tenant_id,
+        ]);
+
+        return $revision->load(['entries.account', 'payments', 'lines.stockMovement', 'stockMovements', 'creator']);
+    }
+
+    /**
+     * The other post-condition, and the one that only applies to an invoice: the
+     * goods must be re-issued at the cost they left at.
+     *
+     * Both halves have already written their movements by the time this runs, so
+     * the question is answered by reading what they actually did rather than by
+     * predicting it — which is the only way to answer it, because the
+     * replacement's cost depends on what the reversal put back.
+     *
+     * The comparison is **unit cost per variant**, not the total. That one rule
+     * covers both shapes of correction at once: with the quantity unchanged an
+     * equal unit cost means an unchanged value, and with the quantity changed it
+     * means the value moved exactly in proportion — which is what correcting a
+     * quantity ought to do and nothing more.
+     *
+     * A variant on the corrected invoice that was not on the original is not
+     * compared, because there is nothing to compare it against: it never left
+     * the shelf on that date, so today's average is the only figure available
+     * and is what a fresh invoice would use. One in the other direction needs no
+     * check either — the reversal put it back at exactly what it left at.
+     *
+     * Skipped for a purchase, which arrives at its own stated cost. See the
+     * docblock on {@see revise()}.
+     *
+     * @throws RevisionWouldRestateCostException
+     */
+    private function assertRevisionKeepsTheCostItSoldAt(
+        Transaction $original,
+        Transaction $replacement,
+    ): void {
+        if ($original->type !== TransactionType::Sale) {
+            return;
+        }
+
+        $before = $this->unitCostsByVariant($original);
+        $after = $this->unitCostsByVariant($replacement);
+
+        $moved = [];
+
+        foreach ($after as $variantId => $now) {
+            $was = $before[$variantId] ?? null;
+
+            if ($was === null || $was->equals($now)) {
+                continue;
+            }
+
+            $moved[] = [
+                'variant' => $this->variants->findWithItem($variantId)?->displayLabel() ?? "#{$variantId}",
+                'was' => $was->amount(),
+                'now' => $now->amount(),
+            ];
+        }
+
+        if ($moved !== []) {
+            throw RevisionWouldRestateCostException::forSale((int) $original->id, $moved);
+        }
+    }
+
+    /**
+     * What each variant on a document left the shelf at, keyed by variant.
+     *
+     * One figure per variant: a document's movements are all written in the same
+     * instant against the same weighted average, so two lines of the same part
+     * cost the same. Taking the first is therefore taking the only one there is.
+     *
+     * @return array<int, Money>
+     */
+    private function unitCostsByVariant(Transaction $transaction): array
+    {
+        $costs = [];
+
+        foreach ($transaction->stockMovements()->get() as $movement) {
+            $costs[(int) $movement->variant_id] ??= $movement->unitCostMoney();
+        }
+
+        return $costs;
+    }
+
+    /**
+     * The post-condition of a revision: no variant it touched is left below zero.
+     *
+     * A post-condition rather than a pre-condition because the answer depends on
+     * both halves of the correction, and neither half knows about the other. It
+     * runs inside the caller's `DB::transaction`, so throwing here rolls the
+     * whole revision back — the original stays posted and unreversed, which is
+     * the only safe place to leave somebody whose correction was refused.
+     *
+     * @param  array<int, int>  $variantIds
+     *
+     * @throws ReversalWouldGoNegativeException
+     */
+    private function assertRevisionLeavesStockWhole(
+        Transaction $original,
+        array $variantIds,
+        bool $acknowledged,
+    ): void {
+        if ($acknowledged || $variantIds === [] || $this->stockLedger->allowsNegativeStock()) {
+            return;
+        }
+
+        $shortfalls = [];
+
+        foreach ($variantIds as $variantId) {
+            $variant = $this->variants->findWithItem($variantId);
+
+            if ($variant === null) {
+                continue;
+            }
+
+            $position = $this->stockLedger->positionFor($variant)->quantity;
+
+            if (! $position->isNegative()) {
+                continue;
+            }
+
+            $shortfalls[] = [
+                'variant' => $variant->displayLabel(),
+                'available' => $position->trimmed(),
+                'unit' => $variant->item?->base_uom->symbol() ?? '',
+                'requested' => $position->absolute()->trimmed(),
+                'shortfall' => $position->absolute()->trimmed(),
+            ];
+        }
+
+        if ($shortfalls !== []) {
+            throw ReversalWouldGoNegativeException::forRevision(
+                $original->doc_no ?? "#{$original->id}",
+                $shortfalls,
+            );
+        }
     }
 
     /**
@@ -625,6 +922,8 @@ class PostingEngine
             $this->assertChangeUsable($change, $allowArchived);
         }
 
+        $this->assertStockAvailable($batch, $allowArchived);
+
         $stockValue = $batch->stockValue();
         $inventoryLine = $this->inventoryMovementIn($batch);
 
@@ -664,7 +963,7 @@ class PostingEngine
         if (! $allowArchived && ! $variant->item->tracksStock()) {
             throw InvalidStockMovementException::notStocked(
                 $variant->displayLabel(),
-                $variant->item->type->label(),
+                $variant->item->categoryLabel(),
             );
         }
 
@@ -673,6 +972,163 @@ class PostingEngine
                 $variant->displayLabel(),
                 $change->quantity->trimmed(),
                 $variant->item->base_uom->label(),
+            );
+        }
+    }
+
+    /**
+     * Refuse a posting that would take a variant below zero — M17, decision D6.
+     *
+     * Here, in the posting path, rather than where the movement is built. A
+     * draft and a preview both compose issues out of stock the workshop has not
+     * bought yet, quite legitimately — parking an unfinished bill until the
+     * supplier's invoice arrives is what a draft is *for* — so the rule applies
+     * at the moment somebody commits, and not before. It runs inside the caller's
+     * database transaction, with the variant lock the valuation already took
+     * still held, so the position it reads is the one about to be written.
+     *
+     * Two exemptions, and both are the same exemption an archived variant gets:
+     *
+     *   * a **reversal** (`$allowArchived`), because a known error must never
+     *     become permanent on the grounds that the shelf has moved since;
+     *   * a **stock adjustment**, because it is the workshop asserting what is
+     *     physically there — the authority the books answer to, and the only tool
+     *     for repairing a position that has already gone negative.
+     *
+     * The first exemption is *silent* here but not unguarded: reversing a
+     * purchase is refused separately by {@see assertReversalKeepsStockWhole()},
+     * which puts the same question to the person doing it and takes yes for an
+     * answer. The exemption stays because the answer has to be theirs; what it
+     * cannot mean is that nobody is asked.
+     *
+     * Quantities are summed per variant before being checked. Two lines of three
+     * bearings are six bearings, and a shelf of five is short — which neither
+     * line can tell on its own, and which a check inside the movement builder
+     * therefore cannot see.
+     *
+     * @throws \App\Exceptions\Accounting\InsufficientStockException
+     */
+    private function assertStockAvailable(PostingBatch $batch, bool $allowArchived): void
+    {
+        if ($allowArchived || $batch->type === TransactionType::StockAdjustment) {
+            return;
+        }
+
+        /** @var array<int, Quantity> $wanted */
+        $wanted = [];
+
+        foreach ($batch->movements as $change) {
+            if (! $change->quantity->isNegative()) {
+                continue;
+            }
+
+            $id = $change->variantId;
+            $wanted[$id] = ($wanted[$id] ?? Quantity::zero())->plus($change->quantity->absolute());
+        }
+
+        foreach ($wanted as $variantId => $quantity) {
+            $variant = $this->variants->findWithItem($variantId);
+
+            // Null is unreachable — assertChangeUsable() has already refused an
+            // unknown variant — and skipped rather than assumed, so a change in
+            // the order of these checks can never turn into a null dereference
+            // on the posting path.
+            if ($variant !== null) {
+                $this->stockLedger->assertCanIssue($variant, $quantity);
+            }
+        }
+    }
+
+    /**
+     * Refuse a **purchase** reversal that would take the shelf below zero, unless
+     * whoever is reversing has said they know it will.
+     *
+     * The other half of the exemption {@see assertStockAvailable()} grants. That
+     * exemption is right and stays: a purchase entered in error must be
+     * correctable however long ago it was, and a refusal that could not be got
+     * past would leave a known error in the books for ever. What was wrong was
+     * that it was also silent — reversing a purchase of ten after seven had gone
+     * out by another route posted a position of minus seven, a negative Inventory
+     * valuation and a store-wide stock value below zero, with no warning at the
+     * one moment anybody could still have chosen the debit note instead.
+     *
+     * So this refuses *first* and yields to an explicit acknowledgement, which is
+     * the shape M17 chose for the same question on a bill. The message names the
+     * way through; `$acknowledgeNegativeStock` is it.
+     *
+     * ## Why only a purchase
+     *
+     * Because only a purchase reversal can cause this. A sale or a sales-return
+     * reversal puts quantity *back*; a stock adjustment is the tool for repairing
+     * a position that has already gone negative, and gating it here would take
+     * away the only instrument that can. The check therefore looks at the
+     * document being reversed, not at the batch — the batch alone cannot tell a
+     * purchase coming off the shelf from a stock-take writing one down.
+     *
+     * Silent, like every other negative-stock rule, where the workshop has turned
+     * `allow_negative_stock` on. A workshop that bills ahead of its paperwork has
+     * already answered this question, and asking it again per reversal would be
+     * the setting failing to mean anything.
+     *
+     * @throws ReversalWouldGoNegativeException
+     */
+    private function assertReversalKeepsStockWhole(
+        Transaction $original,
+        PostingBatch $batch,
+        bool $acknowledged,
+    ): void {
+        if ($acknowledged || ! $original->type->isPurchaseDocument()) {
+            return;
+        }
+
+        if (! $batch->hasMovements() || $this->stockLedger->allowsNegativeStock()) {
+            return;
+        }
+
+        // Summed per variant before being asked, for the reason
+        // assertStockAvailable() sums: two lines of three bearings are six
+        // bearings, and a shelf of five is short in a way neither line can see.
+        /** @var array<int, Quantity> $leaving */
+        $leaving = [];
+
+        foreach ($batch->movements as $change) {
+            if (! $change->quantity->isNegative()) {
+                continue;
+            }
+
+            $id = $change->variantId;
+            $leaving[$id] = ($leaving[$id] ?? Quantity::zero())->plus($change->quantity->absolute());
+        }
+
+        $shortfalls = [];
+
+        foreach ($leaving as $variantId => $quantity) {
+            $variant = $this->variants->findWithItem($variantId);
+
+            // Unreachable — assertChangeUsable() has already refused an unknown
+            // variant — and skipped rather than assumed, so a change in the order
+            // of these checks can never become a null dereference on this path.
+            if ($variant === null || ! $this->stockLedger->wouldGoNegative($variant, $quantity)) {
+                continue;
+            }
+
+            $available = $this->stockLedger->positionFor($variant)->quantity;
+
+            $shortfalls[] = [
+                'variant' => $variant->displayLabel(),
+                // Trimmed for the same reason M17 trims: three decimal places on
+                // a countable thing reads as a system talking to itself.
+                'available' => $available->trimmed(),
+                'unit' => $variant->item?->base_uom->symbol() ?? '',
+                'requested' => $quantity->trimmed(),
+                'shortfall' => $quantity->minus($available)->trimmed(),
+            ];
+        }
+
+        if ($shortfalls !== []) {
+            throw ReversalWouldGoNegativeException::forDocument(
+                $original->doc_no ?? "#{$original->id}",
+                $shortfalls,
             );
         }
     }

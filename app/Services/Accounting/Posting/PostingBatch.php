@@ -72,6 +72,26 @@ final class PostingBatch
          *                            all, and neither is the CGST/SGST/IGST split.
          */
         public readonly array $documentLines = [],
+        /**
+         * The client's own name for this document — M17, and the brief's §28.
+         *
+         * Carried on the batch rather than stamped afterwards because it has to
+         * reach the same INSERT as everything else: a `client_ref` written a
+         * moment later would leave a window in which the retry finds nothing and
+         * bills the customer twice, which is the entire failure it exists to
+         * prevent. Null for every server-side caller — the importer, a seeder —
+         * which legitimately has no client to name it.
+         */
+        public readonly ?string $clientRef = null,
+        /**
+         * The bill this document takes part of back — M18.
+         *
+         * Distinct from `reverses_id`, which the engine sets on a reversal: that
+         * cancels a document whole and moves it to `reversed`, where this leaves
+         * the original posted and still returnable against. The two are never
+         * both set.
+         */
+        public readonly ?int $againstTransactionId = null,
     ) {}
 
     /**
@@ -92,6 +112,8 @@ final class PostingBatch
         ?array $payload = null,
         ?Money $documentTotal = null,
         array $documentLines = [],
+        ?string $clientRef = null,
+        ?int $againstTransactionId = null,
     ): self {
         return new self(
             $type,
@@ -105,6 +127,8 @@ final class PostingBatch
             $payload,
             $documentTotal,
             array_values($documentLines),
+            $clientRef,
+            $againstTransactionId,
         );
     }
 

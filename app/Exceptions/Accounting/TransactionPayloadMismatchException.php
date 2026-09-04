@@ -90,4 +90,28 @@ class TransactionPayloadMismatchException extends ApiException
             details: ['field' => 'payments', 'type' => $type->value, 'expected' => self::vocabularyOf($type)],
         );
     }
+
+    /**
+     * Correcting a document that is not a purchase bill.
+     *
+     * Reverse-and-repost is a repair whose correctness depends on the type: a
+     * purchase arrives at its own stated cost, so cancelling one and posting the
+     * corrected one puts the Inventory account back exactly where it was. A sale
+     * does not — its replacement would issue at today's weighted average rather
+     * than the one it originally issued at, leaving a residue in COGS. See
+     * {@see \App\Services\Accounting\PostingEngine::revise()}.
+     */
+    public static function notRevisable(TransactionType $type): self
+    {
+        return new self(
+            message: sprintf(
+                'A %s cannot be corrected in place. Reverse it and enter the right document, or — where '.
+                'part of it is going back — raise a return against it.',
+                strtolower($type->label()),
+            ),
+            status: 422,
+            errorCode: 'TRANSACTION_NOT_REVISABLE',
+            details: ['type' => $type->value],
+        );
+    }
 }

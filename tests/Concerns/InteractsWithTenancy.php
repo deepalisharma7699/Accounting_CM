@@ -3,6 +3,7 @@
 namespace Tests\Concerns;
 
 use App\Models\Role;
+use App\Models\ItemCategory;
 use App\Models\Tenant;
 use App\Models\User;
 use App\Support\Tenancy\TenantContext;
@@ -70,5 +71,30 @@ trait InteractsWithTenancy
         $user = User::factory()->forTenant($tenant)->withRole($role)->create();
 
         return [$tenant, $user];
+    }
+
+    /**
+     * The id of a seeded category, by the code the old `ItemType` enum used.
+     *
+     * Every workshop gets the four through {@see CatalogueProvisioner}, which
+     * TenantFactory runs — so `categoryId('motor')` is the direct translation of
+     * what `ItemType::Motor` used to be, and a test reads the same way it did.
+     *
+     * Resolved against the tenant in context where there is one, and against the
+     * test's own `$tenant` otherwise: an API test builds its payload *outside* a
+     * tenant context (the context is established by the request it is about to
+     * make), and a helper that only worked inside one would return nothing there
+     * and fail the request for a missing category.
+     */
+    protected function categoryId(string $code, ?Tenant $tenant = null): int
+    {
+        $tenantId = $tenant?->id
+            ?? $this->tenantContext()->current()
+            ?? (property_exists($this, 'tenant') ? $this->tenant?->id : null);
+
+        return (int) ItemCategory::withoutGlobalScopes()
+            ->where('tenant_id', $tenantId)
+            ->where('code', $code)
+            ->value('id');
     }
 }

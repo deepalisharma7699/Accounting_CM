@@ -2,7 +2,6 @@
 
 namespace App\Services\Onboarding;
 
-use App\Enums\ItemType;
 use App\Enums\OpeningRowKind;
 use App\Support\Money;
 use App\Support\Quantity;
@@ -28,8 +27,15 @@ final class OpeningRow
         public readonly ?string $name,
         /** The specification, for a stock row: "6204", "22 SWG", "5 HP / 3 ph / 1440". */
         public readonly ?string $variant,
-        /** The item type, needed only when the item is new — see {@see ItemType}. */
-        public readonly ?ItemType $itemType,
+        /**
+         * The category the row names, needed only when the item is new.
+         *
+         * The raw text from the file rather than a resolved record: the column
+         * used to hold one of four fixed words and now holds whatever the shop
+         * calls its categories, so what is valid is a question for the database
+         * and is asked in OpeningBalanceService.
+         */
+        public readonly ?string $categoryName,
         public readonly ?string $quantity,
         public readonly ?string $unitCost,
         public readonly ?string $amount,
@@ -49,7 +55,7 @@ final class OpeningRow
             kind: OpeningRowKind::tryFrom(strtolower(trim((string) ($data['kind'] ?? '')))) ?? OpeningRowKind::Balance,
             name: self::text($data['name'] ?? null),
             variant: self::text($data['variant'] ?? null),
-            itemType: ItemType::tryFrom(strtolower(str_replace([' ', '-'], '_', trim((string) ($data['type'] ?? ''))))),
+            categoryName: self::text($data['type'] ?? null),
             quantity: self::number($data['quantity'] ?? null),
             unitCost: self::number($data['unit_cost'] ?? null),
             amount: self::number($data['amount'] ?? null),
@@ -87,7 +93,7 @@ final class OpeningRow
             $this->kind->value,
             strtolower((string) $this->name),
             strtolower((string) $this->variant),
-            (string) $this->itemType?->value,
+            strtolower((string) $this->categoryName),
             (string) $this->quantity,
             (string) $this->unitCost,
             (string) $this->amount,

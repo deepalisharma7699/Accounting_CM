@@ -1,0 +1,178 @@
+@import 'tailwindcss';
+
+/*
+| Blade compiles to PHP before Tailwind sees any class names, so the compiled
+| views are a source as well as the templates themselves.
+*/
+@source '../../storage/framework/views/*.php';
+
+@import './shared.css';
+
+/* =========================================================================
+| Shopfront — resources/views/welcome.blade.php
+|
+| The public page, and the only screen a visitor sees before signing in. Dark
+| where the application is light, deliberately: it is a different thing, and
+| the switch in tone is what says you are looking at the workshop rather than
+| at its books.
+|
+| Only the animation machinery lives here — layout and colour stay as Tailwind
+| classes in the Blade. Everything is prefixed `lp-` so none of it can reach
+| the application's screens, and the whole block is switched off in one place
+| at the bottom for anyone who asked not to be moved.
+========================================================================= */
+
+/*
+| The parts arriving.
+|
+| Two nested elements per part rather than one, because the two motions have
+| nothing to say to each other: the outer flies the part in from off-screen
+| once, the inner drifts or turns for as long as the page is open. On a single
+| element the second animation would overwrite the first mid-flight and the
+| part would snap to its resting place.
+|
+| Direction, distance, spin and delay are per-part and come from the Blade as
+| custom properties, so adding a part is a row in an array rather than another
+| keyframe block.
+*/
+.lp-part {
+    position: absolute;
+    animation: lp-fly 1.15s cubic-bezier(0.16, 0.9, 0.24, 1) var(--lp-delay, 0s) both;
+}
+
+@keyframes lp-fly {
+    from {
+        opacity: 0;
+        transform: translate3d(var(--lp-fx, 0), var(--lp-fy, 0), 0) rotate(var(--lp-fr, 0deg)) scale(0.3);
+    }
+    60% {
+        opacity: 1;
+    }
+    to {
+        opacity: 1;
+        transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
+    }
+}
+
+.lp-part-inner {
+    display: block;
+    animation: lp-drift var(--lp-drift, 7s) ease-in-out var(--lp-delay, 0s) infinite;
+}
+
+@keyframes lp-drift {
+    0%, 100% { transform: translateY(0) rotate(0deg); }
+    50%      { transform: translateY(-11px) rotate(5deg); }
+}
+
+/* A cog turns rather than bobbing; same slot, different motion. */
+.lp-part-inner.lp-turn {
+    animation: lp-rotate var(--lp-spin, 22s) linear infinite;
+}
+
+.lp-part-inner.lp-turn-back {
+    animation: lp-rotate var(--lp-spin, 22s) linear infinite reverse;
+}
+
+@keyframes lp-rotate {
+    to { transform: rotate(360deg); }
+}
+
+/* The motor itself: assembled, and running once it lands. */
+.lp-core {
+    animation: lp-core-in 1s cubic-bezier(0.16, 0.9, 0.24, 1) 0.1s both;
+}
+
+@keyframes lp-core-in {
+    from { opacity: 0; transform: scale(0.72) rotate(-6deg); }
+    to   { opacity: 1; transform: none; }
+}
+
+/* transform-box, or the shaft would turn about the whole SVG's origin. */
+.lp-rotor {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: lp-rotate 3s linear infinite;
+}
+
+.lp-pulse {
+    animation: lp-pulse 2.6s ease-in-out infinite;
+}
+
+@keyframes lp-pulse {
+    0%, 100% { opacity: 0.35; transform: scale(1); }
+    50%      { opacity: 0.75; transform: scale(1.06); }
+}
+
+/*
+| Sections arriving as they are scrolled to.
+|
+| The offset is per-element — `--rx` and `--ry` — so a row of cards can come in
+| from four different edges rather than all sliding up together, which is the
+| same idea as the hero and keeps the page feeling assembled rather than typed.
+| Nothing here hides content from a visitor without JavaScript: the class is
+| added by an observer, and `.lp-in` is also what a no-JS fallback sets.
+*/
+[data-reveal] {
+    opacity: 0;
+    transform: translate3d(var(--rx, 0), var(--ry, 1.75rem), 0);
+    transition:
+        opacity 0.7s cubic-bezier(0.2, 0.8, 0.2, 1),
+        transform 0.7s cubic-bezier(0.2, 0.8, 0.2, 1);
+    transition-delay: var(--rd, 0s);
+}
+
+[data-reveal].lp-in {
+    opacity: 1;
+    transform: none;
+}
+
+/* The engineering-paper grid behind the hero, faded out at the edges. */
+.lp-grid::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image:
+        linear-gradient(to right, rgb(148 163 184 / 0.11) 1px, transparent 1px),
+        linear-gradient(to bottom, rgb(148 163 184 / 0.11) 1px, transparent 1px);
+    background-size: 54px 54px;
+    mask-image: radial-gradient(ellipse 75% 65% at 50% 35%, #000 35%, transparent 100%);
+}
+
+/* The trade band under the hero. Duplicated content, translated by half. */
+.lp-marquee {
+    display: flex;
+    width: max-content;
+    animation: lp-marquee 34s linear infinite;
+}
+
+@keyframes lp-marquee {
+    to { transform: translateX(-50%); }
+}
+
+.lp-modal-in {
+    animation: lp-modal-in 0.22s ease-out;
+}
+
+@keyframes lp-modal-in {
+    from { opacity: 0; transform: translateY(0.75rem) scale(0.97); }
+    to   { opacity: 1; transform: none; }
+}
+
+/* Somebody who asked not to be moved is not asked twice. */
+@media (prefers-reduced-motion: reduce) {
+    .lp-part,
+    .lp-part-inner,
+    .lp-core,
+    .lp-rotor,
+    .lp-pulse,
+    .lp-marquee,
+    .lp-modal-in {
+        animation: none !important;
+    }
+
+    [data-reveal] {
+        opacity: 1;
+        transform: none;
+        transition: none;
+    }
+}

@@ -1,7 +1,8 @@
 import auth from '../auth-client';
+import { badge, lifecycleTone, sourceBadge } from '../components/badge';
 import { can } from '../permissions';
 import {
-    $, $$, clearFormErrors, confirmAction, debounce, esc, formatDate,
+    $, $$, clearFormErrors, confirmAction, debounce, downloadCsv, esc, formatDate,
     formatMoney, hideModal, isZeroAmount, setSubmitting, showFormErrors,
     showModal, toast,
 } from '../ui';
@@ -259,36 +260,17 @@ function statusBadge(isActive) {
         : '<span class="badge bg-muted text-muted-foreground"><span class="size-1.5 rounded-full bg-muted-foreground"></span>Archived</span>';
 }
 
-const TXN_STATUS_BADGE = {
-    posted: 'bg-emerald-50 text-emerald-700',
-    draft: 'bg-amber-50 text-amber-600',
-    reversed: 'bg-rose-50 text-rose-600',
-};
-
-const TXN_STATUS_DOT = {
-    posted: 'bg-emerald-500',
-    draft: 'bg-amber-500',
-    reversed: 'bg-rose-500',
-};
-
+/**
+ * Both of these were local colour maps until M21's §38 sweep, and they had
+ * already drifted from the journal screen's copies: a reversed transaction was
+ * rose here and neutral there, against the same status on the same kind of row.
+ * There is one helper now — `components/badge` — and the judgement about which
+ * states are alarming lives with the enum that owns them.
+ */
 function txnStatusBadge(transaction) {
-    const tone = TXN_STATUS_BADGE[transaction.status] ?? 'bg-muted text-secondary-foreground';
-    const dot = TXN_STATUS_DOT[transaction.status] ?? 'bg-muted-foreground';
-
-    return `<span class="badge ${tone}"><span class="size-1.5 rounded-full ${dot}"></span>${esc(transaction.status_label)}</span>`;
+    return badge(transaction.status_label, lifecycleTone(transaction.status));
 }
 
-const SOURCE_BADGE = {
-    manual: 'bg-blue-50 text-blue-700',
-    import: 'bg-purple-50 text-purple-700',
-    ai: 'bg-purple-50 text-purple-700',
-};
-
-function sourceBadge(transaction) {
-    const tone = SOURCE_BADGE[transaction.source] ?? 'bg-muted text-secondary-foreground';
-
-    return `<span class="badge ${tone}">${esc(transaction.source_label)}</span>`;
-}
 
 /** A balance as "12,340.00 Dr", or an em-dash when the account is flat. */
 function balanceCell(account) {
@@ -492,7 +474,7 @@ function renderJournal() {
 
             <td class="table-cell w-28">${txnStatusBadge(transaction)}</td>
 
-            <td class="table-cell w-32">${sourceBadge(transaction)}</td>
+            <td class="table-cell w-32">${sourceBadge(transaction.source, transaction.source_label)}</td>
 
             <td class="table-cell w-14">
                 <div class="flex justify-end">${iconChevron}</div>
@@ -1010,27 +992,6 @@ function accountName(id) {
  | Export
  | ---------------------------------------------------------------------- */
 
-function csvCell(value) {
-    const text = String(value ?? '');
-
-    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-}
-
-function download(filename, rows) {
-    const csv = rows.map((row) => row.map(csvCell).join(',')).join('\r\n');
-    // The BOM is what makes Excel open a UTF-8 CSV as UTF-8 rather than as the
-    // system codepage, which is where rupee signs turn into mojibake.
-    const blob = new Blob([`﻿${csv}`], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-
-    link.href = url;
-    link.download = filename;
-    link.click();
-
-    URL.revokeObjectURL(url);
-}
-
 /**
  * Export what is on screen — the rows the current tab, search and filters have
  * narrowed to. Anything else would hand somebody a file that disagrees with the
@@ -1046,7 +1007,7 @@ function exportCurrentTab() {
             return;
         }
 
-        download(`journal-entries-${stamp}.csv`, [
+        downloadCsv(`journal-entries-${stamp}.csv`, [
             ['Journal ID', 'Date', 'Particulars', 'Type', 'Party', 'Debit', 'Credit', 'Status', 'Source'],
             ...state.transactions.map((transaction) => [
                 transaction.id,
@@ -1074,7 +1035,7 @@ function exportCurrentTab() {
 
     const withBalance = state.canLedger && !state.balancesFailed;
 
-    download(`${state.tab === 'coa' ? 'chart-of-accounts' : 'ledger-accounts'}-${stamp}.csv`, [
+    downloadCsv(`${state.tab === 'coa' ? 'chart-of-accounts' : 'ledger-accounts'}-${stamp}.csv`, [
         [
             'Code', 'Name', 'Type', 'Normal balance',
             ...(withBalance ? ['Balance', 'Side'] : []),
@@ -1723,7 +1684,7 @@ async function downloadStatement(account) {
     try {
         const payload = await auth.call(`/ledger/accounts/${account.id}?per_page=1000`);
 
-        download(`ledger-${account.code}-${new Date().toISOString().slice(0, 10)}.csv`, [
+        downloadCsv(`ledger-${account.code}-${new Date().toISOString().slice(0, 10)}.csv`, [
             ['Date', 'Transaction', 'Particulars', 'Debit', 'Credit', 'Running balance'],
             ...payload.data.map((entry) => [
                 entry.date,

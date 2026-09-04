@@ -6,7 +6,9 @@
     <title>Choudhary Motors · Motor rewinding & pump repairs, Charkhi Dadri</title>
     <meta name="description"
           content="Choudhary Motors, Charkhi Dadri — electric motor rewinding, submersible pump repairs, new motors, bearings and copper winding wire. Load-tested work with a written warranty.">
-    @vite(['resources/css/app.css', 'resources/js/app.js'])
+    {{-- The shopfront's own stylesheet, not the application's. The two share
+         only the tokens and the buttons in resources/css/shared.css. --}}
+    @vite(['resources/css/welcome.css', 'resources/js/app.js'])
 </head>
 
 @php
@@ -864,6 +866,11 @@
             </button>
         </form>
 
+        {{-- Gated on the config flag rather than commented out.
+             `TENANCY_ALLOW_PUBLIC_SIGNUP=false` in .env turns registration off
+             everywhere at once — the route, the link and the test that proves
+             the pair agree. Commenting the markup out instead hides the link
+             while leaving /register reachable to anybody who types it. --}}
         @if (config('tenancy.allow_public_signup', true))
             <p class="mt-5 text-center text-[0.8125rem] text-muted-foreground">
                 New here?

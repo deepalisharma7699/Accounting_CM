@@ -1,5 +1,13 @@
 # Ledger & Posting Engine
 
+> **The engine runs everywhere; the screen is switched off.** Nothing here is
+> dormant — the posting engine is under every enabled module, and `journal_entries`
+> is written on every sale, purchase, receipt, payroll run and adjustment. What
+> has no card is the **Ledger screen**: the trial balance over a chosen period,
+> its reconciliation banner, and one account's ledger with a running balance. No
+> enabled card shows a trial balance, which means nothing on screen currently
+> proves the books balance. See [hidden-modules.md](hidden-modules.md).
+
 The accounting core. Every number this product will ever report — an account
 balance, a party's outstanding, stock value, GST payable, the P&L — is a sum
 over one table, `journal_entries`, and the only thing that writes to it is the

@@ -2,6 +2,12 @@
 
 Reading the books at every zoom level — M12.
 
+> **Where these are read now.** M12's four reports no longer have a card of their
+> own: they are the last four tabs of the **Insights** module (M23), which is the
+> same act at a wider zoom. The endpoints below are unchanged and are what those
+> tabs still fetch — nothing was re-implemented. See
+> [insights-module.md](insights-module.md).
+
 **No report has numbers of its own.** Every figure is a sum over
 `journal_entries`, `stock_movements` or `transaction_lines`, computed at the
 moment it is asked for. There is no reporting table, no nightly rollup and no

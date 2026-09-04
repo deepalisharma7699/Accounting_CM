@@ -2,6 +2,7 @@
 
 namespace App\Services\Accounting\Posting\Templates;
 
+use App\Enums\BalanceSide;
 use App\Enums\StockMovementType;
 use App\Enums\SystemAccount;
 use App\Enums\TransactionType;
@@ -94,7 +95,11 @@ class PurchaseTemplate extends BillTemplate
             // ledger reads as "what came in and what it cost" rather than a
             // column of totals, and so each line pairs with the movement that
             // recomputed the average.
-            $posting[] = PostingLine::debit(
+            //
+            // Credited rather than debited on a purchase return, which is the
+            // whole of what M18 added here. See BillTemplate::sideFor().
+            $posting[] = PostingLine::on(
+                $this->sideFor(BalanceSide::Debit),
                 $this->accounts->system(SystemAccount::Inventory)->id,
                 $change->value->absolute(),
                 $line->description,
@@ -102,7 +107,8 @@ class PurchaseTemplate extends BillTemplate
         }
 
         if (! $expensed->isZero()) {
-            $posting[] = PostingLine::debit(
+            $posting[] = PostingLine::on(
+                $this->sideFor(BalanceSide::Debit),
                 $this->accounts->system(SystemAccount::Cogs)->id,
                 $expensed,
                 'Bought in, not stocked',

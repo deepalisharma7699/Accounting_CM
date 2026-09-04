@@ -7,7 +7,9 @@ use App\Providers\AuditServiceProvider;
 use App\Providers\AuthModuleServiceProvider;
 use App\Providers\InventoryServiceProvider;
 use App\Providers\OnboardingServiceProvider;
+use App\Providers\StaffServiceProvider;
 use App\Providers\TenancyServiceProvider;
+use App\Providers\WorkshopServiceProvider;
 
 return [
     AppServiceProvider::class,
@@ -27,6 +29,14 @@ return [
     // all three above: it resolves against the catalogue and the parties, and
     // posts through the engine.
     OnboardingServiceProvider::class,
+    // M19. The motor on the bench. After accounting and inventory, because
+    // billing a job hands a payload to the first and resolves parts against the
+    // second — though every binding is lazy, so the position is presentational.
+    WorkshopServiceProvider::class,
+    // M22. The people who work for the workshop. After accounting, because
+    // posting a payroll run and paying an advance both hand a payload to the
+    // engine — though every binding is lazy, so the position is presentational.
+    StaffServiceProvider::class,
     // M14. Cross-cutting like the audit trail, and last because its jobs
     // re-establish the tenant context and attribute changes through the
     // recorder — both of which are registered above.

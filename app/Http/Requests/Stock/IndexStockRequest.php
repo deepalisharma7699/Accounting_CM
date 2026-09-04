@@ -2,7 +2,6 @@
 
 namespace App\Http\Requests\Stock;
 
-use App\Enums\ItemType;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
@@ -29,7 +28,7 @@ class IndexStockRequest extends FormRequest
         return [
             'search' => ['nullable', 'string', 'max:120'],
             'item_id' => ['nullable', 'integer', 'min:1'],
-            'type' => ['nullable', Rule::enum(ItemType::class)],
+            'category_id' => ['nullable', 'integer', 'min:1'],
             // Archived variants keep their stock, so this defaults to active-only
             // rather than enforcing it.
             'is_active' => ['nullable', 'boolean'],
@@ -48,7 +47,7 @@ class IndexStockRequest extends FormRequest
         return [
             'search' => $this->input('search'),
             'item_id' => $this->filled('item_id') ? (int) $this->input('item_id') : null,
-            'type' => $this->input('type'),
+            'category_id' => $this->filled('category_id') ? (int) $this->input('category_id') : null,
             'is_active' => $this->has('is_active') ? $this->boolean('is_active') : true,
             'status' => $this->input('status'),
             'sort' => $this->input('sort'),

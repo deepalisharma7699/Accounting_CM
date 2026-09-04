@@ -2,12 +2,21 @@
 
 namespace App\Providers;
 
+use App\Repositories\Contracts\ItemAttributeRepositoryInterface;
+use App\Repositories\Contracts\ItemBrandRepositoryInterface;
+use App\Repositories\Contracts\ItemCategoryRepositoryInterface;
 use App\Repositories\Contracts\ItemRepositoryInterface;
 use App\Repositories\Contracts\ItemVariantRepositoryInterface;
 use App\Repositories\Contracts\StockMovementRepositoryInterface;
+use App\Repositories\Contracts\UnitRepositoryInterface;
+use App\Repositories\Eloquent\EloquentItemAttributeRepository;
+use App\Repositories\Eloquent\EloquentItemBrandRepository;
+use App\Repositories\Eloquent\EloquentItemCategoryRepository;
 use App\Repositories\Eloquent\EloquentItemRepository;
 use App\Repositories\Eloquent\EloquentItemVariantRepository;
 use App\Repositories\Eloquent\EloquentStockMovementRepository;
+use App\Repositories\Eloquent\EloquentUnitRepository;
+use App\Support\Units\UnitRegistry;
 use Illuminate\Support\ServiceProvider;
 
 /**
@@ -33,6 +42,14 @@ class InventoryServiceProvider extends ServiceProvider
         ItemRepositoryInterface::class => EloquentItemRepository::class,
         ItemVariantRepositoryInterface::class => EloquentItemVariantRepository::class,
         StockMovementRepositoryInterface::class => EloquentStockMovementRepository::class,
+
+        // The catalogue's vocabulary: what kinds of thing the shop deals in,
+        // what each kind is asked to record, and how any of it is counted.
+        // These replaced the ItemType and UnitOfMeasure enums.
+        ItemCategoryRepositoryInterface::class => EloquentItemCategoryRepository::class,
+        ItemAttributeRepositoryInterface::class => EloquentItemAttributeRepository::class,
+        ItemBrandRepositoryInterface::class => EloquentItemBrandRepository::class,
+        UnitRepositoryInterface::class => EloquentUnitRepository::class,
     ];
 
     public function register(): void
@@ -40,5 +57,10 @@ class InventoryServiceProvider extends ServiceProvider
         foreach (self::REPOSITORIES as $contract => $implementation) {
             $this->app->singleton($contract, $implementation);
         }
+
+        // A singleton because it *is* a cache: it holds the workshop's units for
+        // the life of the request so `$item->base_uom` — read on every row of
+        // every listing and every bill line — is not a query. See UnitRegistry.
+        $this->app->singleton(UnitRegistry::class);
     }
 }

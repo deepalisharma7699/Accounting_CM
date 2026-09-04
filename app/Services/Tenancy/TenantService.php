@@ -13,6 +13,7 @@ use App\Repositories\Contracts\RoleRepositoryInterface;
 use App\Repositories\Contracts\TenantRepositoryInterface;
 use App\Repositories\Contracts\UserRepositoryInterface;
 use App\Services\Accounting\ChartOfAccountProvisioner;
+use App\Services\Inventory\CatalogueProvisioner;
 use App\Services\Auth\TokenService;
 use App\Support\Tenancy\TenantContext;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
@@ -37,6 +38,7 @@ class TenantService
         private readonly TokenService $tokens,
         private readonly TenantContext $context,
         private readonly ChartOfAccountProvisioner $chartOfAccounts,
+        private readonly CatalogueProvisioner $catalogue,
     ) {}
 
     /* ---------------------------------------------------------------------
@@ -146,7 +148,7 @@ class TenantService
      * Platform administration of any workshop. Accepts `status`, which is why
      * a workshop owner must never reach it — see {@see updateOwnWorkspace()}.
      *
-     * @param  array{name?: string, gstin?: string|null, address?: string|null, state_code?: string|null, status?: string|null, financial_year_start_month?: int, timezone?: string, books_start_date?: string|null}  $data
+     * @param  array{name?: string, gstin?: string|null, address?: string|null, state_code?: string|null, status?: string|null, financial_year_start_month?: int, timezone?: string, books_start_date?: string|null, payment_due_days?: int|null, allow_negative_stock?: bool, round_off_invoices?: bool}  $data
      */
     public function update(int $id, array $data): Tenant
     {
@@ -161,7 +163,13 @@ class TenantService
             $attributes['name'] = trim($data['name']);
         }
 
-        foreach (['address', 'state_code', 'financial_year_start_month', 'timezone', 'books_start_date'] as $field) {
+        foreach ([
+            'address', 'state_code', 'financial_year_start_month', 'timezone', 'books_start_date',
+            // M16 and M17. Neither changes a posted figure; both change what the
+            // application refuses or reports, which is why both are on
+            // Tenant::auditAttributes().
+            'payment_due_days', 'allow_negative_stock', 'round_off_invoices',
+        ] as $field) {
             if (array_key_exists($field, $data)) {
                 $attributes[$field] = $data[$field];
             }
@@ -320,6 +328,11 @@ class TenantService
         // caller's transaction, so a workshop can never exist without a chart
         // of accounts — the posting engine has no fallback if one is missing.
         $this->chartOfAccounts->seedFor($tenant);
+
+        // And its catalogue vocabulary, for the same reason and in the same
+        // breath: a workshop with no units and no categories cannot record a
+        // product at all, and the create form would open on an empty dropdown.
+        $this->catalogue->seedFor($tenant);
 
         return $tenant;
     }

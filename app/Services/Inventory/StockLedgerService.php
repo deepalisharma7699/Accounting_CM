@@ -3,13 +3,16 @@
 namespace App\Services\Inventory;
 
 use App\Enums\StockMovementType;
+use App\Exceptions\Accounting\InsufficientStockException;
 use App\Exceptions\Accounting\InvalidStockMovementException;
 use App\Models\ItemVariant;
 use App\Repositories\Contracts\ItemVariantRepositoryInterface;
 use App\Repositories\Contracts\StockMovementRepositoryInterface;
+use App\Repositories\Contracts\TenantRepositoryInterface;
 use App\Services\Accounting\Posting\StockChange;
 use App\Support\Money;
 use App\Support\Quantity;
+use App\Support\Tenancy\TenantContext;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
@@ -42,30 +45,45 @@ use Illuminate\Support\Facades\DB;
  * means an issue of *everything* takes exactly the whole value, so a variant
  * that sells out leaves the Inventory account at exactly zero.
  *
- * ## Negative stock is warned about, not blocked
+ * ## Negative stock is refused by default, and the workshop may allow it
  *
- * The roadmap asks for a decision. It is: **allow it, surface it, and never
- * hide it.**
+ * M8 decided the opposite — allow it, surface it, never hide it — on the
+ * grounds that a fitter records Tuesday's sale before Friday's supplier invoice
+ * arrives, and blocking Tuesday's sale does not produce the bearing; it produces
+ * a workshop that stops recording sales.
  *
- * The alternative sounds safer and is not. A fitter records the sale of a
- * bearing on Tuesday and the supplier's invoice reaches the office on Friday;
- * blocking Tuesday's sale does not produce the bearing, it produces a workshop
- * that stops recording sales — and the ledger, which is the thing this product
- * exists to keep right, ends up missing the revenue as well as the stock. It is
- * the same judgement M5 made about an overpayment and M7 made about a duplicate
- * specification: the awkward fact is real, so record it and put it in front of
- * somebody.
+ * That is still true of the workshop it describes. It is not true of the one the
+ * brief describes, which wants to be told *"Only 5 PCS available in stock."*
+ * before it promises a customer a sixth — because a counter that will cheerfully
+ * sell what is not there is a counter whose stock figures nobody trusts.
  *
- * What negative stock must never do is silently invent a cost. An issue out of
- * an empty position is valued at the last rate the workshop actually paid — see
- * {@see issueCostFor()} — and the position reports {@see StockPosition::isNegative()}
- * so the stock screen can show it as the data problem it is.
+ * Both workshops are real, so the answer is a setting rather than a new
+ * absolute: `tenants.allow_negative_stock`, off by default, and the refusal
+ * message says outright that it exists. See {@see assertCanIssue()} and M17's
+ * decision D6.
+ *
+ * Two things the refusal deliberately does *not* cover. A **stock adjustment**
+ * is exempt: it is the workshop asserting what is physically on the shelf, which
+ * is the authority the books answer to and the only tool for repairing a
+ * position that has already gone negative — refusing it would leave a workshop
+ * stuck with a wrong figure and no way to correct it. And a **reversal** is
+ * exempt for the same reason it may touch an archived variant: a known error
+ * must never become permanent because the shelf has moved since.
+ *
+ * Where negative stock does occur — under the permissive setting, or through an
+ * adjustment — it must never silently invent a cost. An issue out of an empty
+ * position is valued at the last rate the workshop actually paid (see
+ * {@see issueCostFor()}) and the position reports
+ * {@see StockPosition::isNegative()} so the stock screen shows it as the data
+ * problem it is.
  */
 class StockLedgerService
 {
     public function __construct(
         private readonly StockMovementRepositoryInterface $movements,
         private readonly ItemVariantRepositoryInterface $variants,
+        private readonly TenantRepositoryInterface $tenants,
+        private readonly TenantContext $context,
     ) {}
 
     /* ---------------------------------------------------------------------
@@ -233,6 +251,13 @@ class StockLedgerService
 
         $this->lockIfWriting([(int) $variant->id]);
 
+        // Note what is *not* checked here: whether the shelf holds enough. That
+        // refusal belongs to the posting, not to building the movement — a draft
+        // and a preview both compose issues out of stock nobody has bought yet,
+        // and refusing them would mean an unfinished bill could not be parked
+        // until the supplier's invoice arrived. See
+        // {@see \App\Services\Accounting\PostingEngine::assertStockAvailable()},
+        // which runs once per variant with the lock above already held.
         return StockChange::issuing($variant, $quantity, $this->issueCostFor($variant, $quantity), $type, $memo);
     }
 
@@ -302,7 +327,7 @@ class StockLedgerService
         // Capability first, then the workshop's choice — the pairing M7 put on
         // Item::tracksStock() precisely so nothing has to remember both halves.
         if (! $item->tracksStock()) {
-            throw InvalidStockMovementException::notStocked($this->describe($variant), $item->type->label());
+            throw InvalidStockMovementException::notStocked($this->describe($variant), $item->categoryLabel());
         }
 
         if ($quantity->isZero()) {
@@ -321,8 +346,67 @@ class StockLedgerService
     }
 
     /**
-     * Whether taking this much out would leave the position below zero — the
-     * warning a bill shows, never a refusal.
+     * Refuse an issue that would take a variant below zero — M17, decision D6.
+     *
+     * The brief's own words, in the brief's own units: *"Only 5 PCS available in
+     * stock."* Somebody at a counter needs to know what they can promise, and
+     * "insufficient stock" tells them nothing they can act on.
+     *
+     * Called by {@see \App\Services\Accounting\PostingEngine::assertStockAvailable()}
+     * and nowhere else — because *posting* is the moment the rule applies. A
+     * draft and a preview both compose issues out of stock the workshop has not
+     * bought yet, quite legitimately: parking an unfinished bill until the
+     * supplier's invoice arrives is exactly what a draft is for.
+     *
+     * Silent where the workshop has said it bills ahead of its paperwork. That is
+     * the escape hatch M8's original reasoning earned, and the refusal message
+     * names it — a rule with a way through that nobody can find is a rule people
+     * work around by not recording sales.
+     *
+     * @throws InsufficientStockException
+     */
+    public function assertCanIssue(ItemVariant $variant, Quantity $quantity): void
+    {
+        if ($this->allowsNegativeStock() || ! $this->wouldGoNegative($variant, $quantity)) {
+            return;
+        }
+
+        $available = $this->positionFor($variant)->quantity;
+
+        throw InsufficientStockException::forVariant(
+            $this->describe($variant),
+            // Trimmed, so a workshop that deals in whole bearings is told "5"
+            // rather than "5.000" — three decimal places on a countable thing
+            // reads as a system talking to itself.
+            $available->trimmed(),
+            $variant->item?->base_uom->symbol() ?? '',
+            $quantity->absolute()->trimmed(),
+        );
+    }
+
+    /**
+     * Whether this workshop has chosen to permit issuing what it does not have.
+     *
+     * False where the tenant cannot be resolved at all, which is the safe answer:
+     * an unknown setting should not be read as permission.
+     */
+    public function allowsNegativeStock(): bool
+    {
+        $tenantId = $this->context->current();
+
+        if ($tenantId === null) {
+            return false;
+        }
+
+        return (bool) $this->tenants->findById($tenantId)?->allow_negative_stock;
+    }
+
+    /**
+     * Whether taking this much out would leave the position below zero.
+     *
+     * The question behind both the refusal above and the warning a posted bill
+     * still carries — because under the permissive setting the bill posts, and
+     * somebody has to be told.
      */
     public function wouldGoNegative(ItemVariant $variant, Quantity $quantity): bool
     {

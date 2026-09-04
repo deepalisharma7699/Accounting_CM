@@ -1,5 +1,6 @@
 import auth from './auth-client';
 import { applyPermissionGates, setGrants, setWorkspace } from './permissions';
+import { initShell } from './shell';
 import { $, $$, initModals, toast } from './ui';
 
 /* -------------------------------------------------------------------------
@@ -10,7 +11,7 @@ function initial(name) {
     return (name || '?').trim().charAt(0).toUpperCase();
 }
 
-/** Paint the signed-in user into the sidebar, topbar and greeting. */
+/** Paint the signed-in user into the topbar and the greeting. */
 function renderUser(user) {
     $$('[data-user-initial]').forEach((el) => {
         el.textContent = initial(user.name);
@@ -52,18 +53,39 @@ function renderWorkspace(user) {
     });
 }
 
+/**
+ * The topbar's account menu, and the search shortcut.
+ *
+ * This is all that is left of `initChrome()` now the sidebar has gone (§1.2):
+ * there is no drawer to slide, no scrim and no collapse. Identity and sign-out
+ * moved into this menu, which is also where somebody checks which workshop they
+ * are signed in to before signing out of it.
+ */
 function initChrome() {
-    const sidebar = $('[data-sidebar]');
-    const scrim = $('[data-sidebar-scrim]');
+    const menu = $('[data-user-menu]');
+
+    if (!menu) {
+        initLogout();
+
+        return;
+    }
+
+    const toggle = $('[data-user-menu-toggle]', menu);
+    const panel = $('[data-user-menu-panel]', menu);
 
     const setOpen = (open) => {
-        sidebar?.classList.toggle('max-lg:-translate-x-full', !open);
-        scrim?.classList.toggle('hidden', !open);
+        panel.classList.toggle('hidden', !open);
+        toggle.setAttribute('aria-expanded', String(open));
     };
 
-    $('[data-sidebar-open]')?.addEventListener('click', () => setOpen(true));
-    $('[data-sidebar-collapse]')?.addEventListener('click', () => setOpen(false));
-    scrim?.addEventListener('click', () => setOpen(false));
+    toggle.addEventListener('click', (event) => {
+        event.stopPropagation();
+        setOpen(panel.classList.contains('hidden'));
+    });
+
+    // Anywhere else closes it — including inside the panel, where every control
+    // either signs out or is a label.
+    document.addEventListener('click', () => setOpen(false));
 
     document.addEventListener('keydown', (event) => {
         if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
@@ -71,6 +93,9 @@ function initChrome() {
             $('[data-search]')?.focus();
         }
 
+        // The menu is the innermost thing on screen while it is open, so a press
+        // closes it and goes no further. The shell's own Escape handling checks
+        // for the same panel and stands down while it is up.
         if (event.key === 'Escape') setOpen(false);
     });
 
@@ -78,11 +103,11 @@ function initChrome() {
 }
 
 /**
- * Sign-out control in the sidebar footer.
+ * Sign-out control in the topbar's account menu.
  *
  * Delegated from the document rather than bound to the button, so a click that
  * lands before the session has finished hydrating still works, and so the
- * handler survives any future re-render of the sidebar.
+ * handler survives any future re-render of the chrome.
  */
 function initLogout() {
     document.addEventListener('click', async (event) => {
@@ -199,8 +224,9 @@ function initRegister(form) {
         busyLabel: 'Creating…',
         // Straight to the workspace settings, which is where a new owner has
         // something left to do: confirm the GSTIN and the financial year before
-        // anything is posted.
-        redirectTo: '/workspace?welcome=1',
+        // anything is posted. The module opens inside the shell, so this is the
+        // dashboard with that fragment rather than a page of its own.
+        redirectTo: '/dashboard#workspace?welcome=1',
         submit: () => auth.register({
             workshop_name: $('#workshop_name', form).value.trim(),
             gstin: $('#gstin', form).value.trim().toUpperCase() || null,
@@ -216,26 +242,23 @@ function initRegister(form) {
  | Authenticated pages
  | ---------------------------------------------------------------------- */
 
-/** Page modules are loaded lazily so the dashboard never ships the CRUD code. */
-const PAGES = {
-    accounts: () => import('./pages/accounts'),
-    audit: () => import('./pages/audit'),
-    bills: () => import('./pages/bills'),
-    // Two screens over one `parties` table — both are thin wrappers around
-    // ./pages/counterparty, which is where the shared behaviour lives.
-    customers: () => import('./pages/customers'),
-    vendors: () => import('./pages/vendors'),
-    items: () => import('./pages/items'),
-    journal: () => import('./pages/journal'),
-    ledger: () => import('./pages/ledger'),
-    opening: () => import('./pages/opening'),
-    reports: () => import('./pages/reports'),
-    stock: () => import('./pages/stock'),
-    tenants: () => import('./pages/tenants'),
-    uploads: () => import('./pages/uploads'),
-    users: () => import('./pages/users'),
-    roles: () => import('./pages/roles'),
-    workspace: () => import('./pages/workspace'),
+/*
+| The one page shell that still has code of its own.
+|
+| Every module used to have one. They are cards on the dashboard now, opened in
+| the mounted shell — so the lazy-import registry that used to live here moved to
+| shell.js, which is what consumes it.
+|
+| `dashboard` is absent, and that is the point: home is the module grid and
+| nothing else, so it is rendered entirely by Blade and hydrates nothing. The
+| module that used to paint its figures went with the sections it filled.
+|
+| `bill-counter` is the counter at /bills/new, still a page: a modal cannot host
+| a search-first item picker, a running total, a keyboard flow and a confirmation
+| step without becoming a scroll trap.
+*/
+const SHELLS = {
+    'bill-counter': () => import('./pages/bill-counter'),
 };
 
 async function initAuthenticatedPage() {
@@ -261,7 +284,12 @@ async function initAuthenticatedPage() {
     initModals();
 
     const page = document.body.dataset.page;
-    const load = PAGES[page];
+
+    // The level-0/level-1 swap. Only the dashboard carries the two views it
+    // moves between; the counter is a page and has neither.
+    if (page === 'dashboard') initShell();
+
+    const load = SHELLS[page];
 
     if (!load) return;
 

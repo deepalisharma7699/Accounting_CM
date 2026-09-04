@@ -5,6 +5,7 @@ namespace Database\Factories;
 use App\Enums\TenantStatus;
 use App\Models\Tenant;
 use App\Services\Accounting\ChartOfAccountProvisioner;
+use App\Services\Inventory\CatalogueProvisioner;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Str;
 
@@ -14,19 +15,26 @@ use Illuminate\Support\Str;
 class TenantFactory extends Factory
 {
     /**
-     * A workshop is not valid without its chart of accounts — TenantService
-     * seeds one inside the same transaction that creates the tenant — so the
-     * factory produces one too. A test that built a tenant with no books would
-     * be testing a state production can never reach.
+     * A workshop is not valid without its chart of accounts *or* its catalogue
+     * vocabulary — TenantService seeds both inside the same transaction that
+     * creates the tenant — so the factory produces both too. A test that built a
+     * tenant with no books, or with no units and no categories, would be testing
+     * a state production can never reach.
      *
-     * Note for anyone force-deleting a factory tenant: chart_of_accounts.
-     * tenant_id is restrictOnDelete, so its accounts have to go first.
+     * The catalogue matters as much as the chart now that the item types and
+     * units are rows: without it there is no category to file a product under,
+     * and the importer would refuse every line of a valid file.
+     *
+     * Note for anyone force-deleting a factory tenant: chart_of_accounts,
+     * units and item_categories are all restrictOnDelete, so they have to go
+     * first.
      */
     public function configure(): static
     {
-        return $this->afterCreating(
-            fn (Tenant $tenant) => app(ChartOfAccountProvisioner::class)->seedFor($tenant)
-        );
+        return $this->afterCreating(function (Tenant $tenant): void {
+            app(ChartOfAccountProvisioner::class)->seedFor($tenant);
+            app(CatalogueProvisioner::class)->seedFor($tenant);
+        });
     }
 
     /**

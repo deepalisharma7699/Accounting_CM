@@ -288,6 +288,206 @@ class PartyApiTest extends TestCase
             ->assertJsonPath('error.code', 'VALIDATION_FAILED');
     }
 
+    /* ---------------------------------------------------------------------
+     | A name that survives leaving the browser
+     |
+     | The UI escapes this correctly, so markup here is not an injection. It is a
+     | name that reads as `<script>alert(1)</script>` on every statement and
+     | export the workshop sends out, in renderers with none of HTML's rules.
+     |-------------------------------------------------------------------- */
+
+    #[Test]
+    public function a_name_carrying_markup_is_refused(): void
+    {
+        $this->withHeaders($this->authHeader($this->owner))
+            ->postJson('/api/v1/parties', [
+                'name' => 'QA Vendor <script>alert(1)</script> & Co.',
+                'roles' => ['vendor'],
+            ])
+            ->assertStatus(422)
+            ->assertJsonPath('error.code', 'VALIDATION_FAILED');
+
+        $this->assertDatabaseCount('parties', 0);
+    }
+
+    #[Test]
+    public function a_name_carrying_a_control_character_is_refused(): void
+    {
+        $this->withHeaders($this->authHeader($this->owner))
+            ->postJson('/api/v1/parties', [
+                'name' => 'Acme'.chr(0).'Traders',
+                'roles' => ['vendor'],
+            ])
+            ->assertStatus(422)
+            ->assertJsonPath('error.code', 'VALIDATION_FAILED');
+
+        $this->assertDatabaseCount('parties', 0);
+    }
+
+    #[Test]
+    public function punctuation_and_other_languages_are_still_allowed(): void
+    {
+        $this->withHeaders($this->authHeader($this->owner))
+            ->postJson('/api/v1/parties', [
+                // Curly quotes, an ampersand, an em dash and Devanagari: untidy on
+                // a printed statement, but all of it is somebody's actual name.
+                'name' => 'Sharma “Special” & Sons — शर्मा',
+                'roles' => ['vendor'],
+            ])
+            ->assertCreated();
+    }
+
+    #[Test]
+    public function untidy_whitespace_in_a_name_is_folded_rather_than_refused(): void
+    {
+        // A name pasted out of a spreadsheet, carrying a tab and a line break.
+        $this->withHeaders($this->authHeader($this->owner))
+            ->postJson('/api/v1/parties', [
+                'name' => '  Bharat'.chr(9).'Electric'.chr(10).'  Works  ',
+                'roles' => ['vendor'],
+            ])
+            ->assertCreated()
+            ->assertJsonPath('data.name', 'Bharat Electric Works');
+    }
+
+    #[Test]
+    public function the_same_name_rule_applies_on_an_update(): void
+    {
+        $party = $this->party(['name' => 'Straightforward Traders', 'roles' => ['vendor']]);
+
+        $this->withHeaders($this->authHeader($this->owner))
+            ->patchJson("/api/v1/parties/{$party->id}", ['name' => 'Renamed <b>Bold</b>'])
+            ->assertStatus(422)
+            ->assertJsonPath('error.code', 'VALIDATION_FAILED');
+
+        $this->assertSame('Straightforward Traders', $party->fresh()->name);
+    }
+
+    /* ---------------------------------------------------------------------
+     | One vendor, entered once
+     |
+     | A shared GSTIN alone stays a warning — branches of one business file one
+     | GSTIN, and refusing that would refuse a real supplier. A shared GSTIN *and*
+     | a shared phone number is not two branches: it is one desk, and the second
+     | record splits that supplier's balance in half with no way back, because
+     | `transactions.party_id` is restrictOnDelete once either has been billed.
+     |-------------------------------------------------------------------- */
+
+    /**
+     * @param  array<string, mixed>  $overrides
+     * @return array<string, mixed>
+     */
+    private function vendorPayload(array $overrides = []): array
+    {
+        return array_merge([
+            'name' => 'QA Vendor Alpha',
+            'roles' => ['vendor'],
+            'phone' => '9876500001',
+            'gstin' => '27AAAAA1111A1Z5',
+        ], $overrides);
+    }
+
+    #[Test]
+    public function a_second_vendor_on_one_phone_and_gstin_is_refused(): void
+    {
+        $this->withHeaders($this->authHeader($this->owner))
+            ->postJson('/api/v1/parties', $this->vendorPayload())
+            ->assertCreated();
+
+        $this->withHeaders($this->authHeader($this->owner))
+            ->postJson('/api/v1/parties', $this->vendorPayload(['name' => 'QA Vendor Alpha Sons']))
+            ->assertStatus(409)
+            ->assertJsonPath('error.code', 'PARTY_DUPLICATE_CONTACT')
+            ->assertJsonPath('error.details.existing.name', 'QA Vendor Alpha');
+
+        // And nothing was written, so the picker still offers one supplier.
+        $this->assertSame(1, $this->actingForTenant(
+            $this->tenant,
+            fn () => Party::query()->where('gstin', '27AAAAA1111A1Z5')->count()
+        ));
+    }
+
+    /**
+     * The way through, and the reason the refusal is not simply "no". A second
+     * branch reached on the same switchboard is a real thing — a second branch at
+     * the same address is not, which is why the address is what lifts it.
+     */
+    #[Test]
+    public function a_genuine_second_branch_is_allowed_once_it_says_where_it_is(): void
+    {
+        $this->withHeaders($this->authHeader($this->owner))
+            ->postJson('/api/v1/parties', $this->vendorPayload())
+            ->assertCreated();
+
+        $this->withHeaders($this->authHeader($this->owner))
+            ->postJson('/api/v1/parties', $this->vendorPayload([
+                'name' => 'QA Vendor Alpha — Pune',
+                'address' => 'Unit 4, MIDC Bhosari, Pune',
+            ]))
+            ->assertCreated()
+            // The GSTIN warning still fires, because it is still worth saying.
+            ->assertJsonPath('meta.warnings.0.code', 'PARTY_GSTIN_DUPLICATE');
+    }
+
+    #[Test]
+    public function a_shared_gstin_on_its_own_remains_a_warning(): void
+    {
+        $this->withHeaders($this->authHeader($this->owner))
+            ->postJson('/api/v1/parties', $this->vendorPayload())
+            ->assertCreated();
+
+        // Same GSTIN, different phone — a branch with its own line, which is
+        // ordinary and must not be refused.
+        $this->withHeaders($this->authHeader($this->owner))
+            ->postJson('/api/v1/parties', $this->vendorPayload([
+                'name' => 'QA Vendor Alpha Nashik',
+                'phone' => '9876500002',
+            ]))
+            ->assertCreated();
+    }
+
+    /**
+     * Scoped to vendors, and left alone for customers. A workshop's customer list
+     * legitimately holds several people on one household or fleet number, and
+     * hard-blocking that would refuse a real counter sale while somebody is
+     * standing there.
+     */
+    #[Test]
+    public function two_customers_may_share_a_phone_and_gstin(): void
+    {
+        $this->withHeaders($this->authHeader($this->owner))
+            ->postJson('/api/v1/parties', $this->vendorPayload(['roles' => ['customer']]))
+            ->assertCreated();
+
+        $this->withHeaders($this->authHeader($this->owner))
+            ->postJson('/api/v1/parties', $this->vendorPayload([
+                'name' => 'QA Customer Two',
+                'roles' => ['customer'],
+            ]))
+            ->assertCreated();
+    }
+
+    /**
+     * The same desk written four ways is the same desk. A comparison that took
+     * the spacing literally would let every one of them through, which is the
+     * duplicate the refusal exists to catch.
+     */
+    #[Test]
+    public function the_phone_match_ignores_spacing_and_a_country_code(): void
+    {
+        $this->withHeaders($this->authHeader($this->owner))
+            ->postJson('/api/v1/parties', $this->vendorPayload())
+            ->assertCreated();
+
+        $this->withHeaders($this->authHeader($this->owner))
+            ->postJson('/api/v1/parties', $this->vendorPayload([
+                'name' => 'QA Vendor Alpha Sons',
+                'phone' => '+91 98765 00001',
+            ]))
+            ->assertStatus(409)
+            ->assertJsonPath('error.code', 'PARTY_DUPLICATE_CONTACT');
+    }
+
     #[Test]
     public function a_duplicate_name_is_refused_with_an_explanation(): void
     {
@@ -531,6 +731,59 @@ class PartyApiTest extends TestCase
 
         $this->withHeaders($this->authHeader($outsider))
             ->getJson('/api/v1/parties')
+            ->assertForbidden();
+    }
+
+    /**
+     * The counter sees what a customer owes; it does not see the books.
+     *
+     * M21. Choosing the customer on a bill form is the last moment at which "they
+     * are ₹1,500 down already" can still change the decision, and the person
+     * making it is often exactly the person who holds PARTIES and TRANSACTIONS
+     * and no LEDGER. Requiring LEDGER for one number would mean the only user who
+     * can extend credit is the one who cannot see how much has been extended.
+     *
+     * So the *position* travels with the record, and the *ledger* does not. One
+     * figure per side is what a decision to sell on credit needs; every entry
+     * that moved it, with a running balance, is a different question asked by a
+     * different person — and the two routes below still refuse.
+     */
+    #[Test]
+    public function the_position_needs_no_ledger_grant_but_the_ledger_itself_does(): void
+    {
+        $party = $this->party();
+
+        $this->postSimpleJournal(
+            $this->tenant, SystemAccount::Receivables, SystemAccount::Sales, '1500.00', party: $party
+        );
+
+        // The grants a counter clerk holds: who exists, and the documents. No
+        // authority over the books.
+        $role = $this->roleWith([
+            ['READ', 'PARTIES'], ['WRITE', 'PARTIES'], ['READ', 'TRANSACTIONS'], ['WRITE', 'TRANSACTIONS'],
+        ], 'Counter Clerk');
+
+        $clerk = User::factory()->forTenant($this->tenant)->withRole($role)->create();
+
+        $this->withHeaders($this->authHeader($clerk))
+            ->getJson("/api/v1/parties/{$party->id}")
+            ->assertOk()
+            ->assertJsonPath('data.outstanding.receivable', '1500.00')
+            ->assertJsonPath('data.outstanding.payable', '0.00');
+
+        // And over a page of them, which is the same figure by the same query.
+        $this->withHeaders($this->authHeader($clerk))
+            ->getJson('/api/v1/parties?with_position=1')
+            ->assertOk()
+            ->assertJsonPath('data.0.outstanding.receivable', '1500.00');
+
+        // The books themselves stay shut.
+        $this->withHeaders($this->authHeader($clerk))
+            ->getJson("/api/v1/parties/{$party->id}/ledger")
+            ->assertForbidden();
+
+        $this->withHeaders($this->authHeader($clerk))
+            ->getJson("/api/v1/parties/{$party->id}/statement")
             ->assertForbidden();
     }
 

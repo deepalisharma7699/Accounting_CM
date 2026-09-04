@@ -2,8 +2,6 @@
 
 namespace Tests\Feature\Inventory;
 
-use App\Enums\ItemType;
-use App\Enums\UnitOfMeasure;
 use App\Exceptions\Accounting\InvalidItemAttributesException;
 use App\Exceptions\Accounting\ItemInUseException;
 use App\Exceptions\ConflictException;
@@ -74,40 +72,40 @@ class ItemTest extends TestCase
         $this->inWorkshop(function () {
             $motor = $this->items()->create([
                 'name' => '3-Phase Induction Motor',
-                'type' => ItemType::Motor->value,
+                'category_id' => $this->categoryId('motor'),
                 'hsn_sac' => '8501',
                 'gst_rate' => '18',
             ]);
 
             $bearing = $this->items()->create([
                 'name' => 'Ball Bearing',
-                'type' => ItemType::Part->value,
+                'category_id' => $this->categoryId('part'),
                 'hsn_sac' => '8482',
                 'gst_rate' => '18',
             ]);
 
             $copper = $this->items()->create([
                 'name' => 'Copper Winding Wire',
-                'type' => ItemType::BulkMaterial->value,
+                'category_id' => $this->categoryId('bulk_material'),
                 'hsn_sac' => '7408',
                 'gst_rate' => '18',
             ]);
 
             $labour = $this->items()->create([
                 'name' => 'Rewinding Labour',
-                'type' => ItemType::Service->value,
+                'category_id' => $this->categoryId('service'),
                 'hsn_sac' => '998719',
                 'gst_rate' => '18',
             ]);
 
             // Each is counted in the unit its trade actually uses, defaulted from
             // the type so nobody had to say so.
-            $this->assertSame(UnitOfMeasure::Piece, $motor->base_uom);
-            $this->assertSame(UnitOfMeasure::Piece, $bearing->base_uom);
-            $this->assertSame(UnitOfMeasure::Kilogram, $copper->base_uom);
-            $this->assertSame(UnitOfMeasure::Hour, $labour->base_uom);
+            $this->assertSame('piece', $motor->base_uom->value);
+            $this->assertSame('piece', $bearing->base_uom->value);
+            $this->assertSame('kg', $copper->base_uom->value);
+            $this->assertSame('hour', $labour->base_uom->value);
 
-            // And each is described by the attributes its type implies.
+            // And each is described by the fields its category asks for.
             $this->variants()->create($motor, ['attributes' => ['hp' => '5', 'phase' => '3', 'rpm' => '1440']]);
             $this->variants()->create($bearing, ['attributes' => ['size' => '6205']]);
             $this->variants()->create($copper, ['attributes' => ['gauge' => '22 SWG']]);
@@ -238,7 +236,9 @@ class ItemTest extends TestCase
             $this->assertSame($labour->name, $plain->displayLabel());
 
             $this->expectException(InvalidItemAttributesException::class);
-            $this->expectExceptionMessageMatches('/no attributes at all/i');
+            // The refusal names the category rather than a fixed kind, and says
+            // where the fields would be configured if it should have any.
+            $this->expectExceptionMessageMatches('/no fields configured/i');
 
             $this->variants()->create($labour, ['attributes' => ['hp' => '5']]);
         });
@@ -315,13 +315,13 @@ class ItemTest extends TestCase
             // inventing an asset that does not exist.
             $labour = $this->items()->create([
                 'name' => 'Site Visit',
-                'type' => ItemType::Service->value,
+                'category_id' => $this->categoryId('service'),
                 'is_stock' => true,
             ]);
 
             $this->assertFalse($labour->is_stock);
             $this->assertFalse($labour->tracksStock());
-            $this->assertFalse($labour->type->canHoldStock());
+            $this->assertFalse($labour->category->holds_stock);
 
             // And it stays false through an edit.
             $edited = $this->items()->update($labour->id, ['is_stock' => true]);
@@ -339,14 +339,14 @@ class ItemTest extends TestCase
         $this->inWorkshop(function () {
             $part = $this->items()->create([
                 'name' => 'Special Order Terminal Block',
-                'type' => ItemType::Part->value,
+                'category_id' => $this->categoryId('part'),
                 'is_stock' => false,
             ]);
 
             $this->assertFalse($part->is_stock);
             $this->assertFalse($part->tracksStock());
-            // But the type still could, which is the distinction M8 acts on.
-            $this->assertTrue($part->type->canHoldStock());
+            // But the category still could, which is the distinction M8 acts on.
+            $this->assertTrue($part->category->holds_stock);
         });
     }
 
@@ -359,10 +359,10 @@ class ItemTest extends TestCase
             $labour = Item::factory()->service()->create();
             $toOrder = Item::factory()->part()->create(['is_stock' => false, 'name' => 'To Order Part']);
 
-            $stocked = Item::query()->stocked()->pluck('type')->all();
+            $stocked = Item::query()->stocked()->pluck('name')->all();
 
             $this->assertCount(2, $stocked);
-            $this->assertNotContains(ItemType::Service, $stocked);
+            $this->assertNotContains('service', $stocked);
 
             // The variant scope M8 actually sweeps, which has to agree with the
             // item one: stock is counted per variant, never per family.
@@ -390,13 +390,17 @@ class ItemTest extends TestCase
             $item = Item::factory()->part()->create();
 
             $edited = $this->items()->update($item->id, [
-                'type' => ItemType::Service->value,
-                'base_uom' => UnitOfMeasure::Kilogram->value,
+                'category_id' => $this->categoryId('service'),
+                'base_uom' => 'kg',
                 'name' => 'Renamed Part',
             ]);
 
-            $this->assertSame(ItemType::Part, $edited->type, 'The type is not editable and must be ignored.');
-            $this->assertSame(UnitOfMeasure::Piece, $edited->base_uom);
+            $this->assertSame(
+                $this->categoryId('part'),
+                (int) $edited->category_id,
+                'The category is not editable and must be ignored.',
+            );
+            $this->assertSame('piece', $edited->base_uom->value);
             $this->assertSame('Renamed Part', $edited->name, 'The edit that was allowed still applied.');
         });
     }
@@ -409,14 +413,14 @@ class ItemTest extends TestCase
     public function two_items_cannot_share_a_name(): void
     {
         $this->inWorkshop(function () {
-            $this->items()->create(['name' => 'Copper Wire', 'type' => ItemType::BulkMaterial->value]);
+            $this->items()->create(['name' => 'Copper Wire', 'category_id' => $this->categoryId('bulk_material')]);
 
             $this->expectException(ConflictException::class);
             // Two rows called "Copper Wire" split one stock balance in half and
             // both halves look plausible.
             $this->expectExceptionMessageMatches('/split a single stock balance/i');
 
-            $this->items()->create(['name' => 'Copper Wire', 'type' => ItemType::BulkMaterial->value]);
+            $this->items()->create(['name' => 'Copper Wire', 'category_id' => $this->categoryId('bulk_material')]);
         });
     }
 
@@ -426,7 +430,7 @@ class ItemTest extends TestCase
         $this->inWorkshop(function () {
             $item = $this->items()->create([
                 'name' => 'Coded Motor',
-                'type' => ItemType::Motor->value,
+                'category_id' => $this->categoryId('motor'),
                 'code' => ' mot-3ph ',
             ]);
 
@@ -439,7 +443,7 @@ class ItemTest extends TestCase
 
             $this->assertSame('MOT-5HP-1440', $variant->sku);
 
-            $second = $this->items()->create(['name' => 'Second Motor', 'type' => ItemType::Motor->value]);
+            $second = $this->items()->create(['name' => 'Second Motor', 'category_id' => $this->categoryId('motor')]);
 
             $this->expectException(ConflictException::class);
             $this->expectExceptionMessageMatches('/identifies two things/i');
@@ -458,8 +462,8 @@ class ItemTest extends TestCase
             // A workshop that has never used codes should not have to invent one
             // to record its first item — and a unique index on a nullable column
             // must not make the second null a conflict.
-            $this->items()->create(['name' => 'Uncoded One', 'type' => ItemType::Part->value]);
-            $this->items()->create(['name' => 'Uncoded Two', 'type' => ItemType::Part->value]);
+            $this->items()->create(['name' => 'Uncoded One', 'category_id' => $this->categoryId('part')]);
+            $this->items()->create(['name' => 'Uncoded Two', 'category_id' => $this->categoryId('part')]);
 
             $this->assertSame(2, Item::whereNull('code')->count());
         });

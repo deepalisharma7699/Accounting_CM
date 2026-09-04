@@ -2,7 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
-use App\Enums\ItemType;
+use App\Models\ItemCategory;
 use App\Enums\OpeningRowKind;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Opening\OpeningBalanceRequest;
@@ -65,21 +65,36 @@ class OpeningBalanceController extends Controller
                 'side' => $kind->side()?->value,
             ], OpeningRowKind::cases()),
 
-            // Only the types that can hold stock. A service was never on a
+            // Only the categories that can hold stock. Labour was never on a
             // shelf, so offering it here would be offering a row that can only
             // be refused.
-            'item_types' => array_values(array_map(fn (ItemType $type) => [
-                'value' => $type->value,
-                'label' => $type->label(),
-                'unit' => $type->defaultUom()->value,
-                // What the `variant` column has to contain for a *new* item of
-                // this type, in the order the segments are read — the inverse of
-                // the label the app prints, which is what makes it explainable.
-                'variant_format' => implode(' / ', array_map(
-                    fn (string $key) => strtolower($type->attributeSchema()[$key]['label']),
-                    $type->requiredAttributes(),
-                )),
-            ], array_filter(ItemType::cases(), fn (ItemType $type) => $type->canHoldStock()))),
+            //
+            // Read from the Category Master rather than from a fixed list, so a
+            // shop that added "Water Pump" last week can import against it today.
+            'item_types' => ItemCategory::query()
+                ->active()
+                ->where('holds_stock', true)
+                ->with(['fields', 'parent.fields'])
+                ->ordered()
+                ->get()
+                ->map(fn (ItemCategory $category) => [
+                    // The code where there is one, so a file exported before the
+                    // Category Master existed still imports; the name otherwise,
+                    // because that is what the admin typed.
+                    'value' => $category->code ?? $category->name,
+                    'label' => $category->name,
+                    'unit' => $category->default_unit_code ?? 'piece',
+                    // What the `variant` column has to contain for a *new* item
+                    // of this category, in the order the segments are read — the
+                    // inverse of the label the app prints, which is what makes it
+                    // explainable.
+                    'variant_format' => implode(' / ', array_map(
+                        fn (string $key) => strtolower($category->attributeSchema()[$key]['label'] ?? $key),
+                        $category->requiredAttributeKeys(),
+                    )),
+                ])
+                ->values()
+                ->all(),
 
             'columns' => [
                 'kind', 'name', 'variant', 'type', 'quantity',

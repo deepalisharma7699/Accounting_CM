@@ -12,12 +12,14 @@ use App\Exceptions\ApiException;
 use App\Exceptions\Onboarding\OpeningBalanceException;
 use App\Models\ChartOfAccount;
 use App\Models\Item;
+use App\Models\ItemCategory;
 use App\Models\ItemVariant;
 use App\Models\OpeningImport;
 use App\Models\Party;
 use App\Models\Transaction;
 use App\Models\User;
 use App\Repositories\Contracts\ChartOfAccountRepositoryInterface;
+use App\Repositories\Contracts\ItemCategoryRepositoryInterface;
 use App\Repositories\Contracts\ItemRepositoryInterface;
 use App\Repositories\Contracts\ItemVariantRepositoryInterface;
 use App\Repositories\Contracts\OpeningImportRepositoryInterface;
@@ -103,6 +105,16 @@ class OpeningBalanceService
     /** @var Collection<int, Item>|null */
     private ?Collection $itemCache = null;
 
+    /**
+     * The workshop's categories, fetched once per import.
+     *
+     * A file of four hundred rows names the same handful of categories over and
+     * over, and each one has to be resolved from the text somebody typed.
+     *
+     * @var Collection<int, ItemCategory>|null
+     */
+    private ?Collection $categoryCache = null;
+
     /** @var Collection<int, Party>|null */
     private ?Collection $partyCache = null;
 
@@ -130,6 +142,7 @@ class OpeningBalanceService
         private readonly PartyService $parties,
         private readonly ItemRepositoryInterface $itemRepository,
         private readonly ItemVariantRepositoryInterface $variantRepository,
+        private readonly ItemCategoryRepositoryInterface $categoryRepository,
         private readonly PartyRepositoryInterface $partyRepository,
         private readonly ChartOfAccountRepositoryInterface $accounts,
         private readonly TransactionRepositoryInterface $transactions,
@@ -488,12 +501,12 @@ class OpeningBalanceService
 
         [$item, $variant, $creates, $confidence] = $match;
 
-        if (! $item->type->canHoldStock()) {
+        if (! ($item->category?->holds_stock ?? true)) {
             return PlannedRow::error($lineNo, $row, sprintf(
                 '"%s" is a %s, which cannot be held in stock — an hour of labour is produced at the moment it '.
                 'is sold, so there was never any of it on the shelf.',
                 $item->name,
-                strtolower($item->type->label()),
+                strtolower($item->categoryLabel()),
             ));
         }
 
@@ -568,12 +581,15 @@ class OpeningBalanceService
             // made both permanent precisely because changing them later would
             // reinterpret every figure already posted — "each" becoming
             // "kilogram" turns 40 pieces into 40 kilograms in every report.
-            if ($row->itemType === null) {
+            $category = $this->resolveCategory($row->categoryName);
+
+            if ($category === null) {
                 return sprintf(
-                    'Nothing in the catalogue matches "%s". To add it, the file has to say what kind of thing '.
-                    'it is (motor, part or bulk_material) — that fixes the unit its quantities are counted in, '.
-                    'and it can never be changed afterwards.',
+                    'Nothing in the catalogue matches "%s". To add it, the file has to name a category in its '.
+                    '"type" column%s — the category fixes the unit its quantities are counted in and what its '.
+                    'specification has to say, and neither can be changed afterwards.',
                     $name,
+                    $this->knownCategoryList(),
                 );
             }
 
@@ -883,13 +899,20 @@ class OpeningBalanceService
             return $this->newItems[$key];
         }
 
-        $type = $row->itemType;
+        $category = $this->resolveCategory($row->categoryName);
+
+        if ($category === null) {
+            // Unreachable: the planner refuses the row before it gets here. Kept
+            // as a refusal rather than an assumption, because a category picked
+            // by default would fix the unit of every quantity in the file.
+            throw OpeningBalanceException::planHasErrors(1);
+        }
 
         if (! $commit) {
             $item = new Item([
                 'name' => $name,
-                'type' => $type,
-                'base_uom' => $type->defaultUom(),
+                'category_id' => $category->id,
+                'base_uom' => $category->default_unit_code ?? 'piece',
                 'is_stock' => true,
                 'is_draft' => true,
                 'is_active' => true,
@@ -897,13 +920,14 @@ class OpeningBalanceService
 
             $item->id = --$this->placeholder;
             $item->setRelation('variants', new Collection);
+            $item->setRelation('category', $category);
 
             return $this->newItems[$key] = $item;
         }
 
         $item = $this->items->create([
             'name' => $name,
-            'type' => $type->value,
+            'category_id' => (int) $category->id,
             'is_stock' => true,
             'is_draft' => true,
         ]);
@@ -979,7 +1003,13 @@ class OpeningBalanceService
      */
     private function attributesFrom(Item $item, string $specification): string|array
     {
-        $required = $item->type->requiredAttributes();
+        $category = $item->category;
+
+        if ($category === null) {
+            return [];
+        }
+
+        $required = $category->requiredAttributeKeys();
 
         if ($required === []) {
             return [];
@@ -991,18 +1021,18 @@ class OpeningBalanceService
         ), static fn (string $segment) => $segment !== ''));
 
         if (count($segments) < count($required)) {
-            $schema = $item->type->attributeSchema();
+            $schema = $category->attributeSchema();
 
             return sprintf(
                 'A %s needs %s, written as "%s". "%s" gives %d of %d — a %s whose %s was never recorded cannot '.
                 'be identified by anybody afterwards, and that cannot be fixed later.',
-                strtolower($item->type->label()),
+                strtolower($category->name),
                 $this->listOf(array_map(fn (string $key) => strtolower($schema[$key]['label']), $required)),
                 implode(' / ', array_map(fn (string $key) => strtolower($schema[$key]['label']), $required)),
                 $specification,
                 count($segments),
                 count($required),
-                strtolower($item->type->label()),
+                strtolower($category->name),
                 strtolower($schema[$required[count($segments)] ?? $required[0]]['label']),
             );
         }
@@ -1015,11 +1045,64 @@ class OpeningBalanceService
             // would then print as "5 HP HP".
             $attributes[$key] = $this->stripSuffix(
                 $segments[$index],
-                $item->type->attributeSchema()[$key]['suffix'] ?? null,
+                $category->attributeSchema()[$key]['suffix'] ?? null,
             );
         }
 
         return $attributes;
+    }
+
+    /**
+     * The category a row's "type" column names.
+     *
+     * Matched on the code first and the name second, both case-insensitively,
+     * because a file exported by this product carries the code and a file typed
+     * by a person carries the word they see on screen. Both have to work: the
+     * commonest import is a spreadsheet somebody filled in by hand.
+     *
+     * Null where the column is empty or names nothing — which the planner turns
+     * into a refusal naming the categories that do exist, rather than picking one.
+     */
+    private function resolveCategory(?string $given): ?ItemCategory
+    {
+        $given = trim((string) $given);
+
+        if ($given === '') {
+            return null;
+        }
+
+        $this->categoryCache ??= $this->categoryRepository->all();
+
+        $needle = strtolower($given);
+        // The old file format wrote "bulk material" for what the seeded category
+        // codes call `bulk_material`, so a space is treated as an underscore.
+        $slug = str_replace([' ', '-'], '_', $needle);
+
+        return $this->categoryCache->first(
+            fn (ItemCategory $category) => strtolower((string) $category->code) === $slug
+                || strtolower($category->name) === $needle
+        );
+    }
+
+    /**
+     * The categories a file may name, for the refusal that says one is missing.
+     *
+     * Listed rather than described, because the set is the shop's own now: the
+     * message used to be able to say "motor, part or bulk_material" and cannot,
+     * since the whole point of the change is that nobody knows what they are
+     * called any more.
+     */
+    private function knownCategoryList(): string
+    {
+        $this->categoryCache ??= $this->categoryRepository->all();
+
+        $names = $this->categoryCache
+            ->filter(fn (ItemCategory $category) => $category->is_active && $category->holds_stock)
+            ->map(fn (ItemCategory $category) => $category->name)
+            ->values()
+            ->all();
+
+        return $names === [] ? '' : ' ('.implode(', ', $names).')';
     }
 
     private function stripSuffix(string $value, ?string $suffix): string
@@ -1142,6 +1225,11 @@ class OpeningBalanceService
         $this->itemCache = null;
         $this->partyCache = null;
         $this->accountCache = null;
+        // Cleared with the rest, and for the reason they are: this service is
+        // resolved once per process, so a cache left standing would answer the
+        // next workshop's import with the previous workshop's categories — whose
+        // ids belong to somebody else entirely.
+        $this->categoryCache = null;
         $this->alreadyDeclared = [];
     }
 

@@ -141,6 +141,61 @@ enum PermissionResource: string
     case Jobs = 'JOBS';
 
     /**
+     * The motor on the bench — M19's workshop jobs, their parts and their
+     * estimates.
+     *
+     * `WORKSHOP_JOBS` rather than `JOBS`, because JOBS above is already the
+     * background queue. The two are genuinely different resources — one is "did
+     * the upload finish being read", the other is "has the customer's pump been
+     * rewound" — and the workshop one takes the qualifier because it is the one a
+     * reader is least likely to guess wrong.
+     *
+     * READ, WRITE, UPDATE and DELETE, all four, and DATA_ENTRY holds the first
+     * three: booking a motor in and writing parts onto it *is* the day job of
+     * whoever is standing at the counter, and a clerk who had to fetch the owner
+     * to record what they had just fitted would record it on paper instead.
+     * DELETE stays with the owner, and it barely matters what it grants — a job
+     * that has been billed cannot be deleted by anybody, because the invoice has
+     * to keep the job that explains it.
+     *
+     * Note the boundary. Holding this grants the *job*, not the money: raising
+     * the invoice off one is capturing a business event, so it additionally needs
+     * WRITE:TRANSACTIONS. A jobs grant that quietly conferred the ability to post
+     * to the ledger would be a hole in this model rather than a convenience.
+     */
+    case WorkshopJobs = 'WORKSHOP_JOBS';
+
+    /**
+     * The people who work *for* the workshop — M22: the employee record, their
+     * designation, the attendance sheet, the payroll runs and the advances paid
+     * against a salary.
+     *
+     * Not USERS, and the two are worth keeping straight. USERS is who may sign
+     * in; STAFF is who is on the payroll. Most of a workshop's fitters and
+     * helpers have never touched the software and never will, and the owner's
+     * son who runs the counter has a login and is not on the salary sheet. One
+     * resource for both would mean that granting somebody the ability to add a
+     * login also let them read every wage in the building.
+     *
+     * Not PARTIES either, for a sharper reason: a party's position lives in
+     * Receivables or Payables, and an employee's does not. What is owed to staff
+     * is Salary Expense and Staff Advance, which are different accounts asked
+     * different questions.
+     *
+     * Only OWNER holds it. A DATA_ENTRY user has no grant here at all, and that
+     * is the one deliberate exclusion in this enum that is about privacy rather
+     * than about authority: what each person in a workshop earns is not
+     * something the clerk at the counter needs in order to do their job.
+     *
+     * Note the boundary, which is the one WORKSHOP_JOBS already draws. Holding
+     * this grants the *record*, not the money: posting a payroll run or paying an
+     * advance reaches the ledger, so both additionally require
+     * WRITE:TRANSACTIONS. A staff grant that quietly conferred the ability to
+     * move cash out of the till would be a hole in this model.
+     */
+    case Staff = 'STAFF';
+
+    /**
      * @return array<int, string>
      */
     public static function values(): array

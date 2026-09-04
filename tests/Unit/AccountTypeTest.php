@@ -140,20 +140,28 @@ class AccountTypeTest extends TestCase
     }
 
     #[Test]
-    public function the_catalogue_covers_the_fifteen_accounts_the_prd_specifies(): void
+    public function the_catalogue_covers_the_accounts_the_engine_posts_by_name(): void
     {
-        $this->assertCount(15, SystemAccount::cases());
+        // Fifteen from the PRD, plus Round Off — added when the workshop gained
+        // the option of taking a bill to the nearest rupee, because the paise it
+        // drops have to land in an account the engine knows by name.
+        $this->assertCount(16, SystemAccount::cases());
 
-        // Two are reserved for payroll in Phase 2; seeding them now means that
-        // phase needs no migration.
+        // Staff Advance and Salary Expense are still in the catalogue, and are
+        // no longer waiting for anything: they were seeded from the first day,
+        // sat unused for eleven modules, and the staff module then posted to
+        // them without a migration and without a workshop doing anything.
+        $this->assertContains(SystemAccount::StaffAdvance, SystemAccount::cases());
+        $this->assertContains(SystemAccount::SalaryExpense, SystemAccount::cases());
+
+        // So nothing is deferred any more. The predicate is kept rather than
+        // deleted — it is where the next foreseen account says it is coming —
+        // and this asserts the list is empty rather than that it is gone.
         $deferred = array_filter(
             SystemAccount::cases(),
             fn (SystemAccount $a) => $a->isDeferredToLaterPhase()
         );
 
-        $this->assertEqualsCanonicalizing(
-            [SystemAccount::StaffAdvance, SystemAccount::SalaryExpense],
-            array_values($deferred)
-        );
+        $this->assertSame([], array_values($deferred));
     }
 }

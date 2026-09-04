@@ -2,7 +2,6 @@
 
 namespace Tests\Unit;
 
-use App\Enums\ItemType;
 use App\Enums\OpeningRowKind;
 use App\Exceptions\Onboarding\OpeningBalanceException;
 use App\Services\Onboarding\NameMatcher;
@@ -48,7 +47,10 @@ class OpeningCsvParserTest extends TestCase
         $this->assertSame(OpeningRowKind::Stock, $row->kind);
         $this->assertSame('Ball Bearing', $row->name);
         $this->assertSame('6204', $row->variant);
-        $this->assertSame(ItemType::Part, $row->itemType);
+        // The 'type' column names a category now, and the row keeps the raw
+        // text: what is valid is a question for the database, answered in
+        // OpeningBalanceService rather than by a fixed enum here.
+        $this->assertSame('part', $row->categoryName);
         $this->assertSame('10', $row->quantity);
         $this->assertSame('120.00', $row->unitCost);
         $this->assertSame('first count', $row->reference);

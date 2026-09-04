@@ -38,6 +38,12 @@ class StockMovementResource extends JsonResource
             'type' => $this->type->value,
             'type_label' => $this->type->label(),
 
+            // What the type cannot say on its own — a purchase reversal, which is
+            // stored as an `adjust` and was otherwise indistinguishable from a
+            // physical count. Null on every other movement, so a card that reads
+            // `source_label ?? type_label` is unchanged everywhere else.
+            'source_label' => $this->whenLoaded('transaction', fn () => $this->sourceLabel()),
+
             // Signed, exactly as stored: the direction is the sign, and a client
             // that had to reconstruct it from the type would get `adjust` wrong.
             'quantity' => $this->quantityValue()->amount(),
@@ -48,9 +54,16 @@ class StockMovementResource extends JsonResource
 
             'transaction' => $this->whenLoaded('transaction', fn () => $this->transaction === null ? null : [
                 'id' => $this->transaction->id,
+                // The number people actually quote to each other. Without it a
+                // stock card could name the document only by a database id,
+                // which is not what is printed on the paper in their hand.
+                'doc_no' => $this->transaction->doc_no,
                 'type' => $this->transaction->type->value,
                 'type_label' => $this->transaction->type->label(),
                 'status' => $this->transaction->status->value,
+                // The document this one cancels, where it cancels one — what
+                // makes a reversal followable back to what it reversed.
+                'reverses_id' => $this->transaction->reverses_id,
                 'notes' => $this->transaction->notes,
             ]),
 

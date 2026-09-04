@@ -23,7 +23,7 @@ class ChartOfAccountFactory extends Factory
 
         return [
             // tenant_id is stamped by BelongsToTenant from the current context.
-            'code' => (string) fake()->unique()->numberBetween(...$type->codeRange()),
+            'code' => self::freeCodeIn($type),
             'name' => fake()->unique()->words(2, true),
             'description' => null,
             'type' => $type,
@@ -36,8 +36,29 @@ class ChartOfAccountFactory extends Factory
     {
         return $this->state(fn (array $attributes) => [
             'type' => $type,
-            'code' => (string) fake()->unique()->numberBetween(...$type->codeRange()),
+            'code' => self::freeCodeIn($type),
         ]);
+    }
+
+    /**
+     * A code inside the type's band that no seeded account has already claimed.
+     *
+     * `fake()->unique()` only promises not to repeat itself — it knows nothing
+     * about the fifteen-odd codes every workshop is provisioned with, so a
+     * random expense code could land on COGS's 5000 and the insert would fail
+     * on the per-tenant unique index. That was a one-in-a-thousand flake per
+     * account long before anybody noticed it, and adding a system account makes
+     * it marginally likelier rather than newly possible.
+     */
+    private static function freeCodeIn(AccountType $type): string
+    {
+        $taken = array_map(fn (SystemAccount $account) => $account->code(), SystemAccount::cases());
+
+        do {
+            $code = (string) fake()->unique()->numberBetween(...$type->codeRange());
+        } while (in_array($code, $taken, true));
+
+        return $code;
     }
 
     /**

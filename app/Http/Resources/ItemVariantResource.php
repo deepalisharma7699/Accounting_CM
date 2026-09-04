@@ -42,9 +42,15 @@ class ItemVariantResource extends JsonResource
 
             // Decimal strings, and null where genuinely unpriced: a motor rewind
             // is quoted per job, and a zero would say "free".
+            'barcode' => $this->barcode,
+
             'sell_price' => $this->sell_price === null ? null : (string) $this->sell_price,
             'markup_percent' => $this->markup_percent === null ? null : (string) $this->markup_percent,
             'reorder_level' => $this->reorder_level === null ? null : (string) $this->reorder_level,
+            // The hard floor, distinct from the reorder level above it: one is
+            // "order more when it reaches this" and the other is "never let it
+            // fall below this".
+            'min_stock' => $this->min_stock === null ? null : (string) $this->min_stock,
 
             'is_draft' => $this->is_draft,
             'is_active' => $this->is_active,
@@ -55,9 +61,11 @@ class ItemVariantResource extends JsonResource
             'item' => $this->whenLoaded('item', fn () => [
                 'id' => $this->item->id,
                 'name' => $this->item->name,
-                'type' => $this->item->type->value,
-                'type_label' => $this->item->type->label(),
-                'base_uom_symbol' => $this->item->base_uom->symbol(),
+                'category_id' => $this->item->category_id === null ? null : (int) $this->item->category_id,
+                'category_label' => $this->item->categoryLabel(),
+                'brand_id' => $this->item->brand_id === null ? null : (int) $this->item->brand_id,
+                'brand' => $this->item->brandLabel(),
+                'base_uom_symbol' => $this->item->base_uom?->symbol(),
                 'gst_rate' => (string) $this->item->gst_rate,
                 'tracks_stock' => $this->item->tracksStock(),
             ]),

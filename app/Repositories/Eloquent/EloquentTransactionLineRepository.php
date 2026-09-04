@@ -42,8 +42,20 @@ class EloquentTransactionLineRepository implements TransactionLineRepositoryInte
     {
         return TransactionLine::query()
             ->where('transaction_id', $transactionId)
-            ->with(['stockMovement', 'item:id,name,type,base_uom', 'variant:id,item_id,sku,label,attributes'])
+            ->with(['stockMovement', 'item:id,name,category_id,base_uom', 'variant:id,item_id,sku,label,attributes'])
             ->orderBy('line_no')
+            ->get();
+    }
+
+    public function returnedAgainstBill(int $billId): Collection
+    {
+        return TransactionLine::query()
+            // The credit note's own lines, reached from the bill they credit —
+            // one `whereHas` rather than a join, so a bill with four returned
+            // lines is four rows and not sixteen.
+            ->whereHas('against', fn ($original) => $original->where('transaction_id', $billId))
+            ->with('stockMovement')
+            ->orderBy('id')
             ->get();
     }
 

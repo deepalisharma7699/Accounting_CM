@@ -35,6 +35,8 @@ use Illuminate\Support\Carbon;
  * @property int $tenant_id
  * @property TransactionType $type
  * @property TransactionStatus $status
+ * @property string|null $doc_no
+ * @property string|null $client_ref
  * @property TransactionSource $source
  * @property int|null $party_id
  * @property Carbon $date
@@ -46,12 +48,16 @@ use Illuminate\Support\Carbon;
  * @property int|null $created_by
  * @property Carbon|null $posted_at
  * @property int|null $reverses_id
+ * @property int|null $against_transaction_id
  * @property int|null $opening_import_id
+ * @property int|null $workshop_job_id
+ * @property int|null $employee_id
  */
 #[Fillable([
-    'tenant_id', 'type', 'status', 'source', 'party_id', 'date', 'total',
+    'tenant_id', 'type', 'status', 'doc_no', 'client_ref', 'source', 'party_id', 'date', 'total',
     'notes', 'draft_lines', 'draft_payments', 'draft_payload',
-    'created_by', 'posted_at', 'reverses_id', 'opening_import_id',
+    'created_by', 'posted_at', 'reverses_id', 'against_transaction_id', 'opening_import_id',
+    'workshop_job_id', 'employee_id',
 ])]
 class Transaction extends Model
 {
@@ -74,17 +80,60 @@ class Transaction extends Model
      * Provenance that may be stamped on, once, after posting — and never
      * changed afterwards.
      *
-     * `opening_import_id` is the only member and is not a financial fact: it
-     * records *which file* an opening balance came from, and it is written by
-     * M11's importer inside the same database transaction as the posting itself.
-     * It sits outside {@see MUTABLE_ONCE_POSTED} rather than inside it because
-     * the two rules are different — status may go posted → reversed, while this
+     * None of them is a financial fact. `opening_import_id` records *which file*
+     * an opening balance came from, `workshop_job_id` records which motor an
+     * invoice came off — M19 — and `employee_id` records who a staff advance was
+     * handed to — M22. Each is written by its own service inside the same
+     * database transaction as the posting itself, so the posting and its
+     * provenance commit together or not at all.
+     *
+     * They sit outside {@see MUTABLE_ONCE_POSTED} rather than inside it because
+     * the two rules are different — status may go posted → reversed, while these
      * may only go null → set. A column that could be re-pointed would let an
-     * import receipt claim postings it never made.
+     * import receipt claim postings it never made, would let one job claim
+     * another's invoices — which is exactly how a workshop comes to believe it
+     * has been paid for a repair it has not — and would let one employee's
+     * advance be recovered from another's salary, which ends with somebody
+     * underpaid and nothing on any screen explaining why.
      *
      * @var array<int, string>
      */
-    private const STAMPABLE_ONCE_POSTED = ['opening_import_id'];
+    private const STAMPABLE_ONCE_POSTED = ['opening_import_id', 'workshop_job_id', 'employee_id'];
+
+    /**
+     * What is paid and what is due on this bill — M16, attached on read.
+     *
+     * A plain property rather than an attribute, and deliberately: an attribute
+     * set on a model marks it dirty, and this model is very often read and then
+     * saved — posting a draft is exactly that sequence. A dirty `settlement` key
+     * would reach the UPDATE statement and fail on a column that does not exist,
+     * which is the sort of bug that only appears on the one path nobody
+     * exercised.
+     *
+     * Null where nothing computed it, and null for anything that is not a posted
+     * bill. See {@see \App\Services\Accounting\BillService::settlementFor()} for
+     * why zero would be the wrong answer there.
+     *
+     * @var array{total: string, paid: string, due: string, status: \App\Enums\PaymentStatus, due_date: string|null}|null
+     */
+    public ?array $settlement = null;
+
+    /**
+     * Who did the work this sale billed — M22, attached on read.
+     *
+     * A plain property for exactly the reason {@see $settlement} is one: an
+     * attribute set on a model marks it dirty, and this model is very often read
+     * and then saved — posting a draft is that sequence — so a dirty key would
+     * reach the UPDATE statement and fail on a column that does not exist.
+     *
+     * Null where nobody asked. An empty collection is a different answer, and
+     * the difference is worth keeping: it means the document *was* looked at and
+     * nobody is recorded on it, which is what the drawer's "not recorded" line is
+     * entitled to say.
+     *
+     * @var \Illuminate\Support\Collection<int, TransactionStaff>|null
+     */
+    public ?\Illuminate\Support\Collection $staffAttribution = null;
 
     /**
      * @return array<string, string>
@@ -258,6 +307,65 @@ class Transaction extends Model
     public function reversal(): HasOne
     {
         return $this->hasOne(self::class, 'reverses_id');
+    }
+
+    /**
+     * The bill this document takes part of back, if it is a return — M18.
+     *
+     * @return BelongsTo<self, $this>
+     */
+    public function against(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'against_transaction_id');
+    }
+
+    /**
+     * The credit or debit notes taken against this bill.
+     *
+     * Several, unlike {@see reversal()} — which is the whole distinction between
+     * the two. A bill is cancelled once and for all; it can be returned against
+     * as many times as the customer brings something back, until nothing is left
+     * on it.
+     *
+     * @return HasMany<self, $this>
+     */
+    public function returns(): HasMany
+    {
+        return $this->hasMany(self::class, 'against_transaction_id');
+    }
+
+    public function isReturn(): bool
+    {
+        return $this->against_transaction_id !== null;
+    }
+
+    /**
+     * The motor this invoice came off, if it came off one — M19.
+     *
+     * Null for everything sold over the counter, which is most of what a
+     * workshop bills. Set only by {@see \App\Services\Workshop\JobService::bill()},
+     * and never changed afterwards — see STAMPABLE_ONCE_POSTED above.
+     *
+     * @return BelongsTo<WorkshopJob, $this>
+     */
+    public function workshopJob(): BelongsTo
+    {
+        return $this->belongsTo(WorkshopJob::class, 'workshop_job_id');
+    }
+
+    /**
+     * The employee a staff advance was paid to — M22.
+     *
+     * Set on `staff_advance` transactions and on nothing else. A payroll run pays
+     * everybody at once, so no single employee is its counterparty; who got what
+     * is `payroll_lines`, and `payroll_runs` points at the transaction from the
+     * other side.
+     *
+     * @return BelongsTo<Employee, $this>
+     */
+    public function employee(): BelongsTo
+    {
+        return $this->belongsTo(Employee::class, 'employee_id');
     }
 
     /* ---------------------------------------------------------------------

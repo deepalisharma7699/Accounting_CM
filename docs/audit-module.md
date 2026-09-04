@@ -2,9 +2,16 @@
 
 Who changed what, when — on the records underneath the figures.
 
-**Status:** ✅ done
+**Status:** ✅ done — **card switched off**, awaiting §2A conversion
 **Depends on:** M2 (tenancy), and everything that owns master data
 **Test:** `php artisan test --filter='Audit'`
+
+> Items and the counterparty modules each read `/audit-logs` for **one record**
+> in their drawer's Activity tab, so per-record history is reachable. The trail
+> *across* the workshop — "what did this user do last Tuesday" — is not, and that
+> is the question this module exists to answer. It is also the whole safeguard on
+> `PATCH /transactions/{id}/staff`, the one write that edits a posted document.
+> See [hidden-modules.md](hidden-modules.md).
 
 ---
 

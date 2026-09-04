@@ -4,135 +4,23 @@
 @source '../../storage/framework/views/*.php';
 
 /*
-| Design tokens taken verbatim from the published Figma Make build
-| (assets/index-*.css :root block) so the two stay in sync.
-*/
-@theme {
-    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, ui-sans-serif, system-ui, sans-serif,
-        'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
-
-    --color-background: #f8f9fb;
-    --color-foreground: #0f1117;
-
-    --color-card: #ffffff;
-    --color-card-foreground: #0f1117;
-
-    --color-primary: #2563eb;
-    --color-primary-foreground: #ffffff;
-
-    --color-secondary: #f1f4f8;
-    --color-secondary-foreground: #374151;
-
-    --color-muted: #f3f4f6;
-    --color-muted-foreground: #6b7280;
-
-    --color-accent: #eff6ff;
-    --color-accent-foreground: #1d4ed8;
-
-    --color-border: #e5e7eb;
-    --color-ring: #93c5fd;
-
-    --radius-card: 12px;
-
-    --shadow-card: 0 2px 12px -2px #00000014;
-    --shadow-raised: 0 2px 16px -2px #00000014;
-    --shadow-primary: 0 4px 24px -4px #2563eb1f;
-    --shadow-primary-glow: 0 2px 8px #2563eb4d;
-
-    --spacing-sidebar: 260px;
-    --spacing-sidebar-collapsed: 72px;
-    --spacing-topbar: 56px;
-    --spacing-rail: 320px;
-}
-
-@layer base {
-    body {
-        background-color: var(--color-background);
-        color: var(--color-foreground);
-        -webkit-font-smoothing: antialiased;
-        -moz-osx-font-smoothing: grayscale;
-    }
-}
-
-@utility surface {
-    border-radius: var(--radius-card);
-    border: 1px solid var(--color-border);
-    background-color: var(--color-card);
-    box-shadow: var(--shadow-card);
-}
-
-/* Small uppercase section label: "QUICK ACTIONS", "RECENT ACTIVITY", ... */
-@utility section-label {
-    font-size: 0.6875rem;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--color-muted-foreground);
-}
-
-/*
-| Shared component classes.
+| The application's stylesheet — everything behind the sign-in.
 |
-| Rows and form fields are rendered from JavaScript as well as Blade, so the
-| styling lives here rather than as Tailwind class strings duplicated across
-| both. Change a button once and every module follows.
+| The shopfront is NOT here. It is resources/css/welcome.css, loaded only by
+| resources/views/welcome.blade.php. What the two genuinely have in common — the
+| tokens, the buttons, and the handful of surfaces that appear on both sides of
+| the sign-in — is in ./shared.css, declared once and imported by each.
+|
+| Keeping them apart is what stops a change to one surface showing up unannounced
+| on the other: the shopfront's animation machinery no longer ships to a single
+| screen behind the login, and none of the chrome below reaches the public page.
+|
+| Rows, forms and whole workspaces are rendered from JavaScript as well as from
+| Blade, so the styling lives here as classes rather than as Tailwind strings
+| duplicated across both. Change a control once and every module follows.
 */
 
-@utility btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-    height: 2.375rem;
-    padding-inline: 0.875rem;
-    border-radius: 10px;
-    border: 1px solid transparent;
-    font-size: 0.875rem;
-    font-weight: 600;
-    white-space: nowrap;
-    cursor: pointer;
-    transition: background-color 0.15s, color 0.15s, border-color 0.15s, filter 0.15s;
-}
-
-@utility btn-sm {
-    height: 2rem;
-    padding-inline: 0.625rem;
-    font-size: 0.8125rem;
-    border-radius: 8px;
-}
-
-@utility btn-primary {
-    background-color: var(--color-primary);
-    color: var(--color-primary-foreground);
-    box-shadow: var(--shadow-primary-glow);
-    &:hover { filter: brightness(1.1); }
-}
-
-@utility btn-secondary {
-    background-color: var(--color-card);
-    border-color: var(--color-border);
-    color: var(--color-secondary-foreground);
-    &:hover { background-color: var(--color-secondary); }
-}
-
-@utility btn-ghost {
-    background-color: transparent;
-    color: var(--color-muted-foreground);
-    &:hover { background-color: var(--color-muted); color: var(--color-foreground); }
-}
-
-@utility btn-danger {
-    background-color: var(--color-rose-600);
-    color: #fff;
-    &:hover { filter: brightness(1.08); }
-}
-
-@utility btn-icon {
-    width: 2rem;
-    height: 2rem;
-    padding: 0;
-    border-radius: 8px;
-}
+@import './shared.css';
 
 /* Form fields ---------------------------------------------------------- */
 
@@ -174,18 +62,6 @@
     color: var(--color-rose-600);
 }
 
-/* Badges --------------------------------------------------------------- */
-
-@utility badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.25rem;
-    padding: 0.125rem 0.5rem;
-    border-radius: 6px;
-    font-size: 0.6875rem;
-    font-weight: 600;
-    white-space: nowrap;
-}
 
 /* Data table ----------------------------------------------------------- */
 
@@ -460,26 +336,6 @@
     }
 }
 
-/* Modal ---------------------------------------------------------------- */
-
-@utility modal-backdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 50;
-    display: grid;
-    place-items: center;
-    padding: 1rem;
-    background-color: color-mix(in srgb, var(--color-foreground) 35%, transparent);
-    backdrop-filter: blur(2px);
-    overflow-y: auto;
-}
-
-@utility modal-panel {
-    width: 100%;
-    border-radius: var(--radius-card);
-    background-color: var(--color-card);
-    box-shadow: var(--shadow-raised);
-}
 
 /*
 | A big click target that stands in for a radio button — the design's chooser
@@ -531,170 +387,1118 @@
 }
 
 /* =========================================================================
-| Shopfront — resources/views/welcome.blade.php
+| The shell — CLAUDE.md §1 and §2
 |
-| The public page, and the only screen a visitor sees before signing in. Dark
-| where the application is light, deliberately: it is a different thing, and
-| the switch in tone is what says you are looking at the workshop rather than
-| at its books.
+| Everything below is the level-0/level-1 architecture: the chrome that never
+| unmounts, the region that swaps beneath it, the home grid, and the workspace a
+| card opens into.
 |
-| Only the animation machinery lives here — layout and colour stay as Tailwind
-| classes in the Blade. Everything is prefixed `lp-` so none of it can reach
-| the application's screens, and the whole block is switched off in one place
-| at the bottom for anyone who asked not to be moved.
+| The values are the published prototype's ("Level 1 Workspace — interaction
+| prototype"), which took them from this file in the first place. Keeping them
+| here as utilities rather than as Tailwind class strings is the same choice the
+| rest of this file already makes: the workspace is rendered from JavaScript as
+| well as from Blade, and a button styled in two places is a button that drifts.
 ========================================================================= */
 
-/*
-| The parts arriving.
-|
-| Two nested elements per part rather than one, because the two motions have
-| nothing to say to each other: the outer flies the part in from off-screen
-| once, the inner drifts or turns for as long as the page is open. On a single
-| element the second animation would overwrite the first mid-flight and the
-| part would snap to its resting place.
-|
-| Direction, distance, spin and delay are per-part and come from the Blade as
-| custom properties, so adding a part is a row in an array rather than another
-| keyframe block.
-*/
-.lp-part {
-    position: absolute;
-    animation: lp-fly 1.15s cubic-bezier(0.16, 0.9, 0.24, 1) var(--lp-delay, 0s) both;
-}
+/* Persistent chrome -------------------------------------------------------- */
 
-@keyframes lp-fly {
-    from {
-        opacity: 0;
-        transform: translate3d(var(--lp-fx, 0), var(--lp-fy, 0), 0) rotate(var(--lp-fr, 0deg)) scale(0.3);
-    }
-    60% {
-        opacity: 1;
-    }
-    to {
-        opacity: 1;
-        transform: translate3d(0, 0, 0) rotate(0deg) scale(1);
-    }
-}
-
-.lp-part-inner {
-    display: block;
-    animation: lp-drift var(--lp-drift, 7s) ease-in-out var(--lp-delay, 0s) infinite;
-}
-
-@keyframes lp-drift {
-    0%, 100% { transform: translateY(0) rotate(0deg); }
-    50%      { transform: translateY(-11px) rotate(5deg); }
-}
-
-/* A cog turns rather than bobbing; same slot, different motion. */
-.lp-part-inner.lp-turn {
-    animation: lp-rotate var(--lp-spin, 22s) linear infinite;
-}
-
-.lp-part-inner.lp-turn-back {
-    animation: lp-rotate var(--lp-spin, 22s) linear infinite reverse;
-}
-
-@keyframes lp-rotate {
-    to { transform: rotate(360deg); }
-}
-
-/* The motor itself: assembled, and running once it lands. */
-.lp-core {
-    animation: lp-core-in 1s cubic-bezier(0.16, 0.9, 0.24, 1) 0.1s both;
-}
-
-@keyframes lp-core-in {
-    from { opacity: 0; transform: scale(0.72) rotate(-6deg); }
-    to   { opacity: 1; transform: none; }
-}
-
-/* transform-box, or the shaft would turn about the whole SVG's origin. */
-.lp-rotor {
-    transform-box: fill-box;
-    transform-origin: center;
-    animation: lp-rotate 3s linear infinite;
-}
-
-.lp-pulse {
-    animation: lp-pulse 2.6s ease-in-out infinite;
-}
-
-@keyframes lp-pulse {
-    0%, 100% { opacity: 0.35; transform: scale(1); }
-    50%      { opacity: 0.75; transform: scale(1.06); }
-}
-
-/*
-| Sections arriving as they are scrolled to.
-|
-| The offset is per-element — `--rx` and `--ry` — so a row of cards can come in
-| from four different edges rather than all sliding up together, which is the
-| same idea as the hero and keeps the page feeling assembled rather than typed.
-| Nothing here hides content from a visitor without JavaScript: the class is
-| added by an observer, and `.lp-in` is also what a no-JS fallback sets.
-*/
-[data-reveal] {
-    opacity: 0;
-    transform: translate3d(var(--rx, 0), var(--ry, 1.75rem), 0);
-    transition:
-        opacity 0.7s cubic-bezier(0.2, 0.8, 0.2, 1),
-        transform 0.7s cubic-bezier(0.2, 0.8, 0.2, 1);
-    transition-delay: var(--rd, 0s);
-}
-
-[data-reveal].lp-in {
-    opacity: 1;
-    transform: none;
-}
-
-/* The engineering-paper grid behind the hero, faded out at the edges. */
-.lp-grid::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background-image:
-        linear-gradient(to right, rgb(148 163 184 / 0.11) 1px, transparent 1px),
-        linear-gradient(to bottom, rgb(148 163 184 / 0.11) 1px, transparent 1px);
-    background-size: 54px 54px;
-    mask-image: radial-gradient(ellipse 75% 65% at 50% 35%, #000 35%, transparent 100%);
-}
-
-/* The trade band under the hero. Duplicated content, translated by half. */
-.lp-marquee {
+@utility topbar {
+    position: sticky;
+    top: 0;
+    z-index: 30;
     display: flex;
-    width: max-content;
-    animation: lp-marquee 34s linear infinite;
+    align-items: center;
+    gap: 0.75rem;
+    height: var(--spacing-topbar);
+    padding-inline: 1rem;
+    border-bottom: 1px solid var(--color-border);
+    background-color: var(--color-card);
+
+    @media (width >= 40rem) {
+        padding-inline: 2rem;
+    }
 }
 
-@keyframes lp-marquee {
-    to { transform: translateX(-50%); }
+@utility topbar-search {
+    display: none;
+    flex: 1;
+    max-width: 28rem;
+    margin-left: 0.5rem;
+
+    @media (width >= 56.25rem) {
+        display: block;
+    }
 }
 
-.lp-modal-in {
-    animation: lp-modal-in 0.22s ease-out;
+/*
+| The breadcrumb, which is the whole of the application's navigation now.
+|
+| It shows where you are and offers the one step back — "Home". There is nowhere
+| else to go from a module, because a module is not a place you pass through on
+| the way to another one.
+*/
+@utility crumb {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 0;
 }
 
-@keyframes lp-modal-in {
-    from { opacity: 0; transform: translateY(0.75rem) scale(0.97); }
+@utility crumb-back {
+    display: grid;
+    place-items: center;
+    width: 2rem;
+    height: 2rem;
+    flex: none;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--color-muted-foreground);
+    cursor: pointer;
+    transition: background-color 0.15s, color 0.15s;
+
+    &:hover { background-color: var(--color-muted); color: var(--color-foreground); }
+}
+
+@utility crumb-home {
+    border: 0;
+    padding: 0;
+    background: none;
+    font-size: 0.9375rem;
+    font-weight: 500;
+    color: var(--color-muted-foreground);
+    cursor: pointer;
+
+    &:hover { color: var(--color-primary); }
+}
+
+@utility crumb-sep {
+    flex: none;
+    color: var(--color-border);
+}
+
+@utility crumb-current {
+    font-size: 1.125rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+@utility avatar {
+    display: grid;
+    place-items: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    flex: none;
+    border-radius: 999px;
+    background-color: var(--color-primary);
+    color: var(--color-primary-foreground);
+    font-size: 0.875rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+@utility toast-host {
+    position: fixed;
+    right: 1.25rem;
+    bottom: 1.25rem;
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+/* The swap region ---------------------------------------------------------- */
+
+@utility host {
+    flex: 1;
+    padding: 2rem 1rem 5rem;
+
+    @media (width >= 40rem) {
+        padding-inline: 2rem;
+    }
+}
+
+@utility shell {
+    max-width: 1280px;
+    margin-inline: auto;
+}
+
+/*
+| A level-0/level-1 view.
+|
+| No `display` of its own, so the `hidden` attribute is what decides — one
+| attribute, honoured by the accessibility tree and the layout alike, rather than
+| a class the JavaScript has to keep in step with `aria-hidden`.
+*/
+@utility view-in {
+    animation: view-in 0.18s ease-out;
+}
+
+@keyframes view-in {
+    from { opacity: 0; transform: translateY(6px); }
     to   { opacity: 1; transform: none; }
 }
 
-/* Somebody who asked not to be moved is not asked twice. */
+/* Home --------------------------------------------------------------------- */
+
+@utility greet {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin: 0;
+    font-size: 1.75rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--color-foreground);
+
+    @media (width >= 40rem) {
+        font-size: 1.875rem;
+    }
+}
+
+@utility greet-sub {
+    margin: 0.5rem 0 0;
+    font-size: 0.9375rem;
+    color: var(--color-muted-foreground);
+}
+
+@utility card-grid {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+}
+
+/*
+| A module card — the only way into a module (§1.4).
+|
+| A <button>, not an <a>: it opens a workspace in the mounted shell rather than
+| going anywhere, and an anchor would promise a destination that a middle click
+| or "open in new tab" could not deliver.
+*/
+@utility module-card {
+    display: flex;
+    width: 100%;
+    height: 100%;
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 1.125rem;
+    text-align: left;
+    cursor: pointer;
+    border-radius: var(--radius-card);
+    border: 1px solid var(--color-border);
+    background-color: var(--color-card);
+    box-shadow: var(--shadow-card);
+    transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+
+    &:hover {
+        transform: translateY(-2px);
+        box-shadow: var(--shadow-primary);
+        border-color: var(--color-ring);
+    }
+
+    &:active { transform: translateY(0); }
+
+    &:focus-visible {
+        outline: none;
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-ring) 60%, transparent);
+    }
+}
+
+@utility card-icon {
+    display: grid;
+    place-items: center;
+    width: 2.5rem;
+    height: 2.5rem;
+    flex: none;
+    border-radius: 10px;
+}
+
+@utility card-title {
+    margin-top: 0.875rem;
+    font-size: 0.9375rem;
+    font-weight: 600;
+    color: var(--color-foreground);
+}
+
+@utility card-desc {
+    margin-top: 0.3125rem;
+    font-size: 0.8125rem;
+    line-height: 1.45;
+    color: var(--color-muted-foreground);
+}
+
+@utility card-meta {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: auto;
+    padding-top: 0.75rem;
+    font-size: 0.75rem;
+    color: var(--color-border);
+}
+
+@utility card-count {
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--color-secondary-foreground);
+}
+
+/* The level-1 workspace ---------------------------------------------------- */
+
+@utility ws-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    margin-bottom: 1.25rem;
+}
+
+@utility ws-title {
+    margin: 0;
+    font-size: 1.5rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--color-foreground);
+}
+
+@utility ws-sub {
+    margin: 0.25rem 0 0;
+    font-size: 0.875rem;
+    color: var(--color-muted-foreground);
+}
+
+/*
+| Where the mode switch lives: the right edge of the module heading, the same
+| slot in both modes. One control, and it always names its destination — "Show
+| list" on the form, "Create item" on the list (§2A.3).
+*/
+@utility ws-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-left: auto;
+}
+
+/*
+| The form and the list are alternatives, never siblings (§2A.2), so only the
+| swap between them animates. A filter repaint must not re-run this.
+*/
+@utility mode-swap {
+    animation: view-in 0.2s ease-out;
+}
+
+/* The create form ---------------------------------------------------------- */
+
+@utility form-card {
+    padding: 1.25rem;
+
+    @media (width >= 40rem) {
+        padding: 1.5rem;
+    }
+}
+
+@utility form-head {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    margin-bottom: 1.25rem;
+}
+
+@utility form-grid {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: 1fr;
+
+    @media (width >= 35rem) {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    @media (width >= 56.25rem) {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+@utility span-all {
+    grid-column: 1 / -1;
+}
+
+@utility form-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 1.5rem;
+    padding-top: 1.25rem;
+    border-top: 1px solid var(--color-border);
+}
+
+/* A required-field marker, beside the label. */
+@utility req {
+    margin-left: 0.125rem;
+    color: var(--color-rose-600);
+}
+
+/* The list ----------------------------------------------------------------- */
+
+@utility tile-row {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+    margin-bottom: 1.25rem;
+
+    @media (width >= 64rem) {
+        grid-template-columns: repeat(4, 1fr);
+    }
+}
+
+@utility tile-icon {
+    display: grid;
+    place-items: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    flex: none;
+    border-radius: 9px;
+}
+
+@utility tile-value {
+    font-size: 1.125rem;
+    font-weight: 700;
+    line-height: 1.2;
+    font-variant-numeric: tabular-nums;
+}
+
+@utility tile-label {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--color-muted-foreground);
+}
+
+@utility filter-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+/* Wide content scrolls inside its own box; the page never scrolls sideways. */
+@utility table-wrap {
+    overflow-x: auto;
+    border-radius: var(--radius-card);
+}
+
+@utility state-cell {
+    padding: 3.5rem 1rem;
+    text-align: center;
+    font-size: 0.875rem;
+    color: var(--color-muted-foreground);
+}
+
+@utility num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+/* A loading placeholder in a cell that will hold a figure. */
+@utility skel {
+    display: block;
+    height: 0.75rem;
+    border-radius: 4px;
+    background-color: var(--color-muted);
+    animation: skel-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes skel-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.45; }
+}
+
+/*
+| A row that was just created, so the eye can find it in a list it was not
+| looking at when the record was written (§2A.8).
+*/
+@utility row-new {
+    animation: row-flash 1.8s ease-out;
+}
+
+@keyframes row-flash {
+    from { background-color: var(--color-accent); }
+    to   { background-color: transparent; }
+}
+
+@utility hint {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.625rem;
+    padding: 0.75rem 0.875rem;
+    border-radius: 10px;
+    background-color: var(--color-accent);
+    color: var(--color-accent-foreground);
+    font-size: 0.8125rem;
+    line-height: 1.45;
+}
+
+/* Level 2 — inside the drawer ---------------------------------------------- */
+
+@utility drawer-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 1rem;
+    padding: 1.25rem;
+    border-bottom: 1px solid var(--color-border);
+}
+
+@utility drawer-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1.25rem;
+}
+
+@utility drawer-foot {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 1rem 1.25rem;
+    border-top: 1px solid var(--color-border);
+    background-color: var(--color-background);
+}
+
+/* Term-and-value pairs: the read view of one record. */
+@utility dl {
+    display: grid;
+    grid-template-columns: 8.5rem 1fr;
+    gap: 0.625rem 1rem;
+    margin: 0;
+
+    & dt { font-size: 0.8125rem; color: var(--color-muted-foreground); }
+    & dd { margin: 0; font-size: 0.875rem; font-weight: 500; }
+}
+
+/*
+| One form, two homes.
+|
+| A create form is a level-1 surface and an edit form is a level-2 one, so the
+| same node is moved between them rather than written twice (§4.4). The fields
+| are identical; only the frame differs, and the parts of the frame that belong
+| to one or the other are marked `data-form-chrome` and toggled by `adoptForm()`
+| in resources/js/workspace.js.
+|
+| What is left here is the layout that goes with each: a dialog's body needs its
+| own padding and has to scroll inside a panel that cannot grow past the
+| viewport, and an inline form sits in a card that already has padding and
+| scrolls with the page like everything else on it.
+*/
+[data-chrome='modal'] [data-form-body] {
+    max-height: 70vh;
+    overflow-y: auto;
+    padding: 1.25rem 1.5rem;
+}
+
+/*
+| The counterparty form, whose dialog is a drawer rather than a centred panel.
+|
+| A drawer is full height, so its middle scrolls against the panel instead of
+| stopping at a share of the viewport — the footer belongs at the bottom of the
+| drawer, not wherever the fields happen to end. Inline on level 1 it is an
+| ordinary block in a card that already has padding, and it scrolls with the
+| page like everything else on it.
+*/
+#quick-party-form[data-chrome='modal'] {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+#quick-party-form[data-chrome='modal'] [data-form-body] {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    flex: 1;
+    max-height: none;
+    padding: 1rem 1.25rem;
+}
+
+/*
+| Inline on level 1 the same fields sit in a card the width of the workspace,
+| where one column of full-width inputs would leave a phone number stretched
+| across a desktop screen. The short ones pair up; the name, the roles and the
+| two free-text boxes keep the width, because that is what they are for.
+*/
+#quick-party-form[data-chrome='inline'] [data-form-body] {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    gap: 1rem;
+}
+
+#quick-party-form[data-chrome='inline'] [data-form-body] > * {
+    grid-column: 1 / -1;
+}
+
+@media (width >= 48rem) {
+    #quick-party-form[data-chrome='inline'] [data-form-body] > [data-half] {
+        grid-column: auto;
+    }
+}
+
+/*
+| The staff form, whose dialog is a drawer rather than a centred panel — M22.
+|
+| The same treatment the counterparty form takes, and for the same reason: a
+| drawer is full height, so its middle has to scroll against the panel instead of
+| stopping at a share of the viewport. The footer belongs at the bottom of the
+| drawer rather than wherever the fields happen to end.
+|
+| Inline on level 1 it is an ordinary block in a card that already has padding,
+| and it scrolls with the page like everything else on it — so there is nothing
+| to say about that case.
+*/
+#employee-form[data-chrome='modal'] {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+#employee-form[data-chrome='modal'] [data-form-body] {
+    flex: 1;
+    max-height: none;
+    padding: 1rem 1.25rem;
+}
+
+/*
+| The month register's name column stays put while the days scroll under it.
+|
+| Thirty-one columns do not fit on any screen a workshop owns, so the table
+| scrolls sideways — and a register whose names scroll away is a grid of letters
+| nobody can attribute. `position: sticky` needs an opaque background of its own
+| or the day cells show through it.
+*/
+#register-table th.sticky,
+#register-table td.sticky {
+    position: sticky;
+    left: 0;
+}
+
+#register-table td.sticky {
+    box-shadow: 1px 0 0 var(--color-muted);
+}
+
 @media (prefers-reduced-motion: reduce) {
-    .lp-part,
-    .lp-part-inner,
-    .lp-core,
-    .lp-rotor,
-    .lp-pulse,
-    .lp-marquee,
-    .lp-modal-in {
+    .view-in,
+    .mode-swap,
+    .skel,
+    .row-new {
         animation: none !important;
     }
 
-    [data-reveal] {
-        opacity: 1;
-        transform: none;
-        transition: none;
+    .module-card { transition: none; }
+}
+
+
+
+/* -------------------------------------------------------------------------
+ | The invoice document — M20
+ |
+ | One sheet, drawn twice: the workshop's print copy (hidden inside the app
+ | until Print is pressed) and the customer's page at /i/{token}. The styling is
+ | here rather than in either host for the same reason the markup is one partial
+ | — a difference between the two copies of an invoice is a dispute.
+ |
+ | Deliberately plainer than the rest of the application. This is a document, not
+ | a screen: it is read on paper as often as on glass, it is photographed and
+ | forwarded, and a card shadow that looks considered on a dashboard is a grey
+ | smear through a phone camera.
+ | ---------------------------------------------------------------------- */
+
+.invoice-sheet {
+    max-width: 52rem;
+    margin-inline: auto;
+    padding: 1.75rem;
+    background-color: var(--color-card);
+    color: var(--color-foreground);
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    font-size: 0.8125rem;
+    line-height: 1.5;
+}
+
+.invoice-band {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1.25rem;
+    padding-bottom: 1rem;
+    border-bottom: 2px solid var(--color-foreground);
+}
+
+.invoice-issuer-name {
+    font-size: 1.25rem;
+    font-weight: 700;
+    line-height: 1.25;
+}
+
+.invoice-issuer-line {
+    max-width: 24rem;
+    color: var(--color-muted-foreground);
+}
+
+.invoice-field {
+    margin-top: 0.125rem;
+    color: var(--color-secondary-foreground);
+}
+
+.invoice-field > span {
+    display: inline-block;
+    min-width: 5.5rem;
+    color: var(--color-muted-foreground);
+}
+
+.invoice-title { text-align: right; }
+
+.invoice-heading {
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-muted-foreground);
+}
+
+.invoice-docno {
+    font-size: 1.125rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.invoice-date { color: var(--color-muted-foreground); }
+
+.invoice-parties {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 1.25rem;
+    padding-block: 1rem;
+}
+
+.invoice-party-label {
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-muted-foreground);
+    margin-bottom: 0.125rem;
+}
+
+.invoice-party-name { font-weight: 700; }
+.invoice-party-right { text-align: right; }
+.invoice-party-right .invoice-field > span { min-width: 0; margin-right: 0.375rem; }
+
+/* The one element allowed to scroll sideways, so the sheet itself never does. */
+.invoice-lines-scroll {
+    overflow-x: auto;
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+}
+
+.invoice-lines {
+    width: 100%;
+    min-width: 40rem;
+    border-collapse: collapse;
+}
+
+.invoice-lines th {
+    padding: 0.5rem 0.625rem;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--color-muted-foreground);
+    background-color: var(--color-secondary);
+    border-bottom: 1px solid var(--color-border);
+    white-space: nowrap;
+}
+
+.invoice-lines td {
+    padding: 0.5rem 0.625rem;
+    border-bottom: 1px solid var(--color-border);
+    vertical-align: top;
+}
+
+.invoice-lines tr:last-child td { border-bottom: 0; }
+
+/* Figures line up under each other or they cannot be added by eye. */
+.invoice-lines .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.invoice-memo {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--color-muted-foreground);
+}
+
+.invoice-empty {
+    padding-block: 1.25rem;
+    text-align: center;
+    color: var(--color-muted-foreground);
+}
+
+.invoice-close {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1.5rem;
+    padding-top: 1rem;
+}
+
+.invoice-close-left { flex: 1 1 16rem; }
+
+.invoice-totals {
+    flex: 0 0 auto;
+    min-width: 15rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.invoice-totals > div {
+    display: flex;
+    justify-content: space-between;
+    gap: 1.5rem;
+    padding-block: 0.1875rem;
+}
+
+.invoice-totals dt { color: var(--color-muted-foreground); }
+
+.invoice-totals .invoice-total {
+    margin-top: 0.375rem;
+    padding-top: 0.5rem;
+    border-top: 2px solid var(--color-foreground);
+    font-size: 1rem;
+    font-weight: 700;
+}
+
+.invoice-totals .invoice-total dt { color: var(--color-foreground); }
+
+.invoice-received-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.invoice-notes { margin-top: 0.75rem; }
+.invoice-notes p:last-child { color: var(--color-secondary-foreground); }
+
+.invoice-words {
+    margin-top: 1rem;
+    padding: 0.625rem 0.75rem;
+    background-color: var(--color-secondary);
+    border-radius: 8px;
+    font-weight: 600;
+}
+
+.invoice-settlement {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem 2rem;
+    margin-top: 1rem;
+    padding-top: 0.875rem;
+    border-top: 1px solid var(--color-border);
+    font-variant-numeric: tabular-nums;
+}
+
+.invoice-settlement dt {
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--color-muted-foreground);
+}
+
+.invoice-settlement dd { font-weight: 600; }
+.invoice-settlement .invoice-due dd { font-size: 1rem; font-weight: 700; }
+.invoice-settlement .invoice-settlement-note dd { font-weight: 500; }
+
+.invoice-foot {
+    margin-top: 1.25rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--color-border);
+    text-align: center;
+    font-size: 0.75rem;
+    color: var(--color-muted-foreground);
+}
+
+/* -------------------------------------------------------------------------
+ | Printing
+ |
+ | The print copy is mounted in the application's layout and hidden. Pressing
+ | Print paints it and calls window.print(); this rule is what makes it the only
+ | thing on the paper.
+ |
+ | `body > *` rather than a list of the chrome, and that is the point: the
+ | topbar, the shell, the confirmation modal and the toast host are all direct
+ | children of body, and so is anything added later. A rule naming them would be
+ | one somebody has to remember to extend, and the failure mode is a customer's
+ | invoice printed with a toast notification across it.
+ | ---------------------------------------------------------------------- */
+
+/* -------------------------------------------------------------------------
+ | Charts — M23's insight module
+ |
+ | The columns are flex children with percentage heights rather than SVG, and
+ | that is the whole reason the labels stay readable: an SVG with a viewBox
+ | scales its text along with its geometry, so a chart sized for a laptop
+ | renders microscopic ticks on a phone. Only the area chart uses a path, and it
+ | carries no text at all — its labels are the same HTML ticks as the columns.
+ |
+ | See resources/js/components/insight-chart.js, which is the only thing that
+ | writes these classes.
+ |-------------------------------------------------------------------------- */
+
+@utility chart {
+    display: block;
+    width: 100%;
+}
+
+/* The plot area, which exists only to host the zero line behind the bars. */
+@utility chart-plot {
+    position: relative;
+    width: 100%;
+    border-bottom: 1px solid var(--color-border);
+}
+
+/* Drawn only when something is negative — see columnChart(). */
+@utility chart-zero {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background-color: var(--color-border);
+}
+
+@utility chart-cols {
+    position: relative;
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    width: 100%;
+}
+
+@utility chart-col {
+    position: relative;
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+@utility chart-stack {
+    position: relative;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 1px;
+    width: 100%;
+}
+
+/*
+| Absolutely positioned, because a bar grows from the zero line in whichever
+| direction its value takes it — `bottom` for a positive value and `top` for a
+| negative one. Two bars in one bucket sit side by side, which is what the
+| percentage width is for.
+*/
+@utility chart-bar {
+    position: absolute;
+    width: 44%;
+    min-height: 2px;
+    border-radius: 3px 3px 0 0;
+    transition: opacity 0.12s;
+    &:first-child { left: 2%; }
+    &:last-child { right: 2%; }
+    &:only-child { left: 18%; right: 18%; width: 64%; }
+    &:hover { opacity: 0.72; }
+}
+
+@utility chart-tick {
+    display: block;
+    margin-top: 0.375rem;
+    font-size: 0.625rem;
+    line-height: 1.1;
+    white-space: nowrap;
+    color: var(--color-muted-foreground);
+}
+
+@utility chart-area {
+    display: block;
+    width: 100%;
+    border-bottom: 1px solid var(--color-border);
+}
+
+@utility chart-empty {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    border: 1px dashed var(--color-border);
+    border-radius: 12px;
+    font-size: 0.8125rem;
+    color: var(--color-muted-foreground);
+}
+
+/* One bar, several parts — the mix and the ageing. */
+@utility chart-split {
+    display: block;
+    width: 100%;
+}
+
+@utility chart-track {
+    display: flex;
+    gap: 2px;
+    width: 100%;
+    height: 1.75rem;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+@utility chart-seg {
+    display: block;
+    min-width: 3px;
+    transition: opacity 0.12s;
+    &:hover { opacity: 0.78; }
+}
+
+@utility chart-keys {
+    display: grid;
+    /* Wide enough that "0-30 days (2)" and its amount stay on one line. A key
+       that wraps mid-label is harder to scan than one fewer column. */
+    grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+    gap: 0.375rem 1.5rem;
+    margin: 0.75rem 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+@utility chart-key {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.78125rem;
+    color: var(--color-secondary-foreground);
+}
+
+@utility chart-key-label { flex: 1 1 auto; min-width: 0; }
+
+@utility chart-key-value {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-variant-numeric: tabular-nums;
+}
+
+@utility chart-key-share {
+    width: 3.25rem;
+    text-align: right;
+    color: var(--color-muted-foreground);
+    font-variant-numeric: tabular-nums;
+}
+
+@utility chart-swatch {
+    display: block;
+    width: 0.625rem;
+    height: 0.625rem;
+    flex: none;
+    border-radius: 3px;
+}
+
+@utility chart-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem 1rem;
+    margin-top: 0.75rem;
+}
+
+/* A proportion bar sized to sit inside a table cell. */
+@utility chart-mini {
+    display: block;
+    width: 100%;
+    min-width: 3rem;
+    height: 0.375rem;
+    border-radius: 999px;
+    background-color: var(--color-muted);
+    overflow: hidden;
+}
+
+@utility chart-mini-fill {
+    display: block;
+    height: 100%;
+    border-radius: 999px;
+}
+
+#invoice-print { display: none; }
+
+@media print {
+    /*
+    | Whichever child of `body` holds the document *is* the page. Every other
+    | child is chrome, whatever it is called.
+    |
+    | This asks that question with `:has()` rather than naming a host, and it
+    | has to: the rule used to read `body > *:not(#invoice-print)`, which was
+    | true of the application's layout — where the sheet is a hidden body child
+    | of that id — and false of the customer's page at /i/{token}, which has no
+    | such wrapper and renders the document inside its `<main>`. That `<main>`
+    | was the one element on the page, so the rule meant to isolate the invoice
+    | was the rule that hid it, and Print there produced a blank sheet.
+    |
+    | Written this way neither host is in the selector, so neither can drift out
+    | of it, and there is still no list of chrome to keep extending.
+    */
+    body > *:not([data-invoice-document]):not(:has([data-invoice-document])) {
+        display: none !important;
     }
+
+    #invoice-print { display: block !important; }
+
+    /*
+    | Ink.
+    |
+    | The tokens above are tuned for a lit panel: `--color-border` is #e5e7eb,
+    | which reads as a hairline on glass and which a printer drops outright.
+    | Every rule on the sheet drew in it — the box around the lines, the rule
+    | under each row, the rule over the settlement — so the document came out of
+    | the preview with no border anywhere on it. The one border that did print
+    | was the amount in words, and only because it had been given a literal
+    | colour here instead of the token.
+    |
+    | So the ink is redefined for the duration of the sheet rather than by
+    | restating each border. Every rule and every muted label above follows it,
+    | and there is no second set of declarations to keep in step with the first
+    | — which is the failure the literal #999 already was.
+    */
+    .invoice-sheet {
+        --color-border: #999;
+        --color-muted-foreground: #4b5563;
+
+        max-width: none;
+        margin: 0;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+    }
+
+    .invoice-lines-scroll { overflow-x: visible; border-radius: 0; }
+    .invoice-lines { min-width: 0; }
+
+    /* A line item split across two sheets is unreadable on both. */
+    .invoice-lines tr { break-inside: avoid; }
+
+    .invoice-close, .invoice-words, .invoice-settlement { break-inside: avoid; }
+
+    /* Whatever the browser is told, backgrounds are the first thing a printer
+       drops. Anything that carried meaning through a fill gets a rule instead:
+       the header row is a header because of the rule under it, not because of
+       a tint that half the workshop's printers will not lay down. */
+    .invoice-lines th, .invoice-words { background-color: transparent; }
+    .invoice-lines th { border-bottom: 1px solid var(--color-foreground); }
+    .invoice-words { border: 1px solid var(--color-border); }
 }

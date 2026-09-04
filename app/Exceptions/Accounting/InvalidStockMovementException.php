@@ -58,7 +58,7 @@ class InvalidStockMovementException extends ApiException
     /**
      * Half a bearing is not a quantity. Refused rather than rounded, because
      * rounding it would post a number nobody typed — see
-     * {@see \App\Enums\UnitOfMeasure::isFractional()}.
+     * {@see \App\Support\Units\UnitDefinition::isFractional()}.
      */
     public static function fractionalUnit(string $variant, string $quantity, string $unitLabel): self
     {

@@ -1,5 +1,14 @@
 # Accounting Module
 
+> **Card status: switched off.** The Accounting screen is complete and tested,
+> but it still opens on a list with a modal create, so it waits for the §2A
+> conversion and has no card on the dashboard. It is the only place a ledger
+> account can be **created or edited** — `POST /accounts` and
+> `PATCH /accounts/{id}` have one caller in the whole front end — so no workshop
+> can add an expense head of its own today. Convert it together with the Ledger
+> screen: they are the same question at two zoom levels. See
+> [hidden-modules.md](hidden-modules.md).
+
 The functional accounting core. Built in slices; this document grows with them.
 
 | Step | Delivers | Status |

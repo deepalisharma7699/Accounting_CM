@@ -118,6 +118,35 @@ class RoleSeeder extends Seeder
                 [PermissionAction::Write, PermissionResource::Attachments],
                 [PermissionAction::Delete, PermissionResource::Attachments],
                 [PermissionAction::Read, PermissionResource::Jobs],
+                // M19. The motor on the bench. DELETE is held here and not by
+                // DATA_ENTRY for the same reason as parties and items: a job can
+                // only be deleted before anything has been billed against it, so
+                // it is a tidying-up authority rather than an operational one.
+                [PermissionAction::Read, PermissionResource::WorkshopJobs],
+                [PermissionAction::Write, PermissionResource::WorkshopJobs],
+                [PermissionAction::Update, PermissionResource::WorkshopJobs],
+                [PermissionAction::Delete, PermissionResource::WorkshopJobs],
+                /*
+                | M22. The people who work for the workshop, and what they are
+                | paid. All four actions, and DELETE means less than it looks:
+                | somebody who has been marked present, paid or advanced anything
+                | can only be archived, so it is a tidying-up authority over a
+                | typo caught the same afternoon.
+                |
+                | Held here and — uniquely — by nobody else. DATA_ENTRY has no
+                | staff grant at all, which is the one exclusion in this seeder
+                | that is about privacy rather than authority: what each person in
+                | a workshop earns is not something the clerk at the counter needs
+                | in order to do their job.
+                |
+                | Note that none of this posts anything. Paying an advance and
+                | running payroll additionally need WRITE:TRANSACTIONS, which this
+                | role also holds, and holds separately.
+                */
+                [PermissionAction::Read, PermissionResource::Staff],
+                [PermissionAction::Write, PermissionResource::Staff],
+                [PermissionAction::Update, PermissionResource::Staff],
+                [PermissionAction::Delete, PermissionResource::Staff],
             ],
         );
     }
@@ -179,8 +208,27 @@ class RoleSeeder extends Seeder
                 // went through. A progress bar only the owner could watch would
                 // be a progress bar nobody watches.
                 [PermissionAction::Read, PermissionResource::Jobs],
+                // M19. Booking a motor in, moving it along the bench and writing
+                // parts onto it is precisely what the person at the counter does
+                // all day — so READ, WRITE and UPDATE land here, and only DELETE
+                // stays with the owner. Note that none of this posts anything:
+                // raising the invoice off a job additionally needs
+                // WRITE:TRANSACTIONS, which this role also holds, and holds
+                // separately.
+                [PermissionAction::Read, PermissionResource::WorkshopJobs],
+                [PermissionAction::Write, PermissionResource::WorkshopJobs],
+                [PermissionAction::Update, PermissionResource::WorkshopJobs],
                 // Deliberately no READ:AUDIT. The trail records what this user
                 // did; reading it is a different authority.
+                //
+                // M22 — and deliberately no STAFF either, which is a different
+                // kind of exclusion from every other one here. The rest of this
+                // list is about authority: what a clerk may change. This one is
+                // about privacy: what each person in the workshop earns is not
+                // something the person at the counter needs in order to capture
+                // the day's transactions, and a module that showed every wage in
+                // the building to whoever was on the till would be wrong even if
+                // they could not edit any of it.
             ],
         );
     }

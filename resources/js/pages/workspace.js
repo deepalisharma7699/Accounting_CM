@@ -1,5 +1,6 @@
 import auth from '../auth-client';
 import { can } from '../permissions';
+import { clearModuleParams, moduleParams } from '../shell';
 import {
     $, clearFormErrors, esc, setSubmitting, showFormErrors, toast,
 } from '../ui';
@@ -152,9 +153,12 @@ export default async function initWorkspace() {
         return;
     }
 
-    if (new URLSearchParams(window.location.search).get('welcome') === '1') {
+    // Sign-up lands here as `#workspace?welcome=1`. The intent comes from the
+    // shell: a module's URL is a fragment of the dashboard's now.
+    if (moduleParams().get('welcome') === '1') {
         $('#welcome-banner').classList.remove('hidden');
         $('#welcome-banner').classList.add('flex');
+        clearModuleParams();
     }
 
     form.addEventListener('submit', save);

@@ -1,5 +1,15 @@
 # Payments & Receipts
 
+> **Half of this is reachable, half is not.** Collecting against *one document*
+> works from an enabled card: Sales takes a receipt from the invoice its drawer
+> is open on, Purchase pays a bill the same way, and both send an explicit
+> `allocations` entry. What has no screen is the standalone case — a customer
+> clearing three invoices with one cheque, or paying on account before anything
+> is raised — because that lives in the **Transactions** module, which is
+> switched off. `POST /transactions/{id}/allocate`, which settles a receipt that
+> was already taken, has no caller anywhere. See
+> [hidden-modules.md](hidden-modules.md).
+
 Money moving. The simplest real transactions in the product, and deliberately
 the first ones with a business document behind them rather than a hand-written
 voucher.
@@ -165,6 +175,53 @@ on the transaction row, so an unposted payment is **absent** from
 `transaction_payments` rather than filtered out of it — the same structural
 guarantee the ledger relies on. Nulled in the statement that posts.
 
+### `transaction_allocations` — which invoice a receipt paid (M16)
+
+M6 shipped with a limitation it reported rather than papered over: a receipt
+carried a `party_id` and nothing more, so the ledger could say Rajesh Kumar owes
+₹15,000 and not *which* of his three bills that ₹15,000 was left on.
+`transaction_allocations` is the missing link — one row per (settlement, bill)
+pair, carrying how much of the settlement went against that bill.
+
+It sits outside the ledger for the same reason `transaction_payments` does. The
+money already moved; the receipt credited Sundry Debtors and the ledger remains
+the authority on that, unchanged. What no journal entry anywhere records is the
+operator's *decision* that this ₹5,000 was meant for the March invoice rather
+than the April one. That is document detail, in exactly the sense a cheque number
+is.
+
+Everything computed from it stays derived. A bill's paid amount is `SUM(amount)`
+over these rows **plus its own at-counter payment split**, and its due is total −
+paid — recomputed on every read by `BillService::settlementFor()`, never written
+back to the bill. So reversing a receipt or correcting an allocation moves the
+invoice's status by itself, with nothing to remember to update.
+
+| | |
+| --- | --- |
+| Two sources of `paid` | The document's own split (cash taken when the bill was written) **and** every later receipt allocated to it. Counting either alone is how a bill comes to be chased for money already in the bank |
+| `payment_status` | `unpaid` · `partial` · `paid` · `overdue`, derived. Overdue *replaces* the middle two once `tenants.payment_due_days` has run out, because a bills list has one Status column and "partial, forty days old" is a different answer from "partial, entered yesterday" |
+| Default allocation | Oldest first. It is what accounts departments do, and the alternative leaves the oldest debt ageing behind newer invoices the customer keeps paying |
+| Explicit allocation | `allocations: [{bill_transaction_id, amount?}]` on the create request, or `POST /transactions/{id}/allocate` afterwards. An amount left off means "whatever is still owing" |
+| Over-allocation | Refused in both directions — more than the bill has left owing, and more than the receipt is worth. Clamping either would be wrong in a way that is invisible for months |
+| Re-allocating | **Replaces**, and deletes the superseded rows. The one place in this application a record is removed rather than reversed, and safe for the same reason the table sits outside the ledger: no entry was posted when the allocation was written and none is unposted when it goes |
+
+`UPDATE:TRANSACTIONS` guards the allocate route rather than `WRITE`, and that is
+the honest grant: nothing new is posted and nothing already posted is touched.
+
+### `transactions.doc_no` and `document_sequences` (M16)
+
+The number a human refers to a document by — `INV/26-27/1001`. One counter per
+`(tenant, series, financial year)`, taken under `SELECT … FOR UPDATE` **inside
+the posting transaction**.
+
+| | |
+| --- | --- |
+| Why a locked row, not `MAX + 1` | Two clerks posting at once would both read the same maximum. A duplicate invoice number is the one accounting error that cannot be corrected by addition — the workshop has already handed both documents to different customers |
+| Why per series | GST requires the invoice run to be consecutive, and it cannot be if a receipt can take the next number. `INV` · `PUR` · `RCT` · `PAY` · `EXP` · `JV` · `ADJ` · `OB` |
+| Why the year is in the number | The counter resets each April, so without it this year's 1001 and last year's would be one string against two invoices |
+| Why a draft has no number | A number that could be discarded is a gap, and "invoice 1004 does not exist" reads exactly like a suppressed sale whatever the truth was |
+| Why it is taken inside the transaction | A posting that fails its balance check must put the number back. A rollback does that for free; a counter advanced beforehand would not |
+
 ## The party
 
 A settlement's `party_id` is **required**, where a journal's is optional. A
@@ -259,6 +316,23 @@ Silently discarding an edit to a financial document is worse than refusing it.
 | POST | `/transactions/payment` | `WRITE:TRANSACTIONS` |
 | POST | `/transactions/receipt` | `WRITE:TRANSACTIONS` |
 | PATCH | `/transactions/{id}` | `UPDATE:TRANSACTIONS` — drafts, `payments` or `lines` |
+| POST | `/transactions/{id}/allocate` | `UPDATE:TRANSACTIONS` — M16, which bills this money settled |
+| GET | `/transactions/{id}/open-bills` | `READ:TRANSACTIONS` — M16, what it could still be pointed at |
+| GET | `/parties/{id}/statement` | `READ:PARTIES` + `READ:LEDGER` — M16, the §14/§15 counter statement |
+
+`{id}/allocate` takes `UPDATE` rather than `WRITE` because it posts nothing: it
+records which invoice the workshop considers the money to have discharged, which
+is why it can be corrected outright where every other property of a posted
+transaction can only be reversed.
+
+`/parties/{id}/statement` sits **beside** `/parties/{id}/ledger`, not in place of
+it, and both are wanted. The ledger is the accountant's view — every entry that
+moved the party's position, with a running balance that reconciles to the control
+account. The statement is the counter's — one row per document, each saying what
+it was worth and what is left on it. A running balance cannot say which invoice
+the shortfall is on, and a list of invoices cannot be reconciled against a trial
+balance. Its headline totals are read off the control account rather than summed
+from the rows, so the two screens can never come apart.
 
 No new permission. `TRANSACTIONS` is authority to capture business events, and a
 receipt is the most ordinary business event a workshop has — `DATA_ENTRY` holds

@@ -125,6 +125,49 @@ class StockMovement extends Model
     }
 
     /* ---------------------------------------------------------------------
+     | What caused this
+     |-------------------------------------------------------------------- */
+
+    /**
+     * What to call this row on a stock card, when the movement type alone is not
+     * enough to say what happened.
+     *
+     * A reversal is written as an `adjust` — see
+     * {@see \App\Services\Accounting\Posting\StockChange::reversing()}, and that
+     * is right, because a reversal genuinely is a correction and calling it an
+     * `out` would make it indistinguishable in a stock report from a sale that
+     * never happened. But `adjust` is also what a physical count writes, so a
+     * reversed purchase and a stock-take correction came out of the ledger as
+     * the same word with a signed number beside it, and there was no way to tell
+     * which document had taken the stock away.
+     *
+     * The type stays as it is. What changes is that the row can now name the
+     * document behind it, which is the traceability a purchase receipt already
+     * had and its reversal did not.
+     *
+     * Null wherever the type already says everything — an `in` from a purchase,
+     * an `out` from a sale, a hand-entered count — so every other stock card in
+     * the application reads exactly as it did.
+     */
+    public function sourceLabel(): ?string
+    {
+        $transaction = $this->transaction;
+
+        // Purchase documents only. A sale's reversal puts stock back and reads
+        // correctly as an adjustment; widening this would relabel movements on
+        // screens nobody has asked to change.
+        if ($transaction === null
+            || $transaction->reverses_id === null
+            || ! $transaction->type->isPurchaseDocument()) {
+            return null;
+        }
+
+        return $this->type === StockMovementType::Adjust
+            ? sprintf('%s reversed', $transaction->type->label())
+            : null;
+    }
+
+    /* ---------------------------------------------------------------------
      | Amounts
      |-------------------------------------------------------------------- */
 

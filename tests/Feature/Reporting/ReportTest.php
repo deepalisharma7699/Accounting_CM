@@ -2,7 +2,6 @@
 
 namespace Tests\Feature\Reporting;
 
-use App\Enums\ItemType;
 use App\Enums\PartyRole;
 use App\Enums\SystemAccount;
 use App\Enums\TransactionType;
@@ -83,7 +82,7 @@ class ReportTest extends TestCase
      */
     private function tradeOneBearing(?string $date = null): array
     {
-        $variant = $this->variantFor($this->tenant, ItemType::Part);
+        $variant = $this->variantFor($this->tenant, 'part');
         $vendor = $this->vendor();
         $customer = $this->customer();
 

@@ -82,4 +82,54 @@ class TransactionImmutableException extends ApiException
             details: array_filter(['transaction_id' => $id]),
         );
     }
+
+    /**
+     * Correcting a bill that has been paid against.
+     *
+     * A revision cancels the bill and posts its replacement, and a payment
+     * allocated to the cancelled one would be left pointing at a document that
+     * no longer owes anything — money attached to nothing, which is the state a
+     * settlement's allocation exists to make impossible. Undoing that is a
+     * decision about money and has to be made on purpose, so it is asked for
+     * rather than done quietly as a side effect of fixing a quantity.
+     */
+    public static function settled(?int $id, string $paid): self
+    {
+        return new self(
+            message: sprintf(
+                '₹%s has already been paid against this bill, so it cannot be corrected in place — the '.
+                'payment would be left against a cancelled document. Reverse or unallocate the payment '.
+                'first, or raise a debit note for the difference.',
+                $paid,
+            ),
+            status: 409,
+            errorCode: 'TRANSACTION_SETTLED',
+            details: array_filter(['transaction_id' => $id, 'paid' => $paid]),
+        );
+    }
+
+    /**
+     * Correcting a bill that part of has already gone back.
+     *
+     * The same orphan {@see settled()} describes, arrived at through goods rather
+     * than money: a debit note carries `against_transaction_id` pointing at this
+     * bill, and reversing the bill would leave a posted credit note against a
+     * cancelled document. The bill has already been corrected once, and which
+     * correction stands is a decision somebody has to make rather than a side
+     * effect of fixing a quantity.
+     */
+    public static function returnedAgainst(?int $id, string $credited): self
+    {
+        return new self(
+            message: sprintf(
+                '₹%s of this bill has already been sent back on a debit note, so it cannot be corrected in '.
+                'place — the debit note would be left against a cancelled document. Reverse the debit note '.
+                'first, or raise another one for the difference.',
+                $credited,
+            ),
+            status: 409,
+            errorCode: 'TRANSACTION_RETURNED_AGAINST',
+            details: array_filter(['transaction_id' => $id, 'credited' => $credited]),
+        );
+    }
 }

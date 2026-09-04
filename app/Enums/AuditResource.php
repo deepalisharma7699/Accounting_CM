@@ -4,10 +4,17 @@ namespace App\Enums;
 
 use App\Models\Attachment;
 use App\Models\ChartOfAccount;
+use App\Models\Employee;
 use App\Models\Item;
+use App\Models\ItemAttribute;
+use App\Models\ItemBrand;
+use App\Models\ItemCategory;
 use App\Models\ItemVariant;
 use App\Models\Party;
+use App\Models\StaffDesignation;
 use App\Models\Tenant;
+use App\Models\TransactionStaff;
+use App\Models\Unit;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
 
@@ -54,11 +61,74 @@ enum AuditResource: string
     case User = 'user';
 
     /**
+     * The Category Master, and the attribute definitions under it.
+     *
+     * Audited for a reason the other master data does not share: a category is a
+     * *template*, so editing one changes what every product filed under it is
+     * asked to record. Switching an attribute off, or making a required field
+     * optional, silently changes the shape of records created afterwards — and
+     * the products themselves show no edit at all, because none of them was
+     * touched. Without this the trail would say nobody changed anything.
+     */
+    case Category = 'category';
+    case CategoryAttribute = 'category_attribute';
+
+    /**
+     * The Brand Master. Audited for a narrower reason than the category is:
+     * renaming a brand renames it on every product that carries it at once, and
+     * none of those products shows an edit — so without an entry here the trail
+     * would say nobody touched a catalogue that changed under everyone's hands.
+     */
+    case Brand = 'brand';
+
+    /**
+     * The Unit Master. Audited because a unit's *scale* decides whether a
+     * fraction is a legitimate quantity, so widening one retrospectively permits
+     * a half-bearing that was refused an hour earlier.
+     *
+     * The code is write-once and therefore never appears as a change here, which
+     * is the point: a unit that could be renamed from 'kg' to 'metre' would
+     * reinterpret every quantity ever recorded against it.
+     */
+    case Unit = 'unit';
+
+    /**
      * M14's stored files. Audited because deleting the photograph of an invoice
      * is precisely the act a trail exists to record — the file is evidence, and
      * unlike master data there is nothing left behind when it goes.
      */
     case Attachment = 'attachment';
+
+    /**
+     * An employee — M22. Audited because their `pay_rate` and `salary_basis` are
+     * what payroll multiplies by: raising a wage retrospectively changes what
+     * every month run afterwards pays out, and a posted run carries only the
+     * figure it used, not the reason it was that figure. Without an entry here
+     * the trail would say nobody decided anything.
+     *
+     * `left_on` is on the list for a related reason: it is what takes somebody
+     * off the payroll, and a date typed a month early is an underpayment nobody
+     * would think to look for.
+     */
+    case Employee = 'employee';
+
+    /**
+     * The Designation Master. Audited on exactly the reasoning the Brand Master
+     * carries: renaming one renames it on every employee filed under it at once,
+     * and none of those employees shows an edit.
+     */
+    case StaffDesignation = 'staff_designation';
+
+    /**
+     * Who a sale was credited to — M22.
+     *
+     * The one audited row in this application whose *point* is that it can be
+     * changed. A posted invoice is immutable, and correcting the fitter's name
+     * moves no figure on it — so the edit is allowed, and this is the only place
+     * it is written down. "The report says Ramesh did forty jobs last month"
+     * would otherwise be unanswerable the moment anybody doubted it.
+     */
+    case SaleAttribution = 'sale_attribution';
 
     /**
      * @return class-string<Model>
@@ -71,8 +141,15 @@ enum AuditResource: string
             self::Party => Party::class,
             self::Item => Item::class,
             self::Variant => ItemVariant::class,
+            self::Category => ItemCategory::class,
+            self::CategoryAttribute => ItemAttribute::class,
+            self::Brand => ItemBrand::class,
+            self::Unit => Unit::class,
             self::User => User::class,
             self::Attachment => Attachment::class,
+            self::Employee => Employee::class,
+            self::StaffDesignation => StaffDesignation::class,
+            self::SaleAttribution => TransactionStaff::class,
         };
     }
 
@@ -84,8 +161,15 @@ enum AuditResource: string
             self::Party => 'Party',
             self::Item => 'Item',
             self::Variant => 'Variant',
+            self::Category => 'Category',
+            self::CategoryAttribute => 'Category field',
+            self::Brand => 'Brand',
+            self::Unit => 'Unit',
             self::User => 'User',
             self::Attachment => 'Attachment',
+            self::Employee => 'Employee',
+            self::StaffDesignation => 'Designation',
+            self::SaleAttribution => 'Sale attribution',
         };
     }
 
@@ -102,8 +186,19 @@ enum AuditResource: string
             self::Account => '/accounts',
             self::Party => '/parties',
             self::Item, self::Variant => '/items',
+            // The masters live inside the Items workspace rather than on pages
+            // of their own — there is one page in this product — so the trail
+            // links to the module and names the record.
+            self::Category, self::CategoryAttribute, self::Brand, self::Unit => '/items',
             self::User => '/users',
             self::Attachment => '/uploads',
+            // The designation master lives inside the Staff workspace rather
+            // than on a page of its own, exactly as the catalogue masters live
+            // inside Items — so both link to the module and name the record.
+            self::Employee, self::StaffDesignation => '/staff',
+            // The correction is made on the invoice, not on the staff list — a
+            // reader following this row wants the document whose credit moved.
+            self::SaleAttribution => '/sales',
         };
     }
 

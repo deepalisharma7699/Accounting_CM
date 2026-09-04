@@ -2,9 +2,13 @@
 
 namespace App\Repositories\Eloquent;
 
+use App\Enums\PaymentStatus;
+use App\Enums\TransactionStatus;
+use App\Enums\TransactionType;
 use App\Models\Transaction;
 use App\Repositories\Contracts\TransactionRepositoryInterface;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Collection;
 
 class EloquentTransactionRepository implements TransactionRepositoryInterface
 {
@@ -18,6 +22,11 @@ class EloquentTransactionRepository implements TransactionRepositoryInterface
     public function findById(int $id): ?Transaction
     {
         return Transaction::find($id);
+    }
+
+    public function findByClientRef(string $clientRef): ?Transaction
+    {
+        return Transaction::where('client_ref', $clientRef)->first();
     }
 
     public function findWithEntries(int $id): ?Transaction
@@ -45,6 +54,24 @@ class EloquentTransactionRepository implements TransactionRepositoryInterface
         ])->find($id);
     }
 
+    public function postedForParty(int $partyId, TransactionType $type): Collection
+    {
+        return Transaction::query()
+            ->where('party_id', $partyId)
+            ->where('type', $type->value)
+            // Posted only — not `inTheBooks()`. A reversed bill has been
+            // cancelled by a mirroring entry and owes nothing, so including it
+            // would offer the operator a document to settle that is already
+            // settled by construction.
+            ->where('status', TransactionStatus::Posted->value)
+            // What was taken at the counter, so the caller can work out what is
+            // still owing without a query per bill.
+            ->with('payments')
+            ->orderBy('date')
+            ->orderBy('id')
+            ->get();
+    }
+
     public function create(array $attributes): Transaction
     {
         return Transaction::create($attributes);
@@ -62,6 +89,46 @@ class EloquentTransactionRepository implements TransactionRepositoryInterface
         return (bool) $transaction->delete();
     }
 
+    /**
+     * What has discharged a bill, as SQL — its own counter payments, every
+     * receipt allocated to it, and everything returned against it.
+     *
+     * Three sources, and the third is not money at all: a customer who brought
+     * the goods back owes nothing further, and a bill left on the outstanding
+     * list because nobody paid for something they no longer have is a bill
+     * somebody chases for no reason — M18.
+     *
+     * A correlated subquery pair rather than a join, because a join would
+     * multiply a bill's rows by its payments and turn every other filter on this
+     * query into a lie. Written here rather than computed in PHP because these
+     * filters decide which rows are on the *page*: filtering after pagination
+     * would produce a page count that disagreed with the rows under it, and page
+     * 3 of a five-page list showing four rows.
+     *
+     * Identical in meaning to {@see \App\Services\Accounting\BillService::settlementFor()},
+     * which is the one thing to watch when either changes.
+     */
+    private const PAID_EXPRESSION = "(
+        coalesce((select sum(tp.amount) from transaction_payments tp
+                   where tp.transaction_id = transactions.id), 0)
+      + coalesce((select sum(ta.amount) from transaction_allocations ta
+                   where ta.bill_transaction_id = transactions.id), 0)
+      + coalesce((select sum(tr.total) from transactions tr
+                   where tr.against_transaction_id = transactions.id
+                     and tr.status = 'posted'), 0)
+    )";
+
+    /**
+     * The types a payment status means anything for. A receipt is not unpaid; it
+     * is the payment.
+     *
+     * @var array<int, string>
+     */
+    private const BILLABLE_TYPES = [
+        TransactionType::Sale->value,
+        TransactionType::Purchase->value,
+    ];
+
     public function paginate(array $filters, int $perPage): LengthAwarePaginator
     {
         $sort = in_array($filters['sort'] ?? null, self::SORTABLE, true)
@@ -71,7 +138,26 @@ class EloquentTransactionRepository implements TransactionRepositoryInterface
         $direction = strtolower((string) ($filters['direction'] ?? 'desc')) === 'asc' ? 'asc' : 'desc';
 
         return Transaction::query()
-            ->when(filled($filters['search'] ?? null), fn ($query) => $query->where('notes', 'like', '%'.$filters['search'].'%'))
+            // The document number as well as the note. "INV/26-27/1012" is what
+            // a customer quotes down the telephone, and a search box that could
+            // not find it would be a search box nobody used — M16.
+            //
+            // The counterparty too, which is the term actually typed most of
+            // the time: somebody holding a paper slip has the customer's name
+            // long before they have the invoice number, and every document
+            // list's search box says so in its own placeholder. A `whereHas`
+            // rather than a join, so a transaction with no party — a journal,
+            // an expense — is simply not matched instead of vanishing from
+            // every other filter's results as well.
+            ->when(filled($filters['search'] ?? null), fn ($query) => $query->where(
+                fn ($search) => $search
+                    ->where('notes', 'like', '%'.$filters['search'].'%')
+                    ->orWhere('doc_no', 'like', '%'.$filters['search'].'%')
+                    ->orWhereHas(
+                        'party',
+                        fn ($party) => $party->where('name', 'like', '%'.$filters['search'].'%')
+                    )
+            ))
             ->when(filled($filters['type'] ?? null), fn ($query) => $query->where('type', $filters['type']))
             // Several types at once — what a tab means, as opposed to what an
             // enum case means. Narrows alongside `type` rather than replacing
@@ -101,6 +187,19 @@ class EloquentTransactionRepository implements TransactionRepositoryInterface
                 filled($filters['party_id'] ?? null),
                 fn ($query) => $query->where('party_id', $filters['party_id'])
             )
+            // Where the bill stands against what has been paid on it — M16.
+            ->when(
+                filled($filters['payment_status'] ?? null),
+                fn ($query) => $this->constrainToPaymentStatus(
+                    $query,
+                    PaymentStatus::from((string) $filters['payment_status']),
+                    $filters['overdue_on_or_before'] ?? null,
+                )
+            )
+            ->when(
+                (bool) ($filters['outstanding'] ?? false),
+                fn ($query) => $this->onlyBills($query)->whereRaw('transactions.total > '.self::PAID_EXPRESSION)
+            )
             /*
             | The tenders behind each transaction — how the money moved, and how
             | much of the document it covered.
@@ -123,6 +222,10 @@ class EloquentTransactionRepository implements TransactionRepositoryInterface
             // lines", and loading every entry of every transaction to learn
             // that would be the classic listing-page mistake.
             ->withCount('entries')
+            // And the document's own rows, which is what a bill list counts —
+            // three ledger entries for a single item is the right answer to a
+            // different question. See TransactionResource::documentLineCount().
+            ->withCount('lines')
             ->orderBy($sort, $direction)
             // A stable tiebreaker: several transactions commonly share a date,
             // and without this their order across pages is whatever the engine
@@ -130,6 +233,77 @@ class EloquentTransactionRepository implements TransactionRepositoryInterface
             ->orderBy('id', 'desc')
             ->paginate($perPage)
             ->withQueryString();
+    }
+
+    /**
+     * Narrow to the documents a payment status is a statement about: posted
+     * sales and purchases.
+     *
+     * Applied by every status filter rather than left to the caller, so
+     * `?payment_status=unpaid` cannot return a stock adjustment on the grounds
+     * that nobody has paid for it.
+     *
+     * @param  \Illuminate\Database\Eloquent\Builder<Transaction>  $query
+     * @return \Illuminate\Database\Eloquent\Builder<Transaction>
+     */
+    private function onlyBills($query)
+    {
+        return $query
+            ->whereIn('type', self::BILLABLE_TYPES)
+            // Posted only. A draft has settled nothing because nothing has
+            // moved, and a reversed bill has been cancelled — neither has a
+            // payment status, as distinct from having an unpaid one.
+            ->where('status', TransactionStatus::Posted->value);
+    }
+
+    /**
+     * One payment status, in SQL.
+     *
+     * `$overdueOnOrBefore` is the date a bill must be dated on or before to have
+     * run past the workshop's terms — computed once by the service that knows the
+     * tenant, because a repository resolving a setting per query would read the
+     * same row for every row it returned. Null where the workshop has set no
+     * terms, in which case nothing is overdue and the filter honestly matches
+     * nothing rather than falling back to a period nobody agreed to.
+     *
+     * @param  \Illuminate\Database\Eloquent\Builder<Transaction>  $query
+     * @return \Illuminate\Database\Eloquent\Builder<Transaction>
+     */
+    private function constrainToPaymentStatus($query, PaymentStatus $status, ?string $overdueOnOrBefore)
+    {
+        $query = $this->onlyBills($query);
+
+        $paid = self::PAID_EXPRESSION;
+
+        // Overdue outranks partial and unpaid: it replaces them rather than
+        // sitting alongside, exactly as BillService::statusOf() has it. So the
+        // other two have to exclude it, or a forty-day-old part-paid invoice
+        // would appear under both.
+        $notOverdue = fn ($builder) => $overdueOnOrBefore === null
+            ? $builder
+            : $builder->whereDate('date', '>', $overdueOnOrBefore);
+
+        return match ($status) {
+            PaymentStatus::Paid => $query->whereRaw("transactions.total <= {$paid}"),
+
+            PaymentStatus::Overdue => $overdueOnOrBefore === null
+                // No terms means nothing is overdue. `whereRaw('1 = 0')` rather
+                // than returning everything: an empty list is the true answer,
+                // and silently ignoring the filter would show the operator a
+                // page of bills they had asked not to see.
+                ? $query->whereRaw('1 = 0')
+                : $query
+                    ->whereRaw("transactions.total > {$paid}")
+                    ->whereDate('date', '<=', $overdueOnOrBefore),
+
+            PaymentStatus::Partial => $notOverdue(
+                $query->whereRaw("{$paid} > 0")->whereRaw("transactions.total > {$paid}")
+            ),
+
+            PaymentStatus::Unpaid => $notOverdue(
+                $query->whereRaw("{$paid} = 0")->where('total', '>', 0)
+            ),
+        };
     }
 
     public function dayBook(?string $from, ?string $to, int $perPage): LengthAwarePaginator
@@ -183,5 +357,30 @@ class EloquentTransactionRepository implements TransactionRepositoryInterface
             ->orderBy('id')
             ->paginate($perPage)
             ->withQueryString();
+    }
+
+    public function outstandingBills(array $types): Collection
+    {
+        $types = array_values(array_intersect($types, self::BILLABLE_TYPES));
+
+        if ($types === []) {
+            return collect();
+        }
+
+        return $this->onlyBills(Transaction::query())
+            ->whereIn('type', $types)
+            ->whereRaw('transactions.total > '.self::PAID_EXPRESSION)
+            // The same expression again, this time as a column rather than as a
+            // filter. Selecting it means the ageing buckets and the "which bills
+            // are open" test are one piece of arithmetic — a second subtraction
+            // in PHP could round differently and put a bill in a bucket the list
+            // it links to would not show.
+            ->selectRaw('transactions.*, (transactions.total - '.self::PAID_EXPRESSION.') as due_amount')
+            ->with(['party:id,name,roles'])
+            // Oldest first: an ageing is read from the far end, and the invoice
+            // at the top of it is the one somebody rings about this afternoon.
+            ->orderBy('date')
+            ->orderBy('id')
+            ->get();
     }
 }

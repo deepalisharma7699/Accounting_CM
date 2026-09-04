@@ -13,18 +13,53 @@
     two records whose halves of a single balance never meet, which is precisely
     what the parties table exists to prevent.
 
-    $copy keys: role, noun, nounPlural, title, subtitle, addLabel, searchLabel,
-    nameColumn, outstandingColumn, dateColumn, dueLabel, historyTab,
-    lifetimeLabel, sinceLabel, createLabel, icon.
+    $copy keys: role, otherNoun, noun, nounPlural, icon, tone, addLabel,
+    formSubtitle, searchLabel, namePlaceholder, nameColumn, outstandingColumn,
+    dateColumn, dueLabel, historyTab, lifetimeLabel, sinceLabel, createLabel.
+
+    The heading and the two subtitles are not among them. They belong to the
+    workspace, which paints them from the config in resources/js/pages/
+    counterparty.js — a copy here would be a second place for a module to be
+    renamed in.
 --}}
 <div class="mx-auto max-w-[1280px]">
 
-    <header class="mb-6 flex flex-wrap items-start justify-between gap-4">
-        <div>
-            <h2 class="text-2xl font-bold leading-tight tracking-tight text-foreground">{{ $copy['title'] }}</h2>
-            <p class="mt-1 text-sm text-muted-foreground">{{ $copy['subtitle'] }}</p>
-        </div>
+    {{--
+        Level 1, form mode — where the module lands (§2A.1).
 
+        The form itself is not written here: it is `#quick-party-form`, the one
+        the bill counter's pickers open, *moved* into this slot. Create is a
+        level-1 surface and edit is a level-2 one, and a module that wrote the
+        fields out twice would have two sets of ids and two places for a
+        validation rule to be added to only one of (§4.4, §5.1). `adoptForm()` in
+        resources/js/workspace.js does the moving.
+    --}}
+    <div data-ws-form>
+        <section class="surface form-card">
+            <div class="form-head">
+                <span class="tile-icon {{ $copy['tone'] }}">
+                    <x-icon :name="$copy['icon']" :size="17" />
+                </span>
+                <div class="min-w-0 flex-1">
+                    <h2 class="text-base font-bold text-foreground">{{ $copy['addLabel'] }}</h2>
+                    <p class="mt-0.5 text-[0.8125rem] text-muted-foreground">{{ $copy['formSubtitle'] }}</p>
+                </div>
+            </div>
+
+            <div data-party-form-slot></div>
+        </section>
+    </div>
+
+    {{-- Level 1, list mode. Exactly one of the two is in the DOM at a time — the
+         other is held detached by the workspace, so its search, its filters and
+         its fetched rows survive every trip to the form and back (§2A.2,
+         §2A.6). --}}
+    <div data-ws-list>
+
+    {{-- No title and no "Add" button: the heading and the one switch control
+         between the two surfaces belong to the workspace, in the same slot in
+         both modes. A second create button here is what §2A.3 forbids. --}}
+    <header class="mb-6 flex flex-wrap items-start justify-end gap-4">
         <div class="flex flex-wrap items-center gap-2">
             <div class="search-pill w-56">
                 <x-icon name="search" :size="15" />
@@ -81,12 +116,6 @@
 
                 <div id="sort-panel" class="row-menu hidden"></div>
             </div>
-
-            <button type="button" id="new-party" class="btn btn-primary btn-sm hidden h-[2.375rem]"
-                    data-requires-permission="WRITE:PARTIES">
-                <x-icon name="user-plus" :size="15" />
-                {{ $copy['addLabel'] }}
-            </button>
         </div>
     </header>
 
@@ -186,6 +215,8 @@
             <div class="flex items-center gap-1" id="parties-pager"></div>
         </div>
     </div>
+
+    </div>{{-- /data-ws-list --}}
 </div>
 
 {{--
@@ -264,132 +295,11 @@
     </div>
 </div>
 
-{{-- Create / edit --}}
-<div id="party-modal" class="modal-backdrop hidden" data-modal role="dialog" aria-modal="true"
-     aria-labelledby="party-modal-title">
-    <div class="modal-panel max-w-xl">
-        <form id="party-form" novalidate>
-            <input type="hidden" name="id">
-
-            <div class="flex items-start justify-between border-b border-muted px-6 py-5">
-                <div>
-                    <h2 id="party-modal-title" class="text-base font-semibold text-foreground">{{ $copy['addLabel'] }}</h2>
-                    <p class="mt-0.5 text-[0.78125rem] text-muted-foreground" id="party-modal-subtitle">
-                        Enter the {{ $copy['noun'] }}'s contact and business details.
-                    </p>
-                </div>
-                <button type="button" class="btn btn-ghost btn-icon" data-modal-close aria-label="Close">
-                    <x-icon name="x" :size="18" />
-                </button>
-            </div>
-
-            <div class="max-h-[65vh] space-y-4 overflow-y-auto px-6 py-5">
-                <p class="hidden rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-3 text-[0.8125rem] text-rose-700"
-                   data-form-banner role="alert"></p>
-
-                <div>
-                    <label for="party-name" class="field-label">{{ $copy['nameColumn'] }}</label>
-                    <input id="party-name" name="name" type="text" class="field-input" required
-                           autocomplete="off" placeholder="{{ $copy['namePlaceholder'] }}">
-                    <p class="mt-1.5 text-xs text-muted-foreground">
-                        Names are unique, because two records with one name split a single balance in two.
-                    </p>
-                    <p class="field-error hidden" data-error-for="name"></p>
-                </div>
-
-                {{-- The role this screen is for is ticked and left alone; the
-                     other is offered, because the counterparty who is both is
-                     common and creating them twice is the mistake this box
-                     prevents. Checkboxes rather than a select for the same
-                     reason: the roles are genuinely multi-value. --}}
-                <fieldset>
-                    <legend class="field-label">Role</legend>
-                    <div class="flex flex-wrap gap-4 pt-1" id="party-roles">
-                        @foreach (\App\Enums\PartyRole::cases() as $role)
-                            <label class="flex items-center gap-2 text-sm text-secondary-foreground">
-                                <input type="checkbox" name="roles" value="{{ $role->value }}"
-                                       class="size-4 rounded border-border text-primary focus:ring-ring"
-                                       @checked($role->value === $copy['role'])>
-                                {{ $role->label() }}
-                                <span class="text-xs text-muted-foreground">({{ $role->positionLabel() }})</span>
-                            </label>
-                        @endforeach
-                    </div>
-                    <p class="mt-1.5 text-xs text-muted-foreground">
-                        Tick both if you sell to them and buy from them — they will have one combined ledger,
-                        and appear on both screens.
-                    </p>
-                    <p class="field-error hidden" data-error-for="roles"></p>
-                </fieldset>
-
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <div>
-                        <label for="party-phone" class="field-label">Phone</label>
-                        <input id="party-phone" name="phone" type="tel" class="field-input"
-                               autocomplete="off" placeholder="98765 43210">
-                        <p class="field-error hidden" data-error-for="phone"></p>
-                    </div>
-
-                    <div>
-                        <label for="party-gstin" class="field-label">
-                            GSTIN <span class="font-normal text-muted-foreground">(optional)</span>
-                        </label>
-                        <input id="party-gstin" name="gstin" type="text" maxlength="15"
-                               class="field-input font-mono uppercase" autocomplete="off"
-                               placeholder="27AAAAA0000A1Z5">
-                        <p class="mt-1.5 text-xs text-muted-foreground" id="party-state-hint">
-                            The first two digits set the state, which decides CGST/SGST or IGST.
-                        </p>
-                        <p class="field-error hidden" data-error-for="gstin"></p>
-                    </div>
-                </div>
-
-                <div>
-                    <label for="party-email" class="field-label">
-                        Email <span class="font-normal text-muted-foreground">(optional)</span>
-                    </label>
-                    <input id="party-email" name="email" type="email" class="field-input" autocomplete="off">
-                    <p class="field-error hidden" data-error-for="email"></p>
-                </div>
-
-                <div>
-                    <label for="party-address" class="field-label">
-                        Address <span class="font-normal text-muted-foreground">(optional)</span>
-                    </label>
-                    <textarea id="party-address" name="address" rows="2" class="field-input !h-auto py-2"
-                              placeholder="Shop / Plot no., Area, City – Pincode"></textarea>
-                    <p class="field-error hidden" data-error-for="address"></p>
-                </div>
-
-                <div>
-                    <label for="party-notes" class="field-label">
-                        Notes <span class="font-normal text-muted-foreground">(optional)</span>
-                    </label>
-                    <textarea id="party-notes" name="notes" rows="2" class="field-input !h-auto py-2"
-                              placeholder="Payment terms, site contact, anything worth remembering."></textarea>
-                    <p class="field-error hidden" data-error-for="notes"></p>
-                </div>
-
-                {{-- Deliberately absent: an opening balance, which the design's
-                     form offers here. It is a posting, not a contact detail, and
-                     it belongs to the go-live screen that balances every such
-                     figure against the others. Taking it on this form would let
-                     somebody put money into the books through a dialog whose
-                     other seven fields are a phone number and an address. --}}
-                <p class="rounded-[10px] border border-border bg-background px-3.5 py-2.5 text-xs text-muted-foreground">
-                    Opening balances are declared together on
-                    <a href="{{ route('opening.index') }}" class="font-medium text-primary hover:underline">Opening
-                    balances</a>, where they are balanced against everything else the workshop started with.
-                </p>
-            </div>
-
-            <div class="flex gap-2 border-t border-muted px-6 py-4">
-                <button type="button" class="btn btn-secondary flex-1" data-modal-close>Cancel</button>
-                <button type="submit" class="btn btn-primary flex-1" id="party-submit">{{ $copy['addLabel'] }}</button>
-            </div>
-        </form>
-    </div>
-</div>
+{{-- Create / edit — the shared record form, which the bill counter opens too.
+     Included rather than written here: it was a copy of the counter's drawer
+     with different fields and different validation, and the two had already
+     drifted. See components/quick-party.js. --}}
+@include('partials.quick-party-modal')
 
 {{-- The statement. Every entry that moved their position, both sides of it, for
      the counterparty who is both — a combined ledger, not this screen's half. --}}
@@ -434,4 +344,3 @@
     </div>
 </div>
 
-@include('partials.confirm-modal')

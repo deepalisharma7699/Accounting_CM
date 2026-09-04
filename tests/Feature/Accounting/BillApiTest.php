@@ -2,7 +2,6 @@
 
 namespace Tests\Feature\Accounting;
 
-use App\Enums\ItemType;
 use App\Enums\PartyRole;
 use App\Models\Party;
 use App\Models\Tenant;
@@ -56,7 +55,7 @@ class BillApiTest extends TestCase
     #[Test]
     public function an_owner_can_record_a_sale_over_the_counter(): void
     {
-        $motor = $this->variantFor($this->tenant, ItemType::Motor);
+        $motor = $this->variantFor($this->tenant, 'motor');
         $customer = $this->party(PartyRole::Customer);
 
         $this->receiveStock($this->tenant, $motor, '4', '8000.00');
@@ -90,7 +89,7 @@ class BillApiTest extends TestCase
     #[Test]
     public function a_purchase_arrives_on_its_own_route(): void
     {
-        $copper = $this->variantFor($this->tenant, ItemType::BulkMaterial);
+        $copper = $this->variantFor($this->tenant, 'bulk_material');
         $vendor = $this->party(PartyRole::Vendor);
 
         $this->withHeaders($this->authHeader($this->owner))
@@ -111,7 +110,7 @@ class BillApiTest extends TestCase
     #[Test]
     public function selling_below_cost_comes_back_as_a_warning_on_a_created_response(): void
     {
-        $motor = $this->variantFor($this->tenant, ItemType::Motor);
+        $motor = $this->variantFor($this->tenant, 'motor');
         $customer = $this->party(PartyRole::Customer);
 
         $this->receiveStock($this->tenant, $motor, '2', '9000.00');
@@ -161,7 +160,7 @@ class BillApiTest extends TestCase
     #[Test]
     public function showing_a_bill_returns_its_tax_summary_and_margin(): void
     {
-        $motor = $this->variantFor($this->tenant, ItemType::Motor);
+        $motor = $this->variantFor($this->tenant, 'motor');
         $customer = $this->party(PartyRole::Customer);
 
         $this->receiveStock($this->tenant, $motor, '2', '8000.00');
@@ -204,7 +203,7 @@ class BillApiTest extends TestCase
     public function another_workshops_variant_cannot_be_billed(): void
     {
         [$other] = $this->tenantWithUser();
-        $theirs = $this->variantFor($other, ItemType::Part);
+        $theirs = $this->variantFor($other, 'part');
         $customer = $this->party(PartyRole::Customer);
 
         $this->withHeaders($this->authHeader($this->owner))
@@ -221,7 +220,7 @@ class BillApiTest extends TestCase
     #[Test]
     public function a_draft_bill_echoes_its_request_without_pretending_to_be_priced(): void
     {
-        $motor = $this->variantFor($this->tenant, ItemType::Motor);
+        $motor = $this->variantFor($this->tenant, 'motor');
         $customer = $this->party(PartyRole::Customer);
 
         $response = $this->withHeaders($this->authHeader($this->owner))

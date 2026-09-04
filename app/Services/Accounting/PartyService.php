@@ -90,6 +90,14 @@ class PartyService
 
         $this->assertNameAvailable($name);
 
+        $this->assertNotTheSameVendorTwice(
+            $name,
+            $roles,
+            $gstin,
+            $this->trimmed($data['phone'] ?? null),
+            $this->trimmed($data['address'] ?? null),
+        );
+
         $party = $this->parties->create([
             'name' => $name,
             'roles' => $roles,
@@ -268,6 +276,101 @@ class PartyService
         $value = trim((string) ($value ?? ''));
 
         return $value === '' ? null : $value;
+    }
+
+    /**
+     * Refuse a second **vendor** carrying an existing vendor's phone number *and*
+     * GSTIN, where nothing on the record tells the two apart.
+     *
+     * A GSTIN alone is deliberately only a warning — see {@see othersSharingGstin()},
+     * and that stays exactly as it was, because a business with branches files one
+     * GSTIN across all of them. But a GSTIN *and* a phone number together are not
+     * two branches: they are one desk, and the second record is the same supplier
+     * entered twice. That splits their balance in half, puts two identical rows in
+     * every picker, and cannot be merged afterwards — `transactions.party_id` is
+     * restrictOnDelete, so neither record can be removed once either has been
+     * billed. A warning after the fact is no use against a mistake with no
+     * recovery path.
+     *
+     * ## The branch that really is a branch
+     *
+     * Allowed, and this is what the address is for. A second branch reached on the
+     * same switchboard is a real thing; a second branch at the same *address* is
+     * not. So the refusal lifts as soon as the new record carries an address the
+     * existing one does not — which is the distinguishing detail somebody would
+     * have had to write down anyway to tell the two apart on a screen.
+     *
+     * ## Vendors only
+     *
+     * Scoped to the role this was found on, and left alone for customers. A
+     * workshop's customer list legitimately holds several people on one household
+     * or fleet number, and hard-blocking that would refuse a real counter sale at
+     * the moment somebody is standing there — a different trade-off with a
+     * different answer, which nobody has asked for.
+     *
+     * @param  array<int, string>  $roles
+     */
+    private function assertNotTheSameVendorTwice(
+        string $name,
+        array $roles,
+        ?string $gstin,
+        ?string $phone,
+        ?string $address,
+    ): void {
+        if ($gstin === null || $phone === null || ! in_array(PartyRole::Vendor->value, $roles, true)) {
+            return;
+        }
+
+        $twin = $this->parties->sharingGstin($gstin)->first(fn (Party $other) => $other->isVendor()
+            && $other->is_active
+            && $this->samePhone($other->phone, $phone)
+            // An address only distinguishes when it is actually different. Two
+            // blank ones say nothing, and a repeat of the existing one says the
+            // same nothing more loudly.
+            && ($address === null || $this->sameAddress($other->address, $address)));
+
+        if ($twin === null) {
+            return;
+        }
+
+        throw new ConflictException(
+            "{$twin->name} is already on the books with this phone number and this GSTIN, so \"{$name}\" ".
+            'would be the same supplier twice — and once either has been billed, the two can no longer be '.
+            'merged. Use the existing record, or, if this really is a separate branch, give it the '.
+            'address that tells them apart.',
+            'PARTY_DUPLICATE_CONTACT',
+            [
+                'field' => 'phone',
+                'existing' => ['id' => $twin->id, 'name' => $twin->name],
+            ],
+        );
+    }
+
+    /**
+     * Two phone numbers are the same number when their digits are.
+     *
+     * Spacing, dashes and a leading +91 are how the same desk gets entered four
+     * ways, and a comparison that took them literally would let every one of them
+     * through — which is the duplicate this refusal exists to catch.
+     */
+    private function samePhone(?string $left, ?string $right): bool
+    {
+        $digits = static fn (?string $value) => preg_replace('/\D+/', '', (string) $value);
+
+        $left = $digits($left);
+        $right = $digits($right);
+
+        // A 10-digit number and the same one written with its country code are
+        // the same number, so they are compared by their last ten digits — the
+        // part that identifies the line rather than the route to it.
+        return $left !== '' && $right !== '' && substr($left, -10) === substr($right, -10);
+    }
+
+    private function sameAddress(?string $left, ?string $right): bool
+    {
+        $normalise = static fn (?string $value) => preg_replace('/[^a-z0-9]+/', '', strtolower((string) $value));
+
+        return $normalise($left) === $normalise($right);
     }
 
     private function assertNameAvailable(string $name, ?int $exceptId = null): void

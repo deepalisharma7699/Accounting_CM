@@ -31,10 +31,14 @@ use Illuminate\Support\Carbon;
  * @property string $timezone
  * @property string $currency
  * @property Carbon|null $books_start_date
+ * @property int|null $payment_due_days
+ * @property bool $allow_negative_stock
+ * @property bool $round_off_invoices
  */
 #[Fillable([
     'name', 'slug', 'gstin', 'address', 'state_code', 'status',
     'financial_year_start_month', 'timezone', 'currency', 'books_start_date',
+    'payment_due_days', 'allow_negative_stock', 'round_off_invoices',
 ])]
 class Tenant extends Model
 {
@@ -74,6 +78,19 @@ class Tenant extends Model
         return [
             'name', 'slug', 'gstin', 'address', 'state_code', 'status',
             'financial_year_start_month', 'timezone', 'currency', 'books_start_date',
+            // Changes nothing about a posted figure and changes which bills the
+            // workshop is told to chase — which is precisely the kind of setting
+            // M13 exists to keep a record of.
+            'payment_due_days',
+            // And the one that decides whether a bill for stock the shelf does
+            // not hold is refused or merely flagged. "Why did this go through?"
+            // is answered by one row here and by nothing in the ledger.
+            'allow_negative_stock',
+            // And the one that decides whether the customer is charged
+            // ₹1,062.36 or ₹1,062. "Why is this invoice a rupee off the
+            // quotation?" is a question about a date and a setting, and the
+            // setting is only answerable from here.
+            'round_off_invoices',
         ];
     }
 
@@ -101,7 +118,26 @@ class Tenant extends Model
             'status' => TenantStatus::class,
             'financial_year_start_month' => 'integer',
             'books_start_date' => 'date',
+            'payment_due_days' => 'integer',
+            'allow_negative_stock' => 'boolean',
+            'round_off_invoices' => 'boolean',
         ];
+    }
+
+    /**
+     * The day a bill dated `$date` stops being merely unpaid and starts being
+     * overdue — M16.
+     *
+     * Null where the workshop has not set terms, and that is the answer rather
+     * than a missing one: a counter trade settles on the spot, and an ageing
+     * computed against terms nobody agreed to would only mislead. Nothing is
+     * reported overdue until somebody says what overdue means here.
+     */
+    public function dueDateFor(DateTimeInterface $date): ?CarbonImmutable
+    {
+        return $this->payment_due_days === null
+            ? null
+            : CarbonImmutable::instance($date)->startOfDay()->addDays($this->payment_due_days);
     }
 
     /**

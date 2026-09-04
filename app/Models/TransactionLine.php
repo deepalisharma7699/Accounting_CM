@@ -2,7 +2,7 @@
 
 namespace App\Models;
 
-use App\Enums\UnitOfMeasure;
+use App\Casts\UnitCast;
 use App\Models\Concerns\BelongsToTenant;
 use App\Services\Accounting\Tax\GstRate;
 use App\Support\Money;
@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
 /**
@@ -38,9 +39,10 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property int $item_id
  * @property int|null $variant_id
  * @property int $line_no
+ * @property int|null $against_line_id
  * @property string $description
  * @property string $quantity
- * @property UnitOfMeasure $unit
+ * @property \App\Support\Units\UnitDefinition $unit
  * @property string $unit_price
  * @property string $discount_amount
  * @property string $taxable_value
@@ -54,7 +56,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property string|null $memo
  */
 #[Fillable([
-    'tenant_id', 'transaction_id', 'item_id', 'variant_id', 'line_no',
+    'tenant_id', 'transaction_id', 'item_id', 'variant_id', 'line_no', 'against_line_id',
     'description', 'quantity', 'unit', 'unit_price', 'discount_amount',
     'taxable_value', 'hsn_sac', 'gst_rate',
     'cgst_amount', 'sgst_amount', 'igst_amount', 'line_total',
@@ -83,7 +85,10 @@ class TransactionLine extends Model
     protected function casts(): array
     {
         return [
-            'unit' => UnitOfMeasure::class,
+            // A copy of what the unit was called when the invoice was issued, not
+            // a live reference — which is exactly why the column stayed a string
+            // when the Unit Master replaced the enum. See UnitCast.
+            'unit' => UnitCast::class,
             'quantity' => 'decimal:3',
             'unit_price' => 'decimal:2',
             'discount_amount' => 'decimal:2',
@@ -123,6 +128,31 @@ class TransactionLine extends Model
     public function variant(): BelongsTo
     {
         return $this->belongsTo(ItemVariant::class, 'variant_id');
+    }
+
+    /**
+     * The invoice line this one credits back, if it is a credit-note line — M18.
+     *
+     * @return BelongsTo<self, $this>
+     */
+    public function against(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'against_line_id');
+    }
+
+    /**
+     * The credit-note lines taken against this one.
+     *
+     * What "how much of this has already come back?" is a sum over — and the
+     * reason a return points at a *line* rather than at the bill: an invoice
+     * very often carries the same variant twice at two prices, and matching by
+     * variant would credit the customer at whichever the matcher found first.
+     *
+     * @return HasMany<self, $this>
+     */
+    public function returns(): HasMany
+    {
+        return $this->hasMany(self::class, 'against_line_id');
     }
 
     /**

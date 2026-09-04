@@ -159,6 +159,49 @@ Reported, never refused, and never silently accepted:
 The save succeeds — a second branch is a real arrangement — and the duplicate is
 put in front of the user while they can still merge the two.
 
+### Except a vendor carrying both the same GSTIN *and* the same phone number
+
+That combination is refused (`PARTY_DUPLICATE_CONTACT`, 409), because it is not
+two branches: it is one desk, and the second record is the same supplier entered
+twice. A warning after the fact is no use against it — the two split that
+supplier's balance in half, sit side by side in every picker with identical
+contact details, and cannot be merged once either has been billed, because
+`transactions.party_id` is `restrictOnDelete` and neither row can then be removed.
+There is no recovery path, so the refusal has to be at creation time.
+
+**The way through is the address.** A second branch reached on the same
+switchboard is a real thing; a second branch at the same address is not. So the
+refusal lifts as soon as the new record carries an address the existing one does
+not — which is the distinguishing detail somebody would have had to write down
+anyway to tell the two apart on a screen. The GSTIN warning still fires.
+
+Phone numbers are compared by their digits, last ten first, so `+91 98765 00001`
+and `9876500001` are the same line — the same desk written four ways is the same
+desk, and a literal comparison would let every one of them through.
+
+**Vendors only, and on create only.** A workshop's customer list legitimately
+holds several people on one household or fleet number, and hard-blocking that
+would refuse a real counter sale while somebody is standing at the desk — a
+different trade-off with a different answer. Editing an existing party into a
+duplicate is likewise not covered; the mistake this is aimed at is the one made
+while adding a supplier from a purchase bill's picker, which is where it happens.
+
+### The name has to survive leaving the browser
+
+`name` is capped at 150 characters, has every run of whitespace folded to one
+ordinary space, and refuses `<`, `>` and control characters — on create and on
+update alike, because a counterparty who is both a customer and a vendor must
+not be saveable one way and refused the other.
+
+This is not an XSS guard: the front end escapes the field correctly and always
+did. It is that a name reading `<script>alert(1)</script>` prints that way on
+every statement, remittance advice and export the workshop sends out, in
+renderers that have none of HTML's rules — and a control character is invisible
+in the box that accepted it while corrupting the line it lands on. Refused rather
+than stripped, because saving a different name than the one somebody typed is its
+own bug. Curly quotes, ampersands, em dashes and every script Unicode carries are
+all still names, and all still accepted.
+
 ## Archiving and deletion
 
 Same rule as an account, for the same reason.
@@ -200,6 +243,7 @@ and balance checks there.
 | Party not in this workshop | `PARTY_UNKNOWN` | 422 |
 | Party archived | `PARTY_ARCHIVED` | 422 |
 | Duplicate name | `PARTY_NAME_TAKEN` | 409 |
+| A vendor on an existing vendor's phone *and* GSTIN | `PARTY_DUPLICATE_CONTACT` | 409 |
 | No role at all | `PARTY_ROLE_REQUIRED` | 409 |
 | Deleting a party with transactions | `PARTY_IN_USE` | 409 |
 
@@ -220,8 +264,9 @@ to make impossible.
 | --- | --- | --- |
 | GET | `/parties` | `READ:PARTIES` |
 | GET | `/parties/meta` | `READ:PARTIES` |
-| GET | `/parties/{id}` | `READ:PARTIES` |
+| GET | `/parties/{id}` | `READ:PARTIES` — carries `outstanding` |
 | GET | `/parties/{id}/ledger` | `READ:PARTIES` **+** `READ:LEDGER` |
+| GET | `/parties/{id}/statement` | `READ:PARTIES` **+** `READ:LEDGER` |
 | POST | `/parties` | `WRITE:PARTIES` |
 | PATCH | `/parties/{id}` | `UPDATE:PARTIES` — also archive/restore |
 | DELETE | `/parties/{id}` | `DELETE:PARTIES` — untraded parties only |
@@ -233,7 +278,8 @@ it, and `POST /transactions/journal` accepts an optional `party_id`.
 
 | | `PARTIES` | `LEDGER` |
 | --- | --- | --- |
-| Authority to | Know who exists | Read the money |
+| Authority to | Know who exists, **and where they stand** | Read the books |
+| Reaches | `outstanding`, `lifetime` — two figures per side | Every entry that moved them, with a running balance |
 | `OWNER` | Read, write, update, delete | ✅ |
 | `DATA_ENTRY` | Read, **write** | ❌ |
 
@@ -241,14 +287,35 @@ it, and `POST /transactions/journal` accepts an optional `party_id`.
 the customer standing at the counter is new far more often than the chart needs
 a new account. A clerk who had to fetch the owner to record a walk-in would end
 up recording the sale against the wrong party, or not at all. Editing and
-deleting an existing party stays with the owner — and reading what anyone owes
-needs `LEDGER`, which `DATA_ENTRY` does not have.
+deleting an existing party stays with the owner.
+
+**The line falls between one number and the entries behind it** — M21, and it
+moved. `outstanding` travels with the record under `READ:PARTIES`, because
+deciding whether to sell on credit is part of writing the invoice: the person
+who may raise one is exactly the person who must be able to see the credit
+already extended, and at a counter that person holds `PARTIES` and
+`TRANSACTIONS` and no `LEDGER`. Requiring `LEDGER` for one figure would mean the
+only user who can extend credit is the one who cannot see how much has been
+extended.
+
+What stays behind `LEDGER` is the statement and the ledger — every entry in date
+order, the running balance, which invoices are open and by how much. That is a
+different question asked by a different person, and `PartyApiTest` asserts both
+halves: a clerk reads the position and is refused both of those routes.
 
 ## Screens
 
-`/customers` and `/vendors`, both gated on `READ:PARTIES` plus workshop
-membership. `/parties` — the single screen these replaced — redirects to
-`/customers`.
+Two cards on the dashboard, both gated on `READ:PARTIES` plus workshop
+membership, and both opened in the mounted shell rather than navigated to
+(CLAUDE.md §1.4). The old paths are redirects: `/vendors` and `/customers` land
+on `/dashboard#vendors` and `/dashboard#customers`, and `/parties` — the single
+screen these replaced — redirects one step further to `/dashboard#customers`.
+
+**Two modules, not one screen with a switch.** Separate cards, separate lists,
+separate wording, and one implementation behind them — `initCounterpartyPage`
+is a factory, so each closes over its own parties, filters, surfaces and
+workspace. The shell keeps both mounted once they have been opened and neither
+can see the other's state.
 
 **Two screens over one table.** Each filters on role *membership*, not equality,
 which is the whole reason the split is safe: a counterparty holding both roles
@@ -258,11 +325,21 @@ reintroduce is two *records* for one counterparty, which splits a single balance
 into halves that are never netted or even looked at together. Three things guard
 against it:
 
-- The create form offers **both** role checkboxes, with the current screen's
-  ticked. Somebody adding a supplier they also sell to ticks the second box
-  rather than creating a second record.
-- Dropping this screen's role saves fine and reports where the record went,
-  rather than letting it vanish and read as a failed save.
+- **The form has no role field.** What a record gets is decided by where it was
+  written from: the Vendors module writes a vendor, the Customers module a
+  customer, and a picker on a purchase bill writes the vendor that document
+  needs. Somebody adding a supplier is not making a modelling decision, and a
+  pair of checkboxes asked them to.
+- **A name that is already taken is offered, not refused.** `PARTY_NAME_TAKEN`
+  is the moment the question actually means something, so that is where it is
+  asked: "They are recorded as a vendor — mark them as a customer as well?"
+  Accepting PATCHes the role onto the record that exists, which is how one
+  counterparty stays one row on both lists. Declining leaves the server's
+  message, which explains what a second record would cost. Offered only to a
+  caller who may update a party; a data-entry clerk sees the message instead.
+- **An edit never changes the roles.** The payload carries whatever the record
+  already holds, so editing a dual-role counterparty from the Vendors screen
+  cannot quietly drop the customer half of them.
 - **The statement is always the combined ledger**, both control accounts,
   whichever list opened it. Scoping it to the role of the screen would hide half
   of what a dual-role counterparty owes — and the hidden half is the one nobody
@@ -276,6 +353,29 @@ The two screens share `resources/views/partials/counterparty-page.blade.php` and
 `resources/js/pages/counterparty.js`; `customers.js` and `vendors.js` are
 one-line wrappers supplying the wording and which side to lead with. Two
 near-identical copies is how a fix lands on one screen and not the other.
+
+### The shape of the module
+
+The §2A flow, inherited from `workspace.js` rather than written here:
+
+```
+card → ADD VENDOR form → "Show list" beside the heading → the table
+                                                        → row → drawer → confirm
+```
+
+It opens on the **record form**, because writing a counterparty down is what
+somebody opens this module to do; the list is fetched the first time it is asked
+for and held from then on. The form is not a second copy of the one the bill
+counter's pickers open — it is that form, `components/quick-party.js`, moved
+into the module's level-1 slot for a create and into its drawer for an edit. One
+set of fields, one set of validation rules, wherever somebody is standing, and
+each open records on the node itself what it is writing — the two modules would
+otherwise share one context and the second save would carry the first's role. A
+save stays on the form and clears it for the next record; the new row is flagged
+and highlighted whenever the list is next shown.
+
+A caller who holds `READ:PARTIES` without `WRITE:PARTIES` lands on the list and
+is offered no switch to a form they cannot use.
 
 One counterparty opens in a drawer over the list — Overview, their bills, their
 payments, and who changed the record — and the statement as a modal. Both are

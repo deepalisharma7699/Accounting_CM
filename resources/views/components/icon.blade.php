@@ -23,6 +23,12 @@
         'phone' => '<path d="M13.83 19.83a16 16 0 0 1-9.66-9.66 2 2 0 0 1 .44-2.1l1.27-1.27a1 1 0 0 1 1.55.15l1.7 2.55a1 1 0 0 1-.12 1.26l-.7.7a12.5 12.5 0 0 0 4.1 4.1l.7-.7a1 1 0 0 1 1.26-.12l2.55 1.7a1 1 0 0 1 .15 1.55l-1.27 1.27a2 2 0 0 1-2.1.44"/>',
         'user-plus' => '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6"/><path d="M22 11h-6"/>',
         'download' => '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/>',
+        // M20 — sharing an invoice. A printer, a chain link and the three-node
+        // share glyph every mobile platform draws, so the three controls on the
+        // customer's copy read as what they are without their labels.
+        'printer' => '<path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 9V3a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v6"/><rect x="6" y="14" width="12" height="8" rx="1"/>',
+        'link' => '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+        'share-2' => '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.59 13.51 6.83 3.98"/><path d="m15.41 6.51-6.82 3.98"/>',
         'book-open' => '<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>',
         'bar-chart' => '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M7 16v-5"/><path d="M12 16V8"/><path d="M17 16v-3"/>',
         'sparkles' => '<path d="M9.9 2.6 8.5 6.4 4.7 7.8l3.8 1.4 1.4 3.8 1.4-3.8 3.8-1.4-3.8-1.4z"/><path d="M18 8.5 17 11l-2.5 1 2.5 1 1 2.5 1-2.5 2.5-1-2.5-1z"/><path d="m14 17-.7 1.8-1.8.7 1.8.7.7 1.8.7-1.8 1.8-.7-1.8-.7z"/>',
@@ -31,6 +37,11 @@
         'pencil' => '<path d="M21.17 6.83a2.83 2.83 0 0 0-4-4L3.5 16.5 2 22l5.5-1.5z"/><path d="m15 5 4 4"/>',
         'trash' => '<path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M10 11v6"/><path d="M14 11v6"/>',
         'x' => '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+        // M22 — Staff. An identity card rather than the `users` glyph the
+        // Customers card already uses, and rather than `user-cog`, which is
+        // Users: three people-shaped cards on one grid have to be tellable apart
+        // at a glance, and the one about a payroll is the one with a card in it.
+        'id-card' => '<rect width="20" height="14" x="2" y="5" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M6 15.5a3.5 3.5 0 0 1 6 0"/><path d="M15 10h4"/><path d="M15 14h4"/>',
         'user-cog' => '<circle cx="10" cy="7" r="4"/><path d="M10.3 15H7a4 4 0 0 0-4 4v2"/><circle cx="18" cy="16" r="3"/><path d="m21.7 14.3-.9.4"/><path d="m15.2 17.3-.9.4"/><path d="m18 12.5.4.9"/><path d="m18 19.6.4.9"/>',
         'chevron-right' => '<path d="m9 18 6-6-6-6"/>',
         'inbox' => '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11"/>',

@@ -2,7 +2,7 @@
 
 namespace App\Support;
 
-use App\Enums\UnitOfMeasure;
+use App\Support\Units\UnitDefinition;
 use InvalidArgumentException;
 use JsonSerializable;
 use Stringable;
@@ -19,7 +19,7 @@ use Stringable;
  * The column type is `DECIMAL(15, 3)` — three decimals, because that is what the
  * trade actually measures to: copper is weighed to the gram and wire is cut to
  * the millimetre. Whether a *fraction* is meaningful at all is a property of the
- * unit rather than of this class; see {@see UnitOfMeasure::isFractional()} and
+ * unit rather than of this class; see {@see UnitDefinition::isFractional()} and
  * {@see isWhole()}.
  *
  * **Signed, deliberately.** A stock movement's direction is its sign, so that a
@@ -274,7 +274,7 @@ final class Quantity implements JsonSerializable, Stringable
     /**
      * Whether this quantity is expressible in the given unit at all.
      */
-    public function fitsUnit(UnitOfMeasure $unit): bool
+    public function fitsUnit(UnitDefinition $unit): bool
     {
         return $unit->isFractional() || $this->isWhole();
     }
@@ -322,7 +322,7 @@ final class Quantity implements JsonSerializable, Stringable
     /**
      * The quantity with its unit, the way a stock report prints it: "2.5 kg".
      */
-    public function withUnit(UnitOfMeasure $unit): string
+    public function withUnit(UnitDefinition $unit): string
     {
         return $this->trimmed().' '.$unit->symbol();
     }

@@ -20,6 +20,13 @@ interface ItemVariantRepositoryInterface
     public function skuExists(string $sku, ?int $exceptId = null): bool;
 
     /**
+     * Whether a barcode is already taken. A scanner cannot choose between two
+     * products carrying one code, so the counter would sell whichever the query
+     * happened to return first.
+     */
+    public function barcodeExists(string $barcode, ?int $exceptId = null): bool;
+
+    /**
      * @return Collection<int, ItemVariant>
      */
     public function forItem(Item $item, bool $activeOnly = false): Collection;

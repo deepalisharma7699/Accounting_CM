@@ -36,6 +36,20 @@ interface TransactionLineRepositoryInterface
     public function forTransaction(int $transactionId): Collection;
 
     /**
+     * Every credit-note line taken against a bill's lines — M18.
+     *
+     * Reached through `against_line_id`, which is why that column exists:
+     * "how much of line 3 has come back?" has to be a sum over one key, and an
+     * invoice very often carries the same variant twice at two prices.
+     *
+     * The stock movement behind each is loaded, because the caller needs both
+     * halves — how many came back, and what they were credited at.
+     *
+     * @return Collection<int, TransactionLine>
+     */
+    public function returnedAgainstBill(int $billId): Collection;
+
+    /**
      * How many bill lines name a variant — what turns deleting one into a
      * refusal, alongside its stock history.
      */

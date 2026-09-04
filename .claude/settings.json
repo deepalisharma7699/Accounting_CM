@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --input-type=module -e ' *)",
+      "Bash(node --check check.mjs)",
+      "Bash(cd \"C:/Users/Neeraj/AppData/Local/Temp/claude/e--GitProjects-Live-Accounting-cm/d354bb6e-dad6-4860-a3af-5bf126031402/scratchpad\" && rm -f check.mjs && sed -n '1178,1200p;1215,1232p' workspace-prototype.html)",
+      "WebFetch(domain:claude.ai)",
+      "Bash(php artisan *)",
+      "Bash(grep -v \"^PHP Warning\\\\|^Warning:\\\\|^$\")",
+      "Bash(grep -rn 'href=\"/\\\\|route\\(' resources/views/modules/ resources/views/partials/ resources/views/bills/)",
+      "Bash(npx -v)",
+      "Read(//c/Program Files/Google/Chrome/Application/**)",
+      "Bash(npm ls *)",
+      "Bash(php artisan tinker '--execute= *)",
+      "Bash(python -)"
+    ]
+  }
+}

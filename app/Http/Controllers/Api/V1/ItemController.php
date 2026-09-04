@@ -2,8 +2,9 @@
 
 namespace App\Http\Controllers\Api\V1;
 
-use App\Enums\ItemType;
-use App\Enums\UnitOfMeasure;
+use App\Enums\AttributeType;
+use App\Enums\PermissionAction;
+use App\Enums\PermissionResource;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Item\IndexItemRequest;
 use App\Http\Requests\Item\StoreItemRequest;
@@ -12,7 +13,11 @@ use App\Http\Requests\Item\UpdateItemRequest;
 use App\Http\Resources\ItemResource;
 use App\Http\Resources\ItemVariantResource;
 use App\Models\Item;
+use App\Models\ItemCategory;
+use App\Services\Inventory\ItemBrandService;
+use App\Services\Inventory\ItemCategoryService;
 use App\Services\Inventory\ItemService;
+use App\Services\Inventory\UnitService;
 use App\Services\Inventory\ItemVariantService;
 use App\Support\ApiResponse;
 use Illuminate\Database\Eloquent\Collection as EloquentCollection;
@@ -35,6 +40,9 @@ class ItemController extends Controller
     public function __construct(
         private readonly ItemService $items,
         private readonly ItemVariantService $variants,
+        private readonly ItemCategoryService $categories,
+        private readonly ItemBrandService $brands,
+        private readonly UnitService $units,
     ) {}
 
     /* ---------------------------------------------------------------------
@@ -67,36 +75,77 @@ class ItemController extends Controller
     /**
      * GET /api/v1/items/meta
      *
-     * The vocabulary of the catalogue: the types, the attributes each is described
-     * by, and the units. Published so a client builds its form from the server's
-     * answer — an attribute schema copied into JavaScript is a copy that drifts,
+     * The vocabulary of the catalogue: the categories, the fields each one asks
+     * for, and the units. Published so a client builds its form from the
+     * server's answer — a schema copied into JavaScript is a copy that drifts,
      * and the drift shows up as a motor saved without its HP.
      *
+     * **This endpoint is what makes the create form universal.** The form has no
+     * knowledge of motors, bearings or LED lamps; it draws whatever fields the
+     * chosen category declares here. Adding a category with six new fields is
+     * therefore a change to this payload and to nothing else — no migration, no
+     * API, no component, no deployment, which is the whole acceptance criterion.
+     *
      * The draft count comes along because every screen that shows the catalogue
-     * wants the review-queue badge, and asking for it separately would be a second
-     * round trip for one integer.
+     * wants the review-queue badge, and asking for it separately would be a
+     * second round trip for one integer.
      */
     public function meta(): JsonResponse
     {
-        return ApiResponse::success([
-            'types' => array_map(fn (ItemType $type) => [
-                'value' => $type->value,
-                'label' => $type->label(),
-                'can_hold_stock' => $type->canHoldStock(),
-                'default_uom' => $type->defaultUom()->value,
-                'tax_code_label' => $type->usesSacCode() ? 'SAC' : 'HSN',
-                // Keyed by attribute name, each with its label, whether it is
-                // required, the fixed values where a fixed set exists, and the
-                // unit suffix a form should print beside the box.
-                'attributes' => $type->attributeSchema(),
-            ], ItemType::cases()),
+        $categories = $this->categories->all(['is_active' => true]);
 
-            'units' => array_map(fn (UnitOfMeasure $unit) => [
-                'value' => $unit->value,
-                'label' => $unit->label(),
-                'symbol' => $unit->symbol(),
+        $payload = $categories->map(fn (ItemCategory $category) => [
+            'value' => (string) $category->id,
+            'id' => (int) $category->id,
+            'parent_id' => $category->parent_id === null ? null : (int) $category->parent_id,
+            'label' => $category->name,
+            'code' => $category->code,
+            'description' => $category->description,
+            'can_hold_stock' => (bool) $category->holds_stock,
+            'default_uom' => $category->default_unit_code ?? 'piece',
+            'default_hsn_sac' => $category->default_hsn_sac,
+            'default_gst_rate' => $category->default_gst_rate === null ? null : (string) $category->default_gst_rate,
+            'tax_code_label' => $category->taxCodeLabel(),
+            // Keyed by field name, each with its label, whether it is required,
+            // its data type, the fixed values where a fixed set exists, and the
+            // unit suffix a form should print beside the box. Inherited fields
+            // are already folded in — a subcategory's schema is its parent's
+            // plus its own.
+            'attributes' => (object) $category->attributeSchema(),
+        ])->values()->all();
+
+        return ApiResponse::success([
+            'categories' => $payload,
+
+            /*
+            | The Brand Master, active rows only.
+            |
+            | Published beside the categories and for the same reason: the create
+            | form's brand dropdown is a table an admin edits, so a copy of it in
+            | the markup would go stale the moment somebody added one. Archived
+            | brands are absent — they are still the answer on the products that
+            | carry them, and must not be offered as the answer to a new one.
+            */
+            'brands' => $this->brands->selectable()->map(fn ($brand) => [
+                'value' => (string) $brand->id,
+                'id' => (int) $brand->id,
+                'label' => $brand->name,
+                'code' => $brand->code,
+            ])->values()->all(),
+
+            'units' => $this->units->selectable()->map(fn ($unit) => [
+                'value' => $unit->code,
+                'label' => $unit->label,
+                'symbol' => $unit->symbol,
+                'kind' => $unit->kind,
+                'decimals' => (int) $unit->decimals,
                 'is_fractional' => $unit->isFractional(),
-            ], UnitOfMeasure::cases()),
+            ])->values()->all(),
+
+            // What an admin may choose when configuring a field. Published for
+            // the same reason the schema is: the Category Master's own form is
+            // built from it.
+            'attribute_types' => AttributeType::catalogue(),
 
             'draft_counts' => [
                 'items' => $this->items->draftCount(),
@@ -121,14 +170,58 @@ class ItemController extends Controller
 
     /**
      * POST /api/v1/items
+     *
+     * The universal create form's endpoint: one submission, one product, and the
+     * first thing on the shelf under it.
+     *
+     * Both halves in one request because "add a Crompton 5 HP motor" is one act,
+     * and making somebody do it in two is how a catalogue fills up with families
+     * that have no variants under them and therefore cannot be sold, priced or
+     * counted. The two-step path is still there for adding a second size to a
+     * product that already exists — see {@see storeVariant()}.
+     *
+     * Opening stock, where the form carried one, is posted as an ordinary stock
+     * adjustment through the same engine the stock screen uses. That needs
+     * WRITE:TRANSACTIONS, which cataloguing does not imply, so a clerk who may
+     * add a bearing but not write to the ledger still gets the bearing — and is
+     * told plainly that the quantity was not recorded.
      */
     public function store(StoreItemRequest $request): JsonResponse
     {
-        $item = $this->items->create($request->payload());
+        $result = $this->items->createWithVariant(
+            $request->universalPayload(),
+            $request->user(),
+            $this->mayPostTransactions($request),
+        );
 
         return ApiResponse::created(
-            new ItemResource($item->load('variants')),
-            'Item created.'
+            new ItemResource($result['item']->load(['variants', 'category'])),
+            'Product created.',
+            $result['opening_skipped_reason'] === null
+                ? []
+                : ['warnings' => [[
+                    'code' => 'OPENING_STOCK_SKIPPED',
+                    'message' => $result['opening_skipped_reason'],
+                ]]],
+        );
+    }
+
+    /**
+     * Whether the caller may write to the ledger, which is what recording
+     * opening stock actually is.
+     *
+     * Checked here rather than on the route, because the *product* half of this
+     * request needs only WRITE:ITEMS and refusing the whole thing would mean a
+     * clerk could not add a bearing at all. Either way the grant is checked on
+     * the server; the form's own gating is presentation only.
+     */
+    private function mayPostTransactions(StoreItemRequest $request): bool
+    {
+        $user = $request->user();
+
+        return $user !== null && $user->hasPermissionTo(
+            PermissionAction::Write->value,
+            PermissionResource::Transactions->value,
         );
     }
 

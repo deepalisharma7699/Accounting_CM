@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Transaction;
 
+use App\Http\Requests\Transaction\Concerns\CarriesClientRef;
 use Illuminate\Foundation\Http\FormRequest;
 
 /**
@@ -14,6 +15,8 @@ use Illuminate\Foundation\Http\FormRequest;
  */
 class StoreJournalRequest extends FormRequest
 {
+    use CarriesClientRef;
+
     /** Matches DECIMAL(15, 2). */
     private const MAX_AMOUNT = '9999999999999.99';
 
@@ -35,6 +38,9 @@ class StoreJournalRequest extends FormRequest
             // is the consequential act here, and it must not be something that
             // happened because a field was left out.
             'post' => ['required', 'boolean'],
+
+            // A retry after a timeout must not become a second document — M17.
+            ...$this->clientRefRules(),
 
             // Optional, and legitimately so: a depreciation entry and a
             // correcting journal have no counterparty. That the party exists,
@@ -78,6 +84,7 @@ class StoreJournalRequest extends FormRequest
             'date' => (string) $this->string('date'),
             'notes' => $this->filled('notes') ? trim((string) $this->string('notes')) : null,
             'post' => $this->boolean('post'),
+            'client_ref' => $this->clientRef(),
             'party_id' => $this->filled('party_id') ? (int) $this->input('party_id') : null,
             'lines' => array_map(fn (array $line) => [
                 'account_id' => (int) ($line['account_id'] ?? 0),

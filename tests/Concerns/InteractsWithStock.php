@@ -2,7 +2,6 @@
 
 namespace Tests\Concerns;
 
-use App\Enums\ItemType;
 use App\Enums\SystemAccount;
 use App\Enums\TransactionType;
 use App\Models\Item;
@@ -54,17 +53,21 @@ trait InteractsWithStock
      |-------------------------------------------------------------------- */
 
     /**
-     * A stocked variant of a given type, with its item loaded — the starting
+     * A stocked variant of a given category, with its item loaded — the starting
      * point of almost every test here.
+     *
+     * The category is named by code, and the four seeded codes are the old
+     * `ItemType` values verbatim — so `variantFor($tenant, 'motor')` means what
+     * `variantFor($tenant, 'motor')` meant.
      */
     protected function variantFor(
         Tenant $tenant,
-        ItemType $type = ItemType::Part,
+        string $category = 'part',
         ?string $reorderLevel = null,
         ?string $sellPrice = null,
     ): ItemVariant {
-        return $this->actingForTenant($tenant, function () use ($type, $reorderLevel, $sellPrice) {
-            $item = Item::factory()->ofType($type)->create();
+        return $this->actingForTenant($tenant, function () use ($category, $reorderLevel, $sellPrice) {
+            $item = Item::factory()->ofCategory($category)->create();
 
             $variant = ItemVariant::factory()->for($item)->create([
                 'label' => $item->name,
@@ -81,7 +84,7 @@ trait InteractsWithStock
      */
     protected function serviceVariantFor(Tenant $tenant, ?string $sellPrice = '800.00'): ItemVariant
     {
-        return $this->variantFor($tenant, ItemType::Service, sellPrice: $sellPrice);
+        return $this->variantFor($tenant, 'service', sellPrice: $sellPrice);
     }
 
     /* ---------------------------------------------------------------------

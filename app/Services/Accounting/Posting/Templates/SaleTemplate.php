@@ -2,6 +2,7 @@
 
 namespace App\Services\Accounting\Posting\Templates;
 
+use App\Enums\BalanceSide;
 use App\Enums\StockMovementType;
 use App\Enums\SystemAccount;
 use App\Enums\TransactionType;
@@ -97,13 +98,18 @@ class SaleTemplate extends BillTemplate
                 continue;
             }
 
-            $posting[] = PostingLine::debit(
+            // Debit COGS and credit Inventory as goods leave — and exactly the
+            // other way round on a sales return, which is the whole of what M18
+            // added here. See BillTemplate::sideFor().
+            $posting[] = PostingLine::on(
+                $this->sideFor(BalanceSide::Debit),
                 $this->accounts->system(SystemAccount::Cogs)->id,
                 $cost,
                 $line->description,
             );
 
-            $posting[] = PostingLine::credit(
+            $posting[] = PostingLine::on(
+                $this->sideFor(BalanceSide::Credit),
                 $this->accounts->system(SystemAccount::Inventory)->id,
                 $cost,
                 $line->description,
@@ -111,13 +117,20 @@ class SaleTemplate extends BillTemplate
         }
 
         $revenue = [];
+        $revenueSide = $this->sideFor(BalanceSide::Credit);
 
         if (! $goods->isZero()) {
-            $revenue[] = PostingLine::credit($this->accounts->system(SystemAccount::Sales)->id, $goods, 'Goods');
+            $revenue[] = PostingLine::on(
+                $revenueSide,
+                $this->accounts->system(SystemAccount::Sales)->id,
+                $goods,
+                'Goods',
+            );
         }
 
         if (! $labour->isZero()) {
-            $revenue[] = PostingLine::credit(
+            $revenue[] = PostingLine::on(
+                $revenueSide,
                 $this->accounts->system(SystemAccount::ServiceIncome)->id,
                 $labour,
                 'Labour',

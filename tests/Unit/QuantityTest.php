@@ -2,7 +2,7 @@
 
 namespace Tests\Unit;
 
-use App\Enums\UnitOfMeasure;
+use App\Support\Units\UnitDefinition;
 use App\Support\Money;
 use App\Support\Quantity;
 use InvalidArgumentException;
@@ -89,9 +89,9 @@ class QuantityTest extends TestCase
     public function it_knows_whether_a_fraction_is_meaningful_for_a_unit(): void
     {
         // 2.5 kg of copper is ordinary; 2.5 bearings is a mistake.
-        $this->assertTrue(Quantity::of('2.5')->fitsUnit(UnitOfMeasure::Kilogram));
-        $this->assertFalse(Quantity::of('2.5')->fitsUnit(UnitOfMeasure::Piece));
-        $this->assertTrue(Quantity::of('3')->fitsUnit(UnitOfMeasure::Piece));
+        $this->assertTrue(Quantity::of('2.5')->fitsUnit(new UnitDefinition('kg', 'Kilogram', 'kg', 'weight', 3)));
+        $this->assertFalse(Quantity::of('2.5')->fitsUnit(new UnitDefinition('piece', 'Piece', 'pc', 'count', 0)));
+        $this->assertTrue(Quantity::of('3')->fitsUnit(new UnitDefinition('piece', 'Piece', 'pc', 'count', 0)));
     }
 
     #[Test]
@@ -99,7 +99,7 @@ class QuantityTest extends TestCase
     {
         $this->assertSame('3', Quantity::of('3')->trimmed());
         $this->assertSame('2.5', Quantity::of('2.5')->trimmed());
-        $this->assertSame('2.5 kg', Quantity::of('2.5')->withUnit(UnitOfMeasure::Kilogram));
+        $this->assertSame('2.5 kg', Quantity::of('2.5')->withUnit(new UnitDefinition('kg', 'Kilogram', 'kg', 'weight', 3)));
     }
 
     #[Test]

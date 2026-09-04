@@ -2,7 +2,6 @@
 
 namespace Tests\Feature\Inventory;
 
-use App\Enums\ItemType;
 use App\Enums\StockMovementType;
 use App\Enums\SystemAccount;
 use App\Enums\TransactionType;
@@ -49,7 +48,7 @@ class StockLedgerTest extends TestCase
     {
         // 10 kg at ₹700 then 10 kg at ₹800 is ₹750/kg — neither price paid.
         [$tenant] = $this->tenantWithUser();
-        $copper = $this->variantFor($tenant, ItemType::BulkMaterial);
+        $copper = $this->variantFor($tenant, 'bulk_material');
 
         $this->receiveStock($tenant, $copper, '10', '700.00');
         $this->receiveStock($tenant, $copper, '10', '800.00');
@@ -67,7 +66,7 @@ class StockLedgerTest extends TestCase
     public function test_an_issue_values_at_the_current_average_and_does_not_change_it(): void
     {
         [$tenant] = $this->tenantWithUser();
-        $copper = $this->variantFor($tenant, ItemType::BulkMaterial);
+        $copper = $this->variantFor($tenant, 'bulk_material');
 
         $this->receiveStock($tenant, $copper, '10', '700.00');
         $this->receiveStock($tenant, $copper, '10', '800.00');
@@ -94,7 +93,7 @@ class StockLedgerTest extends TestCase
         // whole number of paise at any rate, and valuing each issue at a rounded
         // average would leave the Inventory account holding stock nobody has.
         [$tenant] = $this->tenantWithUser();
-        $copper = $this->variantFor($tenant, ItemType::BulkMaterial);
+        $copper = $this->variantFor($tenant, 'bulk_material');
 
         $this->receiveStock($tenant, $copper, '10', '750.10');
 
@@ -118,7 +117,7 @@ class StockLedgerTest extends TestCase
     public function test_a_fractional_quantity_of_a_counted_item_is_refused(): void
     {
         [$tenant] = $this->tenantWithUser();
-        $bearing = $this->variantFor($tenant, ItemType::Part);
+        $bearing = $this->variantFor($tenant, 'part');
 
         $this->expectException(InvalidStockMovementException::class);
 
@@ -128,7 +127,7 @@ class StockLedgerTest extends TestCase
     public function test_a_fractional_quantity_of_a_measured_item_is_ordinary(): void
     {
         [$tenant] = $this->tenantWithUser();
-        $copper = $this->variantFor($tenant, ItemType::BulkMaterial);
+        $copper = $this->variantFor($tenant, 'bulk_material');
 
         $this->receiveStock($tenant, $copper, '2.5', '700.00');
 
@@ -143,7 +142,7 @@ class StockLedgerTest extends TestCase
     public function test_stock_can_go_negative_and_says_so(): void
     {
         [$tenant] = $this->tenantWithUser();
-        $bearing = $this->variantFor($tenant, ItemType::Part);
+        $bearing = $this->variantFor($tenant, 'part');
 
         $this->receiveStock($tenant, $bearing, '2', '400.00');
         $this->issueStock($tenant, $bearing, '5');
@@ -166,7 +165,7 @@ class StockLedgerTest extends TestCase
     public function test_an_issue_against_a_variant_never_bought_posts_at_zero_and_warns(): void
     {
         [$tenant] = $this->tenantWithUser();
-        $bearing = $this->variantFor($tenant, ItemType::Part);
+        $bearing = $this->variantFor($tenant, 'part');
 
         $this->assertTrue(
             $this->actingForTenant($tenant, fn () => $this->stock()->wouldGoNegative($bearing, Quantity::of('1'))),
@@ -188,7 +187,7 @@ class StockLedgerTest extends TestCase
     public function test_a_movement_cannot_be_edited(): void
     {
         [$tenant] = $this->tenantWithUser();
-        $bearing = $this->variantFor($tenant, ItemType::Part);
+        $bearing = $this->variantFor($tenant, 'part');
 
         $movement = $this->receiveStock($tenant, $bearing, '4', '400.00')->stockMovements->first();
 
@@ -200,7 +199,7 @@ class StockLedgerTest extends TestCase
     public function test_a_movement_cannot_be_deleted(): void
     {
         [$tenant] = $this->tenantWithUser();
-        $bearing = $this->variantFor($tenant, ItemType::Part);
+        $bearing = $this->variantFor($tenant, 'part');
 
         $movement = $this->receiveStock($tenant, $bearing, '4', '400.00')->stockMovements->first();
 
@@ -232,7 +231,7 @@ class StockLedgerTest extends TestCase
     public function test_a_batch_whose_inventory_line_disagrees_with_its_movements_is_refused(): void
     {
         [$tenant] = $this->tenantWithUser();
-        $bearing = $this->variantFor($tenant, ItemType::Part);
+        $bearing = $this->variantFor($tenant, 'part');
 
         $this->expectException(InvalidJournalException::class);
         $this->expectExceptionMessage('the Inventory account moves by');
@@ -261,7 +260,7 @@ class StockLedgerTest extends TestCase
     public function test_a_type_that_does_not_move_stock_cannot_carry_movements(): void
     {
         [$tenant] = $this->tenantWithUser();
-        $bearing = $this->variantFor($tenant, ItemType::Part);
+        $bearing = $this->variantFor($tenant, 'part');
 
         $this->expectException(InvalidJournalException::class);
         $this->expectExceptionMessage('does not move stock');
@@ -299,7 +298,7 @@ class StockLedgerTest extends TestCase
     public function test_a_shortage_is_written_off_to_cogs_at_the_carrying_value(): void
     {
         [$tenant] = $this->tenantWithUser();
-        $bearing = $this->variantFor($tenant, ItemType::Part);
+        $bearing = $this->variantFor($tenant, 'part');
 
         $this->receiveStock($tenant, $bearing, '10', '400.00');
 
@@ -327,8 +326,8 @@ class StockLedgerTest extends TestCase
     public function test_one_stock_take_can_correct_in_both_directions_at_once(): void
     {
         [$tenant] = $this->tenantWithUser();
-        $bearing = $this->variantFor($tenant, ItemType::Part);
-        $motor = $this->variantFor($tenant, ItemType::Motor);
+        $bearing = $this->variantFor($tenant, 'part');
+        $motor = $this->variantFor($tenant, 'motor');
 
         $this->receiveStock($tenant, $bearing, '10', '400.00');
         $this->receiveStock($tenant, $motor, '2', '8000.00');
@@ -357,7 +356,7 @@ class StockLedgerTest extends TestCase
     public function test_found_stock_may_be_given_a_cost_and_a_shortage_may_not(): void
     {
         [$tenant] = $this->tenantWithUser();
-        $bearing = $this->variantFor($tenant, ItemType::Part);
+        $bearing = $this->variantFor($tenant, 'part');
 
         $this->receiveStock($tenant, $bearing, '10', '400.00');
 
@@ -375,7 +374,7 @@ class StockLedgerTest extends TestCase
     public function test_reversing_a_stock_transaction_puts_the_quantity_back_at_the_value_it_left_at(): void
     {
         [$tenant] = $this->tenantWithUser();
-        $copper = $this->variantFor($tenant, ItemType::BulkMaterial);
+        $copper = $this->variantFor($tenant, 'bulk_material');
 
         $this->receiveStock($tenant, $copper, '10', '700.00');
         $issue = $this->issueStock($tenant, $copper, '4');
@@ -405,7 +404,7 @@ class StockLedgerTest extends TestCase
     public function test_a_draft_moves_no_stock_and_is_re_valued_when_it_is_finally_posted(): void
     {
         [$tenant] = $this->tenantWithUser();
-        $copper = $this->variantFor($tenant, ItemType::BulkMaterial);
+        $copper = $this->variantFor($tenant, 'bulk_material');
 
         $this->receiveStock($tenant, $copper, '10', '700.00');
 
@@ -437,7 +436,7 @@ class StockLedgerTest extends TestCase
     public function test_a_variant_with_stock_history_cannot_be_deleted(): void
     {
         [$tenant] = $this->tenantWithUser();
-        $bearing = $this->variantFor($tenant, ItemType::Part);
+        $bearing = $this->variantFor($tenant, 'part');
 
         $this->receiveStock($tenant, $bearing, '4', '400.00');
 
@@ -455,8 +454,8 @@ class StockLedgerTest extends TestCase
         [$one] = $this->tenantWithUser();
         [$two] = $this->tenantWithUser();
 
-        $mine = $this->variantFor($one, ItemType::Part);
-        $theirs = $this->variantFor($two, ItemType::Part);
+        $mine = $this->variantFor($one, 'part');
+        $theirs = $this->variantFor($two, 'part');
 
         $this->receiveStock($one, $mine, '10', '400.00');
         $this->receiveStock($two, $theirs, '7', '900.00');

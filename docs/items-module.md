@@ -43,22 +43,35 @@ variant; M9 prices a bill line from one.
 
 ## The attribute schema
 
-`ItemType::attributeSchema()` declares what each type is described by:
+> **Superseded.** The per-type schema described below became a **table** — see
+> [catalogue-master.md](catalogue-master.md). `ItemType` and `UnitOfMeasure` no
+> longer exist; a category is a row an admin edits and its fields are rows under
+> it. What follows is kept because the *reasoning* still holds and the four
+> seeded categories are these four types, at these exact keys.
 
-| Type | Required | Optional |
+`ItemCategory::attributeSchema()` declares what each category is described by,
+resolved from `item_attributes` and inherited down `parent_id`:
+
+| Category | Required | Optional |
 | --- | --- | --- |
 | Motor | rating (HP), phase, speed (RPM) | frame size, mounting |
-| Part | size | material, brand |
+| Part | size | material |
 | Bulk material | gauge | grade |
 | Service | *nothing* | *nothing* |
 
+*(Brand was an optional attribute of `part`, then a column on `items`, and is now
+a **row of the Brand Master** the product points at — see
+[catalogue-master.md](catalogue-master.md). Every trade asks whose a thing is, so
+it never belonged inside one category's template; and once every trade asks it,
+"Crompton" has to be one word the shop keeps rather than one somebody spells
+afresh on each product.)*
+
 Three things about it are deliberate.
 
-**It lives in the enum, and validation lives in the service** — not in a form
-request. M11's importer and M15's capture agent create variants without passing
-through one, and a motor whose HP was never captured is not identifiable by
-*anybody* afterwards. That is a permanent problem, not a validation message
-somebody missed.
+**Validation lives in the service** — not in a form request. M11's importer and
+M15's capture agent create variants without passing through one, and a motor
+whose HP was never captured is not identifiable by *anybody* afterwards. That is
+a permanent problem, not a validation message somebody missed.
 
 **Optional attributes are never demanded.** Workshops differ in how much they
 record, and refusing a bearing because nobody typed its material would push
@@ -68,8 +81,9 @@ people into not recording the bearing.
 is no third possibility, so it is constrained. Frame size is open, and pinning it
 to a list would make the product wrong about the next frame.
 
-A service accepts **no** attributes at all. An hour of rewinding is an hour of
-rewinding, and an attribute bag on one would only ever be filled in wrong.
+A category with no fields accepts **no** attributes at all — which is how the
+seeded Service category is set up. An hour of rewinding is an hour of rewinding,
+and an attribute bag on one would only ever be filled in wrong.
 
 ### Stored in schema order
 
@@ -299,14 +313,24 @@ its own, and without the check the caller would be told their edit applied to th
 item they were looking at when it landed somewhere else. A 404 rather than a 403,
 because from that URL there is no variant 12.
 
-`GET /items/meta` publishes the types **with their attribute schemas**, the units,
-and the draft counts. An attribute schema copied into JavaScript is a copy that
-drifts, and the drift shows up as a motor saved without its HP.
+`GET /items/meta` publishes the categories **with their attribute schemas**, the
+brands, the units and the draft counts. An attribute schema copied into JavaScript
+is a copy that drifts, and the drift shows up as a motor saved without its HP.
 
 Variants on the list are opt-in via `with_variants=1` and cost one extra query for
 the whole page — the same bargain as `with_position` on parties. `variant_count`
 is always there, and is `null` rather than `0` when nobody counted: an honest
-payload distinguishes "none" from "not fetched".
+payload distinguishes "none" from "not fetched". It is a `withCount` taken with
+the page rather than a stored figure, which is what makes the listing's Variants
+column right the moment one is added or removed — a stored count agrees with its
+rows right up until one is written without the other.
+
+Each row also carries `category_label` and `brand`, resolved through the relations
+rather than duplicated onto `items`. That is what the listing's Category and Brand
+read, and there is deliberately no `type_label` alias beside them: a key that
+survives a rename while quietly changing what it holds is worse than one that
+breaks loudly — and when the alias *was* left in a reader, the Category column
+went blank.
 
 ### The permission
 

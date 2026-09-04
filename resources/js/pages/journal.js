@@ -1,4 +1,5 @@
 import auth from '../auth-client';
+import { badge, lifecycleTone, sourceBadge } from '../components/badge';
 import { can } from '../permissions';
 import {
     $, $$, clearFormErrors, confirmAction, debounce, esc, formatDate, formatMoney,
@@ -379,22 +380,16 @@ async function loadTransactions() {
  | The list
  | ---------------------------------------------------------------------- */
 
-const STATUS_BADGE = {
-    draft: 'bg-amber-100 text-amber-800',
-    posted: 'bg-emerald-100 text-emerald-800',
-    reversed: 'bg-muted text-muted-foreground',
-};
-
-/**
- * Where a transaction came from. Worth a badge only on the Drafts tab, which is
- * the one place it changes what you do next: a draft an OCR pass produced needs
- * checking against the paper in a way one somebody typed does not.
- */
-const SOURCE_BADGE = {
-    manual: 'bg-muted text-muted-foreground',
-    import: 'bg-violet-100 text-violet-800',
-    ai: 'bg-sky-100 text-sky-800',
-};
+/*
+| The status and source badges used to be colour maps here and a second, subtly
+| different pair on the accounts screen — a reversed transaction was neutral on
+| one and rose on the other. M21's §38 sweep left one helper, and it takes the
+| tone from the enum that owns the concept rather than from a table per page.
+|
+| Source is worth a badge only on the Drafts tab, which is the one place it
+| changes what you do next: a draft an OCR pass produced needs checking against
+| the paper in a way one somebody typed does not.
+*/
 
 function renderHead() {
     $('#journal-head').innerHTML = `
@@ -473,7 +468,7 @@ function money(amount, { emphasis = false, tone = '' } = {}) {
 
 function status(transaction) {
     return `<td class="table-cell w-24">
-        <span class="badge ${STATUS_BADGE[transaction.status] ?? 'bg-muted'}">${esc(transaction.status_label)}</span>
+        ${badge(transaction.status_label, lifecycleTone(transaction.status))}
     </td>`;
 }
 
@@ -566,7 +561,7 @@ const ROWS = {
             ${reference(transaction)}
             <td class="table-cell w-40 text-[0.8125rem]">${esc(transaction.type_label)}</td>
             <td class="table-cell w-32">
-                <span class="badge ${SOURCE_BADGE[transaction.source] ?? 'bg-muted'}">${esc(transaction.source_label)}</span>
+                ${sourceBadge(transaction.source, transaction.source_label)}
             </td>
             <td class="table-cell w-36 whitespace-nowrap text-[0.8125rem] text-muted-foreground">
                 ${esc(formatRelative(transaction.updated_at ?? transaction.created_at))}
@@ -1432,7 +1427,7 @@ function renderVoucher(transaction) {
     $('#voucher-drawer-kind').textContent = transaction.type_label;
     $('#voucher-drawer-title').textContent = `#${transaction.id}`;
     $('#voucher-drawer-status').innerHTML = `
-        <span class="badge ${STATUS_BADGE[transaction.status] ?? 'bg-muted'}">${esc(transaction.status_label)}</span>`;
+        ${badge(transaction.status_label, lifecycleTone(transaction.status))}`;
 
     const sections = voucherSections(transaction);
 

@@ -2,8 +2,8 @@
 
 namespace Tests\Feature\Inventory;
 
-use App\Enums\ItemType;
 use App\Models\Item;
+use App\Models\ItemCategory;
 use App\Models\ItemVariant;
 use App\Models\Tenant;
 use App\Models\User;
@@ -45,7 +45,7 @@ class ItemApiTest extends TestCase
     {
         return array_merge([
             'name' => '3-Phase Induction Motor',
-            'type' => ItemType::Motor->value,
+            'category_id' => $this->categoryId('motor'),
             'code' => 'mot-3ph',
             'hsn_sac' => '8501',
             'gst_rate' => '18',
@@ -63,14 +63,14 @@ class ItemApiTest extends TestCase
             ->postJson('/api/v1/items', $this->motorPayload())
             ->assertCreated()
             ->assertJsonPath('data.name', '3-Phase Induction Motor')
-            ->assertJsonPath('data.type', 'motor')
-            ->assertJsonPath('data.type_label', 'Motor')
+            ->assertJsonPath('data.category_id', $this->categoryId('motor'))
+            ->assertJsonPath('data.category_label', 'Motor')
             // Upper-cased on the way in, so a code always looks the same.
             ->assertJsonPath('data.code', 'MOT-3PH')
             // A decimal string, never a JSON number: this one gets multiplied by
             // an amount to compute tax.
             ->assertJsonPath('data.gst_rate', '18.00')
-            // Defaulted from the type, so the ordinary case needed no decision.
+            // Defaulted from the category, so the ordinary case needed no decision.
             ->assertJsonPath('data.base_uom', 'piece')
             ->assertJsonPath('data.base_uom_symbol', 'pc')
             ->assertJsonPath('data.tracks_stock', true)
@@ -84,7 +84,7 @@ class ItemApiTest extends TestCase
         $this->withHeaders($this->authHeader($this->owner))
             ->postJson('/api/v1/items', [
                 'name' => 'Rewinding Labour',
-                'type' => ItemType::Service->value,
+                'category_id' => $this->categoryId('service'),
                 'hsn_sac' => '998719',
                 'gst_rate' => '18',
                 // Asked for explicitly, and overruled: an hour is produced at the
@@ -255,7 +255,7 @@ class ItemApiTest extends TestCase
             ->json('data.id');
 
         $bearing = $this->withHeaders($headers)
-            ->postJson('/api/v1/items', ['name' => 'Ball Bearing', 'type' => ItemType::Part->value])
+            ->postJson('/api/v1/items', ['name' => 'Ball Bearing', 'category_id' => $this->categoryId('part')])
             ->json('data.id');
 
         $variant = $this->withHeaders($headers)
@@ -317,18 +317,62 @@ class ItemApiTest extends TestCase
         $this->withHeaders($headers)->getJson('/api/v1/items')
             ->assertOk()->assertJsonCount(3, 'data');
 
-        $this->withHeaders($headers)->getJson('/api/v1/items?type=motor')
+        $motor = $this->categoryId('motor');
+
+        $this->withHeaders($headers)->getJson("/api/v1/items?category_id={$motor}")
             ->assertOk()->assertJsonCount(1, 'data')
-            ->assertJsonPath('data.0.type', 'motor');
+            ->assertJsonPath('data.0.category_id', $motor);
 
         // The review queue.
         $this->withHeaders($headers)->getJson('/api/v1/items?is_draft=1')
             ->assertOk()->assertJsonCount(1, 'data')
             ->assertJsonPath('data.0.is_draft', true);
 
-        // A service cannot be stocked, so it is the one this excludes.
+        // Labour cannot be stocked, so it is the one this excludes.
         $this->withHeaders($headers)->getJson('/api/v1/items?is_stock=1')
             ->assertOk()->assertJsonCount(2, 'data');
+
+        /*
+        | And the complement, which is what the bill's item picker asks for: the
+        | half of the catalogue /stock cannot answer for. Between them the two
+        | queries cover the catalogue exactly once, which is what stops a family
+        | being offered twice — or, worse, being offered as a line that names no
+        | variant.
+        */
+        $this->withHeaders($headers)->getJson('/api/v1/items?is_stock=0')
+            ->assertOk()->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.is_stock', false);
+    }
+
+    /**
+     * A filter that does not exist is **ignored**, not refused.
+     *
+     * Pinned because that is a trap, and it has already been sprung once. The
+     * item picker went on asking for `?type=service` after the ItemType enum was
+     * deleted and the catalogue's vocabulary became data. Nothing failed: the
+     * parameter was dropped, every item came back, and each stocked family was
+     * then offered on a bill as a line naming no variant — which the posting
+     * engine refuses, after the whole bill has been typed.
+     *
+     * There is no fix to make here. Laravel validates what it is given and
+     * ignores the rest, and refusing unknown parameters would break every client
+     * that appends a cache-buster. The fix is that a caller must filter on
+     * something in {@see \App\Http\Requests\Item\IndexItemRequest::rules()}, and
+     * this test is the reminder of what happens when one does not.
+     */
+    #[Test]
+    public function an_unknown_filter_is_ignored_rather_than_narrowing_the_list(): void
+    {
+        $this->actingForTenant($this->tenant, function () {
+            Item::factory()->motor()->create();
+            Item::factory()->service()->create();
+        });
+
+        $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/items?type=service')
+            ->assertOk()
+            // Both, not the one the parameter appears to ask for.
+            ->assertJsonCount(2, 'data');
     }
 
     /**
@@ -395,17 +439,23 @@ class ItemApiTest extends TestCase
      * drift shows up as a motor saved without its HP.
      */
     #[Test]
-    public function the_meta_endpoint_publishes_the_attribute_schema_per_type(): void
+    public function the_meta_endpoint_publishes_the_attribute_schema_per_category(): void
     {
         $response = $this->withHeaders($this->authHeader($this->owner))
             ->getJson('/api/v1/items/meta')
             ->assertOk();
 
-        $types = collect($response->json('data.types'))->keyBy('value');
+        // Keyed by `code` for the assertion's sake only. The payload identifies a
+        // category by id — the code is a convenience the four seeded rows happen
+        // to carry, and one an admin's own categories need not have at all.
+        $categories = collect($response->json('data.categories'))->keyBy('code');
 
-        $this->assertSame(['motor', 'part', 'bulk_material', 'service'], $types->keys()->all());
+        $this->assertSame(
+            ['motor', 'part', 'bulk_material', 'service'],
+            $categories->keys()->all(),
+        );
 
-        $motor = $types['motor'];
+        $motor = $categories['motor'];
         $this->assertTrue($motor['can_hold_stock']);
         $this->assertSame('piece', $motor['default_uom']);
         $this->assertSame('HSN', $motor['tax_code_label']);
@@ -413,7 +463,7 @@ class ItemApiTest extends TestCase
         $this->assertFalse($motor['attributes']['frame']['required']);
         $this->assertSame(['1', '3'], $motor['attributes']['phase']['values']);
 
-        $service = $types['service'];
+        $service = $categories['service'];
         $this->assertFalse($service['can_hold_stock']);
         $this->assertSame('SAC', $service['tax_code_label']);
         $this->assertSame([], $service['attributes']);
@@ -433,7 +483,7 @@ class ItemApiTest extends TestCase
      |-------------------------------------------------------------------- */
 
     #[Test]
-    public function the_type_and_unit_are_not_editable_over_the_wire(): void
+    public function the_category_and_unit_are_not_editable_over_the_wire(): void
     {
         $item = $this->withHeaders($this->authHeader($this->owner))
             ->postJson('/api/v1/items', $this->motorPayload())
@@ -441,14 +491,15 @@ class ItemApiTest extends TestCase
 
         $this->withHeaders($this->authHeader($this->owner))
             ->patchJson("/api/v1/items/{$item}", [
-                'type' => 'service',
+                'category_id' => $this->categoryId('service'),
                 'base_uom' => 'kg',
                 'name' => 'Renamed Motor',
             ])
             ->assertOk()
-            // Reclassifying would silently reinterpret every quantity recorded
-            // against it. If the type was wrong, the item was the wrong item.
-            ->assertJsonPath('data.type', 'motor')
+            // Reclassifying would silently reinterpret a specification keyed by
+            // the old category's fields. If the category was wrong, the product
+            // was the wrong product.
+            ->assertJsonPath('data.category_id', $this->categoryId('motor'))
             ->assertJsonPath('data.base_uom', 'piece')
             ->assertJsonPath('data.name', 'Renamed Motor');
     }
@@ -524,7 +575,10 @@ class ItemApiTest extends TestCase
         $created = $this->withHeaders($this->authHeader($clerk))
             ->postJson('/api/v1/items', [
                 'name' => 'Counter Bearing',
-                'type' => ItemType::Part->value,
+                // The clerk's *own* workshop's category. Every workshop is
+                // provisioned with its own four, and posting another's id is
+                // exactly the cross-tenant reach the next test checks is refused.
+                'category_id' => $this->categoryId('part', $tenant),
             ])
             ->assertCreated();
 
@@ -564,6 +618,138 @@ class ItemApiTest extends TestCase
         $this->withHeaders($this->authHeader($stranger))
             ->patchJson("/api/v1/items/{$mine}", ['name' => 'Hijacked'])
             ->assertNotFound();
+    }
+
+    /* ---------------------------------------------------------------------
+     | The rate nobody typed
+     |
+     | The create form used to send '0' for an empty box, which is a value and
+     | not an absence — so the category's own rate never got a chance and every
+     | product saved at 0% GST whatever its category charged. Nothing on the
+     | screen said so; the first sign was a purchase line taxed at nothing.
+     |-------------------------------------------------------------------- */
+
+    #[Test]
+    public function a_missing_gst_rate_falls_back_to_the_category(): void
+    {
+        $this->actingForTenant($this->tenant, fn () => ItemCategory::whereKey($this->categoryId('motor'))
+            ->update(['default_gst_rate' => '18.00']));
+
+        $this->withHeaders($this->authHeader($this->owner))
+            ->postJson('/api/v1/items', $this->motorPayload(['gst_rate' => null]))
+            ->assertCreated()
+            ->assertJsonPath('data.gst_rate', '18.00');
+    }
+
+    #[Test]
+    public function an_omitted_gst_rate_falls_back_to_the_category(): void
+    {
+        $this->actingForTenant($this->tenant, fn () => ItemCategory::whereKey($this->categoryId('motor'))
+            ->update(['default_gst_rate' => '12.00']));
+
+        $payload = $this->motorPayload();
+        unset($payload['gst_rate']);
+
+        $this->withHeaders($this->authHeader($this->owner))
+            ->postJson('/api/v1/items', $payload)
+            ->assertCreated()
+            ->assertJsonPath('data.gst_rate', '12.00');
+    }
+
+    #[Test]
+    public function a_stated_rate_still_beats_the_category(): void
+    {
+        $this->actingForTenant($this->tenant, fn () => ItemCategory::whereKey($this->categoryId('motor'))
+            ->update(['default_gst_rate' => '18.00']));
+
+        // Copied onto the product, never referenced — correcting the category
+        // next March must not restate what this already charges.
+        $this->withHeaders($this->authHeader($this->owner))
+            ->postJson('/api/v1/items', $this->motorPayload(['gst_rate' => '5']))
+            ->assertCreated()
+            ->assertJsonPath('data.gst_rate', '5.00');
+    }
+
+    #[Test]
+    public function a_rate_of_zero_is_still_a_rate_somebody_chose(): void
+    {
+        $this->actingForTenant($this->tenant, fn () => ItemCategory::whereKey($this->categoryId('motor'))
+            ->update(['default_gst_rate' => '18.00']));
+
+        // Exempt goods are real. An explicit 0 has to survive the fallback, or
+        // there would be no way to say it at all.
+        $this->withHeaders($this->authHeader($this->owner))
+            ->postJson('/api/v1/items', $this->motorPayload(['gst_rate' => '0']))
+            ->assertCreated()
+            ->assertJsonPath('data.gst_rate', '0.00');
+    }
+
+    /* ---------------------------------------------------------------------
+     | A family with nothing under it
+     |
+     | It has no variant, so it has no stock row and a picker searching stock
+     | cannot see it; it is stocked, so `is_stock=0` excludes it too. Between
+     | them it was invisible, and "Nothing matched" is indistinguishable from a
+     | product nobody ever entered — which is how a duplicate gets created.
+     |-------------------------------------------------------------------- */
+
+    #[Test]
+    public function it_can_list_only_the_families_that_have_nothing_under_them(): void
+    {
+        $this->actingForTenant($this->tenant, function () {
+            Item::factory()->motor()->create(['name' => 'Motor 3']);
+
+            ItemVariant::factory()
+                ->for(Item::factory()->motor()->create(['name' => 'Motor 4']))
+                ->motor()
+                ->create();
+        });
+
+        $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/items?has_variants=0')
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.name', 'Motor 3');
+
+        $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/items?has_variants=1')
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.name', 'Motor 4');
+    }
+
+    #[Test]
+    public function a_family_whose_only_variant_was_archived_counts_as_having_none(): void
+    {
+        // Nothing can be billed against it, so for this question it is bare.
+        $this->actingForTenant($this->tenant, fn () => ItemVariant::factory()
+            ->for(Item::factory()->motor()->create(['name' => 'Retired Motor']))
+            ->motor()
+            ->create(['is_active' => false]));
+
+        $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/items?has_variants=0')
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.name', 'Retired Motor');
+    }
+
+    #[Test]
+    public function the_filter_is_absent_by_default(): void
+    {
+        $this->actingForTenant($this->tenant, function () {
+            Item::factory()->motor()->create(['name' => 'Bare']);
+
+            ItemVariant::factory()
+                ->for(Item::factory()->motor()->create(['name' => 'Specified']))
+                ->motor()
+                ->create();
+        });
+
+        $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/items')
+            ->assertOk()
+            ->assertJsonCount(2, 'data');
     }
 
     #[Test]

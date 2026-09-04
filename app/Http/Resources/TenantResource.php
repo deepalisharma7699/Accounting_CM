@@ -44,6 +44,14 @@ class TenantResource extends JsonResource
                 'timezone' => $this->timezone,
                 'currency' => $this->currency,
                 'books_start_date' => $this->books_start_date?->toDateString(),
+                // How long a bill may go unsettled before it is reported overdue
+                // — M16. Null means the workshop does not track it, and nothing
+                // is ever overdue.
+                'payment_due_days' => $this->payment_due_days,
+                // Whether a bill may take stock the shelf does not hold — M17.
+                // Off by default; the refusal message points here.
+                'allow_negative_stock' => (bool) $this->allow_negative_stock,
+                'round_off_invoices' => (bool) $this->round_off_invoices,
             ],
 
             // The financial year the workshop is currently in, resolved server

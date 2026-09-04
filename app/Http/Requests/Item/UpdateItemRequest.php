@@ -31,6 +31,12 @@ class UpdateItemRequest extends FormRequest
         return [
             'name' => ['sometimes', 'string', 'min:2', 'max:180'],
             'code' => ['sometimes', 'nullable', 'string', 'max:40'],
+
+            // Editable, unlike the category and the unit. Nothing downstream is
+            // keyed by the brand — it is only a name — so correcting a bearing
+            // filed under the wrong make is an ordinary correction. Null clears
+            // it, which is a real edit rather than an omission.
+            'brand_id' => ['sometimes', 'nullable', 'integer', 'min:1'],
             'hsn_sac' => ['sometimes', 'nullable', 'string', 'regex:/^\d{4,8}$/'],
             'gst_rate' => ['sometimes', 'numeric', 'decimal:0,2', 'between:0,100'],
             'is_stock' => ['sometimes', 'boolean'],
@@ -75,6 +81,10 @@ class UpdateItemRequest extends FormRequest
             if ($this->has($field)) {
                 $payload[$field] = $this->filled($field) ? trim((string) $this->input($field)) : null;
             }
+        }
+
+        if ($this->has('brand_id')) {
+            $payload['brand_id'] = $this->filled('brand_id') ? $this->integer('brand_id') : null;
         }
 
         if ($this->has('gst_rate')) {

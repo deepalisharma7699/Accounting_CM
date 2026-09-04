@@ -28,7 +28,23 @@ class StorePartyRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'name' => ['required', 'string', 'min:2', 'max:150'],
+            /*
+            | A name that survives leaving the browser.
+            |
+            | The web UI escapes this correctly, so markup in it is not an
+            | injection — it is a name that reads as `<script>alert(1)</script>`
+            | on every statement, remittance advice and export the workshop ever
+            | sends out, and one that a CSV or a PDF renderer is entitled to
+            | treat differently from HTML. Control characters are worse: they
+            | are invisible in the box that accepted them and corrupt the line
+            | they land on.
+            |
+            | Refused rather than stripped, because silently saving a different
+            | name than the one somebody typed is its own bug — and the
+            | whitespace that is merely untidy has already been folded to
+            | ordinary spaces in prepareForValidation().
+            */
+            'name' => ['required', 'string', 'min:2', 'max:150', 'not_regex:/[\x00-\x1F\x7F<>]/u'],
 
             // At least one role, because a party belonging to neither list
             // would accumulate a balance nobody could navigate to.
@@ -49,6 +65,16 @@ class StorePartyRequest extends FormRequest
 
     protected function prepareForValidation(): void
     {
+        // Every run of whitespace folded to one ordinary space before
+        // the rules see the name: a pasted name is commonly untidy rather than
+        // hostile, and refusing it for a line break nobody can see would be a
+        // refusal nobody could act on.
+        if ($this->filled('name')) {
+            $this->merge([
+                'name' => trim((string) preg_replace('/\s+/u', ' ', (string) $this->input('name'))),
+            ]);
+        }
+
         // Upper-cased before the pattern is applied, so a GSTIN typed in lower
         // case is accepted rather than failing a regex the user cannot see.
         if ($this->filled('gstin')) {
@@ -62,6 +88,7 @@ class StorePartyRequest extends FormRequest
     public function messages(): array
     {
         return [
+            'name.not_regex' => 'A name cannot contain < or > or hidden control characters.',
             'roles.required' => 'Say whether this party is a customer, a vendor, or both.',
             'roles.min' => 'Say whether this party is a customer, a vendor, or both.',
             'gstin.size' => 'A GSTIN is exactly 15 characters.',

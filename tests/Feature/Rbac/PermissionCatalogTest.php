@@ -39,6 +39,57 @@ class PermissionCatalogTest extends TestCase
             ->assertJsonStructure(['data' => [['id', 'action', 'resource', 'key', 'description']]]);
     }
 
+    /**
+     * `resource` is the resource's *name*, not the model behind the grant.
+     *
+     * A structure assertion cannot catch this: `$this->resource` on a
+     * JsonResource is the wrapped model rather than a forwarded attribute, so
+     * the field was emitting the whole Permission — pivot row and timestamps
+     * included — and still satisfied `assertJsonStructure`. What broke on it was
+     * every client that groups grants by resource or looks for the `*`/`*`
+     * wildcard, because neither an object nor its identity is a name.
+     */
+    public function test_a_permission_states_its_resource_as_a_name(): void
+    {
+        $this->seed(PermissionSeeder::class);
+
+        $user = $this->userWithGrants([['READ', 'PERMISSIONS']], 'Auditor');
+
+        $payload = $this->getJson('/api/v1/permissions', $this->authHeader($user))
+            ->assertOk()
+            ->json('data');
+
+        foreach ($payload as $permission) {
+            $this->assertIsString($permission['resource'], 'A permission leaked a model where its resource name belongs.');
+            $this->assertIsString($permission['action']);
+            $this->assertSame($permission['action'].':'.$permission['resource'], $permission['key']);
+            $this->assertArrayNotHasKey('pivot', $permission);
+        }
+
+        $this->assertContains('*', array_column($payload, 'resource'), 'The wildcard grant must be recognisable.');
+    }
+
+    /** The same field, reached through a role — which is where the UI reads it. */
+    public function test_a_roles_permissions_state_their_resource_as_a_name(): void
+    {
+        $this->seed(PermissionSeeder::class);
+
+        $user = $this->userWithGrants([['READ', 'ROLES'], ['READ', 'PERMISSIONS']], 'Auditor');
+
+        $roles = $this->getJson('/api/v1/roles', $this->authHeader($user))
+            ->assertOk()
+            ->json('data');
+
+        $this->assertNotEmpty($roles);
+
+        foreach ($roles as $role) {
+            foreach ($role['permissions'] ?? [] as $permission) {
+                $this->assertIsString($permission['resource']);
+                $this->assertArrayNotHasKey('pivot', $permission);
+            }
+        }
+    }
+
     public function test_the_catalogue_can_be_grouped_by_resource(): void
     {
         $this->seed(PermissionSeeder::class);

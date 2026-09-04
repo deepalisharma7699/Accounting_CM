@@ -125,7 +125,11 @@ class EloquentStockMovementRepository implements StockMovementRepositoryInterfac
             ->forVariant($variantId)
             ->when(filled($filters['from'] ?? null), fn ($query) => $query->from($filters['from']))
             ->when(filled($filters['to'] ?? null), fn ($query) => $query->upTo($filters['to']))
-            ->with(['transaction:id,type,status,source,date,notes,party_id'])
+            // `doc_no` and `reverses_id` are what let a card name the document
+            // behind a movement rather than only its database id, and tell a
+            // reversal apart from the count it is stored as — see
+            // StockMovement::sourceLabel().
+            ->with(['transaction:id,type,status,source,date,notes,party_id,doc_no,reverses_id'])
             ->inStockOrder()
             ->paginate($perPage)
             ->withQueryString();

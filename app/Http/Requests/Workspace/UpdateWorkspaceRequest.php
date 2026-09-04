@@ -52,6 +52,23 @@ class UpdateWorkspaceRequest extends FormRequest
             // cannot reach date formatting and blow up at report time.
             'timezone' => ['sometimes', 'string', 'timezone'],
             'books_start_date' => ['sometimes', 'nullable', 'date', 'after_or_equal:2000-01-01'],
+
+            // How long a bill may go unsettled before it is reported overdue —
+            // M16. Null is a real setting rather than a missing one: it means
+            // the workshop settles at the counter and does not want an ageing.
+            // Capped at two years, which is far beyond any real terms and short
+            // of a figure that would look like a mistake nobody caught.
+            'payment_due_days' => ['sometimes', 'nullable', 'integer', 'between:0,730'],
+
+            // Whether a bill may take stock the shelf does not hold — M17,
+            // decision D6. Editable here rather than being a deployment
+            // decision, because both answers are right for real workshops: see
+            // StockLedgerService.
+            'allow_negative_stock' => ['sometimes', 'boolean'],
+
+            // Whether a bill is taken to the nearest rupee, with the paise
+            // booked to Round Off. Off unless asked for — see the migration.
+            'round_off_invoices' => ['sometimes', 'boolean'],
         ];
     }
 
@@ -86,6 +103,7 @@ class UpdateWorkspaceRequest extends FormRequest
         $fields = [
             'name', 'gstin', 'address', 'state_code',
             'financial_year_start_month', 'timezone', 'books_start_date',
+            'payment_due_days', 'allow_negative_stock', 'round_off_invoices',
         ];
 
         $payload = [];
@@ -98,6 +116,23 @@ class UpdateWorkspaceRequest extends FormRequest
 
         if (array_key_exists('financial_year_start_month', $payload)) {
             $payload['financial_year_start_month'] = (int) $payload['financial_year_start_month'];
+        }
+
+        // Cast where present, not defaulted where absent — a PATCH that never
+        // mentioned the field must leave it alone, which is the rule the whole
+        // loop above exists to keep.
+        if (array_key_exists('payment_due_days', $payload)) {
+            $payload['payment_due_days'] = $payload['payment_due_days'] === null
+                ? null
+                : (int) $payload['payment_due_days'];
+        }
+
+        if (array_key_exists('round_off_invoices', $payload)) {
+            $payload['round_off_invoices'] = $this->boolean('round_off_invoices');
+        }
+
+        if (array_key_exists('allow_negative_stock', $payload)) {
+            $payload['allow_negative_stock'] = $this->boolean('allow_negative_stock');
         }
 
         return $payload;

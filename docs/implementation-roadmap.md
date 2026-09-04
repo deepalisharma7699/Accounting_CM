@@ -13,33 +13,69 @@ checklist is incomplete.
 | | Meaning |
 | --- | --- |
 | ✅ | Done and tested |
+| 🔒 | Done and tested; the *screen* that presents it is a switched-off card. The code behind it still runs wherever it is used — M4's posting engine is under every enabled module, and only the Ledger card is off. See [hidden-modules.md](hidden-modules.md) |
 | 🟡 | Partly done — see the module's gap list |
 | ⬜ | Not started |
 
 ## Module map
 
-| # | Module | Layer | Status |
-| --- | --- | --- | --- |
-| **M1** | Authentication & RBAC | Base | ✅ |
-| **M2** | Tenancy | Base | ✅ |
-| **M3** | Chart of Accounts | Base | ✅ |
-| **M4** | Ledger & Posting Engine | Accounting core | ✅ |
-| **M5** | Parties | Accounting core | ✅ |
-| **M6** | Payments & Receipts | Accounting core | ✅ |
-| **M7** | Item Master & Variants | Inventory | ✅ |
-| **M8** | Inventory & WAC | Inventory | ✅ |
-| **M9** | Bill Engine (Sales & Purchases) | Billing | ✅ |
-| **M10** | Misc Expense | Billing | ✅ |
-| **M11** | Opening Balances | Onboarding | ✅ |
-| **M12** | Reports & Worklists | Back-office | ✅ |
-| **M13** | Audit Log | Cross-cutting | ✅ |
-| **M14** | Async Jobs & Object Storage | Cross-cutting | ✅ |
-| **M15** | AI Capture Agent | AI | ⬜ |
-| **M16–M19** | Payroll, Tally, languages, billing | Phase 2–4 | ⬜ |
+M1–M14 are this document's plan. M16–M23 were planned separately, in
+[modified-flow-plan.md](modified-flow-plan.md), and are listed here so that one
+table answers "what exists". The numbering below is the real one: the row that
+once read "M16–M19 · Payroll, Tally, languages, billing" was a guess made before
+the workshop redesign and never became work.
 
-Dependency order is strictly top to bottom. **M4 is the single most important
-module in the product** — everything above it is plumbing and everything below
-it is built on its correctness.
+| # | Module | Layer | Status | Reference |
+| --- | --- | --- | --- | --- |
+| **M1** | Authentication & RBAC | Base | ✅ | [auth-module.md](auth-module.md) |
+| **M2** | Tenancy | Base | 🔒 | [tenancy-module.md](tenancy-module.md) |
+| **M3** | Chart of Accounts | Base | 🔒 | [accounting-module.md](accounting-module.md) |
+| **M4** | Ledger & Posting Engine | Accounting core | 🔒 | [ledger-module.md](ledger-module.md) |
+| **M5** | Parties | Accounting core | ✅ | [parties-module.md](parties-module.md) |
+| **M6** | Payments & Receipts | Accounting core | 🔒 | [payments-module.md](payments-module.md) |
+| **M7** | Item Master & Variants | Inventory | ✅ | [items-module.md](items-module.md), [catalogue-master.md](catalogue-master.md) |
+| **M8** | Inventory & WAC | Inventory | ✅ | [inventory-module.md](inventory-module.md) |
+| **M9** | Bill Engine (Sales & Purchases) | Billing | ✅ | [billing-module.md](billing-module.md), [sales-module.md](sales-module.md), [purchase-module.md](purchase-module.md) |
+| **M10** | Misc Expense | Billing | 🔒 | [billing-module.md](billing-module.md) |
+| **M11** | Opening Balances | Onboarding | 🔒 | [opening-balances-module.md](opening-balances-module.md) |
+| **M12** | Reports & Worklists | Back-office | ✅ | [reports-module.md](reports-module.md) |
+| **M13** | Audit Log | Cross-cutting | 🔒 | [audit-module.md](audit-module.md) |
+| **M14** | Async Jobs & Object Storage | Cross-cutting | 🔒 | [async-module.md](async-module.md) |
+| **M15** | AI Capture Agent | AI | ⬜ | not started — no code, no table, no card |
+| **M16** | Per-invoice money: numbering, allocation, ageing | Billing | 🟡 | [modified-flow-plan.md](modified-flow-plan.md) |
+| **M17** | Stock discipline & duplicate protection | Inventory | ✅ | [modified-flow-plan.md](modified-flow-plan.md) |
+| **M18** | Returns | Billing | ✅ | [sales-module.md](sales-module.md) |
+| **M19** | Workshop jobs | Workshop | 🔒 | [workshop-module.md](workshop-module.md) |
+| **M20** | The bill counter & the customer's invoice | Billing | ✅ | [billing-module.md](billing-module.md) |
+| **M21** | Jobs screen, dashboard, consistency sweep | Cross-cutting | 🔒 | [modified-flow-plan.md](modified-flow-plan.md) |
+| **M22** | Staff, attendance, payroll, advances | Workshop | ✅ | [staff-module.md](staff-module.md), [work-attribution.md](work-attribution.md) |
+| **M23** | Insights | Back-office | ✅ | [insights-module.md](insights-module.md) |
+
+Dependency order is strictly top to bottom for M1–M14. **M4 is the single most
+important module in the product** — everything above it is plumbing and
+everything below it is built on its correctness.
+
+### Reading the 🔒 rows
+
+A locked row is **finished work behind a switched-off card**, not work in
+progress. The module was built, tested and used as a page; it is off only because
+its screen has not been re-flowed to the §2A workspace shape that
+[CLAUDE.md](../CLAUDE.md) now requires. What each one still holds that no enabled
+card can do — an expense, a journal voucher, the trial balance, the audit trail,
+go-live balances — is set out in [hidden-modules.md](hidden-modules.md), which is
+the file to read before converting one.
+
+Two rows are qualified:
+
+- **M16 is 🟡**, not ✅. Document numbering, allocation, per-invoice paid/due and
+  the ageing all work and are tested. What is missing is a screen for allocating
+  a receipt *after* it was taken: `POST /transactions/{id}/allocate` and
+  `GET /transactions/{id}/open-bills` have no caller in the front end.
+- **M21 is 🔒 and partly deleted.** The jobs screen exists and is behind the
+  `jobs` switch. The dashboard half was removed: home is the module card grid and
+  carries no figures, so `GET /api/v1/dashboard` and `DashboardService` were
+  deleted rather than left dormant beside M23, which answers the same question.
+  The §38 consistency sweep shipped and stands.
 
 ---
 
@@ -341,6 +377,19 @@ reporting code at all.** A payment reduces `payable` and a receipt reduces
 ## M7 · Item Master & Variants ✅
 
 Reference: [items-module.md](items-module.md)
+
+> **Superseded in part — read this before the section below.** The vocabulary
+> described here as two enums is now **data**. There is no `ItemType` and no
+> `UnitOfMeasure`: what kinds of product exist, what each records, and how any of
+> it is counted are rows in `item_categories`, `item_attributes`, `item_brands`
+> and `units`, edited from the Items workspace and published by
+> `GET /api/v1/items/meta`. The four categories and seven units the enums held
+> were migrated as seeded rows and are marked `is_system`. Everything else in this
+> section — two levels, per-category attribute schemas validated in the service,
+> attributes stored in schema order, `canHoldStock()` against `is_stock` — still
+> holds, and the reasons in *Decisions worth carrying forward* are why the tables
+> were shaped the way they were. See [catalogue-master.md](catalogue-master.md),
+> and CLAUDE.md on why a hard-coded type, brand or unit may never come back.
 
 **Depends on:** M2
 

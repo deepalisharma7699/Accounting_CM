@@ -83,20 +83,63 @@ therefore disagree with the order in which the workshop actually learned the
 costs. The position now is always right; a historical valuation is as right as
 the dates it was given.
 
-## Negative stock: allowed, surfaced, never silently free
+## Negative stock: refused by default, allowed by setting — **revised in M17**
 
-The roadmap asks for a decision. It is: **allow it, warn about it, and never hide
-it.**
+> **This section reverses the decision M8 originally made.** M8 allowed negative
+> stock and warned about it. M17's decision D6 refuses it by default and gives
+> the workshop a switch. The original reasoning is kept below, because it is
+> still correct — it is just not the whole picture.
 
-Blocking sounds safer and is not. A fitter records the sale of a bearing on
-Tuesday; the supplier's invoice reaches the office on Friday. Refusing Tuesday's
-sale does not produce the bearing — it produces a workshop that stops recording
-sales, and the ledger ends up missing the revenue as well as the stock. It is the
-same judgement M5 made about an overpayment and M7 made about a duplicate
-specification: the awkward fact is real, so record it and put it in front of
-somebody.
+**M8's reasoning, unchanged.** Blocking sounds safer and is not. A fitter records
+the sale of a bearing on Tuesday; the supplier's invoice reaches the office on
+Friday. Refusing Tuesday's sale does not produce the bearing — it produces a
+workshop that stops recording sales, and the ledger ends up missing the revenue
+as well as the stock.
 
-What negative stock must never do is invent a cost:
+**What M17 added.** That is true of *that* workshop. It is not true of the one
+the workshop-flow brief describes, which asks to be told *"Only 5 PCS available
+in stock."* before it promises a customer a sixth. A counter that will cheerfully
+sell what is not there is a counter whose stock figures nobody trusts, and
+untrusted figures are the reason this module exists.
+
+Both workshops are real, so the answer is a setting rather than a new absolute:
+
+| | |
+| --- | --- |
+| `tenants.allow_negative_stock` | `false` by default. Editable on `PATCH /workspace` and on the Workspace screen. |
+| Where it is enforced | `PostingEngine::assertStockAvailable()`, via `StockLedgerService::assertCanIssue()` |
+| Message | *"Only 5 pc available in stock for …, and 6 was billed. Enter the purchase that brought it in, or allow negative stock in Workspace settings."* |
+| Error code | `STOCK_INSUFFICIENT`, 422 |
+
+Three properties of where the refusal sits are deliberate:
+
+* **At posting, not at composition.** A draft and a preview both build issues out
+  of stock nobody has bought yet, quite legitimately — parking an unfinished bill
+  until the supplier's invoice arrives is what a draft is *for*. Only committing
+  is refused.
+* **Per variant, summed across lines.** Two lines of three bearings are six
+  bearings, and a shelf of five is short. A check inside the movement builder
+  cannot see that; one over the composed batch can.
+* **Inside the posting transaction, after the variant lock.** The position it
+  reads is the one about to be written, so two simultaneous sales of the last
+  motor cannot both pass.
+
+Two exemptions, and they are the same exemption an archived variant gets:
+
+* a **reversal**, because a known error must never become permanent on the
+  grounds that the shelf has moved since;
+* a **stock adjustment**, because it is the workshop asserting what is physically
+  there — the authority the books answer to, and the only tool for repairing a
+  position that is already negative.
+
+**Existing tenants are migrated to the permissive setting** where they already
+hold a negative position. Turning the refusal on underneath them would break the
+next bill they write for a part they are mid-way through re-stocking; switching
+it off is then their decision, made deliberately, rather than one imposed by a
+deployment.
+
+Under the permissive setting nothing else changes: the bill still carries
+`STOCK_NEGATIVE` as a warning, and negative stock must still never invent a cost:
 
 | Position | An issue is valued at |
 | --- | --- |
@@ -294,8 +337,9 @@ history with it.
 - [x] WAC verified: 10 kg @ ₹700 then 10 kg @ ₹800 → ₹750/kg
 - [x] Stock value in the Inventory ledger equals Σ(qty × cost) across variants —
       `assertStockAgreesWithInventoryAccount()`, asserted in every scenario
-- [x] Negative stock is **warned**, not blocked — decided, documented and tested
-      in both directions
+- [x] Negative stock is **refused** by default and permitted by a per-tenant
+      setting — M17's D6, tested in both directions, with a draft still saved
+      without refusal and a stock adjustment still exempt
 - [x] Issuing an entire position leaves it at exactly zero, with no rounding
       residue in the Inventory account
 - [x] A movement can be neither edited nor deleted
@@ -317,7 +361,9 @@ history with it.
 | Quantity and value are signed; the type says *why*, not *which way* | A position is then one indexed sum rather than a `CASE` every caller re-writes — and `adjust` genuinely goes both ways |
 | `value` is authoritative, `unit_cost` is document detail | The rate is rounded; the value is what the Inventory account actually moved by, and only one of the two can be summed |
 | An issue takes its **share** of the value | Quantity × a rounded average leaves paise behind on every issue, which accumulate as stock value with no stock |
-| Negative stock is warned, not blocked | Refusing the sale does not produce the bearing; it produces a workshop that stops recording sales |
+| ~~Negative stock is warned, not blocked~~ — **revised in M17** | The original reasoning holds for a workshop that bills ahead of its paperwork, and not for a counter that wants to be told what it can promise. Both are real, so it is a per-tenant setting, refused by default |
+| The refusal lives at posting, not at composition | A draft is exactly the tool for parking a bill until the purchase is entered, and refusing to save one is the failure M8 warned about, arrived at from the other direction |
+| A stock adjustment is exempt from the refusal | It is the workshop asserting what is physically there, and the only tool for repairing a position that is already negative |
 | A shortfall is valued at the last rate paid, never zero | A 100% margin on an ordinary sale is a worse lie than an estimate |
 | An adjustment worth nothing is refused | Quantities moving with no accounting trace is the drift this module exists to prevent |
 | `transaction_id` is NOT NULL | Inventory value appearing with nothing on the other side is the same error as an unbalanced journal, in a table where nothing checks the totals |

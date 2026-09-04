@@ -148,6 +148,41 @@ final class StockChange
     }
 
     /**
+     * Stock coming back, at the value it went out at — M18.
+     *
+     * The third valuation rule, and it belongs with the other two. An arrival is
+     * valued by the supplier's invoice; an issue by the position it comes out of;
+     * a **return** by the movement it undoes. Never by today's average, for
+     * exactly the reason {@see reversing()} does not re-value either: the average
+     * has moved since, and a bearing put back at a price it never left at would
+     * leave the Inventory account holding the difference for ever, against stock
+     * that is physically on the shelf.
+     *
+     * `$value` is a magnitude the caller has worked out — the share of the
+     * original movement that this quantity represents, net of anything returned
+     * earlier. Only the return service can know that, because only it can see the
+     * earlier returns; see `ReturnService::valueOfReturn()`.
+     *
+     * Typed as an ordinary in/out rather than an `adjust`, unlike a reversal.
+     * A return is a real movement of real goods — the customer physically brought
+     * the bearing back — where a reversal is a correction to a record. A stock
+     * card that called them the same thing would make a fortnight of genuine
+     * returns indistinguishable from a fortnight of clerical errors.
+     */
+    public static function returning(
+        ItemVariant $variant,
+        Quantity $quantity,
+        Money $value,
+        StockMovementType $type,
+        ?string $memo = null,
+        ?int $lineNo = null,
+    ): self {
+        return $type === StockMovementType::In
+            ? self::arriving($variant, $quantity, $value, $type, $memo, $lineNo)
+            : self::issuing($variant, $quantity, $value, $type, $memo, $lineNo);
+    }
+
+    /**
      * The same change, tied to a bill line.
      *
      * A wither rather than an argument on every constructor: the stock ledger

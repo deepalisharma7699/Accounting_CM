@@ -51,6 +51,25 @@ final class PlaceOfSupply
         return new self(self::normalise($supplierState), null, false);
     }
 
+    /**
+     * The shape a document already used, restated — M18.
+     *
+     * For a credit note, and only for a credit note. The shape of the tax on a
+     * return has to be the shape the original invoice charged, because the pair
+     * has to net out on the return that reports both. Deriving it afresh from the
+     * party's state code would get that wrong the day somebody corrects a
+     * customer's address: a February invoice charged CGST + SGST would be
+     * credited back as IGST, and neither figure on the GST return would be
+     * right.
+     *
+     * The states are carried through unchanged so the document can still print
+     * where the supply was; only the split is pinned.
+     */
+    public static function matching(self $original, bool $interState): self
+    {
+        return new self($original->supplierState, $original->recipientState, $interState);
+    }
+
     public function isInterState(): bool
     {
         return $this->interState;

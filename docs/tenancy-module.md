@@ -1,5 +1,16 @@
 # Multi-Tenancy Module
 
+> **The isolation is live; both of its screens are switched off.** Tenant
+> scoping is enforced on every query in the application and nothing about that is
+> waiting. What has no card is **Workshops** (the platform's list — provisioning,
+> suspend, reactivate) and **Settings** (a workshop's own record). The second is
+> the one that bites: sign-up takes an *optional* GSTIN, so a workshop that
+> signed up without one cannot add it, and none of them can correct a name, an
+> address, a financial year, a timezone or `books_start_date`. With Opening
+> balances also off, a real workshop cannot go live. See
+> [hidden-modules.md](hidden-modules.md), which also lists three settings the API
+> accepts and the form has never offered.
+
 Every workshop's books are isolated from every other workshop's. This module is
 the boundary that makes that true, and Step 1 of the Phase 1 build sequence —
 nothing else can be built until it exists, because every table from here on

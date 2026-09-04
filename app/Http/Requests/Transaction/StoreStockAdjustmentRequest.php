@@ -4,6 +4,7 @@ namespace App\Http\Requests\Transaction;
 
 use App\Services\Accounting\PostingEngine;
 use App\Services\Inventory\StockLedgerService;
+use App\Http\Requests\Transaction\Concerns\CarriesClientRef;
 use Illuminate\Foundation\Http\FormRequest;
 
 /**
@@ -22,6 +23,8 @@ use Illuminate\Foundation\Http\FormRequest;
  */
 class StoreStockAdjustmentRequest extends FormRequest
 {
+    use CarriesClientRef;
+
     /** Matches DECIMAL(15, 2). */
     private const MAX_AMOUNT = '9999999999999.99';
 
@@ -43,6 +46,9 @@ class StoreStockAdjustmentRequest extends FormRequest
             // other transaction. Committing to the ledger must not be something
             // that happened because a field was left out.
             'post' => ['required', 'boolean'],
+
+            // A retry after a timeout must not become a second document — M17.
+            ...$this->clientRefRules(),
 
             'adjustments' => ['required', 'array', 'min:1', 'max:200'],
             'adjustments.*.variant_id' => ['required', 'integer', 'min:1'],
@@ -85,6 +91,7 @@ class StoreStockAdjustmentRequest extends FormRequest
             'date' => (string) $this->string('date'),
             'notes' => $this->filled('notes') ? trim((string) $this->string('notes')) : null,
             'post' => $this->boolean('post'),
+            'client_ref' => $this->clientRef(),
             'adjustments' => array_map(fn (array $row) => [
                 'variant_id' => (int) ($row['variant_id'] ?? 0),
                 'quantity' => $row['quantity'] ?? 0,

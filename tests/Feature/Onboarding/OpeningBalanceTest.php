@@ -2,7 +2,6 @@
 
 namespace Tests\Feature\Onboarding;
 
-use App\Enums\ItemType;
 use App\Enums\SystemAccount;
 use App\Enums\TransactionType;
 use App\Exceptions\Accounting\BooksClosedException;
@@ -298,7 +297,7 @@ class OpeningBalanceTest extends TestCase
     #[Test]
     public function fuzzy_matching_does_not_create_a_duplicate_variant(): void
     {
-        $variant = $this->variantFor($this->tenant, ItemType::Part);
+        $variant = $this->variantFor($this->tenant, 'part');
 
         $this->actingForTenant($this->tenant, function () use ($variant) {
             $variant->item->update(['name' => 'Ball Bearing']);
@@ -420,7 +419,7 @@ class OpeningBalanceTest extends TestCase
      |-------------------------------------------------------------------- */
 
     #[Test]
-    public function a_new_item_without_a_type_is_an_error_rather_than_a_guess(): void
+    public function a_new_item_without_a_category_is_an_error_rather_than_a_guess(): void
     {
         $plan = $this->plan(<<<'CSV'
         kind,name,variant,quantity,unit_cost
@@ -428,7 +427,14 @@ class OpeningBalanceTest extends TestCase
         CSV);
 
         $this->assertTrue($plan->hasErrors());
-        $this->assertStringContainsString('what kind of thing it is', $plan->errors()[0]->reason);
+
+        // The refusal names the categories that exist rather than a fixed list
+        // of four: the set is the shop's own now, so the message has to read it
+        // rather than recite it.
+        $reason = $plan->errors()[0]->reason;
+
+        $this->assertStringContainsString('name a category', $reason);
+        $this->assertStringContainsString('Motor', $reason);
     }
 
     #[Test]

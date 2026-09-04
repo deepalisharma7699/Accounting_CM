@@ -2,8 +2,7 @@
 
 namespace App\Services\Accounting\Posting;
 
-use App\Enums\ItemType;
-use App\Enums\UnitOfMeasure;
+use App\Support\Units\UnitDefinition;
 use App\Models\Item;
 use App\Models\ItemVariant;
 use App\Services\Accounting\Tax\GstBreakdown;
@@ -49,12 +48,21 @@ final class BillLine
         public readonly ?ItemVariant $variant,
         public readonly string $description,
         public readonly Quantity $quantity,
-        public readonly UnitOfMeasure $unit,
+        public readonly UnitDefinition $unit,
         public readonly Money $unitPrice,
         public readonly Money $discount,
         public readonly GstBreakdown $tax,
         public readonly bool $movesStock,
         public readonly ?string $memo = null,
+        /**
+         * The invoice line this one is crediting back — M18.
+         *
+         * Null for every ordinary bill line. Set only by `ReturnService`, and it
+         * is what makes "how much of this line has already come back?" a sum over
+         * one key rather than a guess at which of two lines of the same bearing
+         * a return meant.
+         */
+        public readonly ?int $againstLineId = null,
     ) {}
 
     /**
@@ -73,6 +81,18 @@ final class BillLine
         Money $discount = null,
         ?string $description = null,
         ?string $memo = null,
+        /**
+         * The rate to tax this line at, where the caller must pin it — M18.
+         *
+         * Null everywhere except a return, and then it is the rate the original
+         * invoice actually charged. The item's own rate is the right default for
+         * a new document and the wrong one for a credit note: a workshop that
+         * corrects a mis-set GST rate in March must not thereby credit back a
+         * February invoice at a rate that invoice never carried, leaving the two
+         * documents failing to net out on the return that reports both.
+         */
+        ?GstRate $rate = null,
+        ?int $againstLineId = null,
     ): self {
         $quantity = $quantity->absolute();
         $discount ??= Money::zero();
@@ -94,12 +114,50 @@ final class BillLine
             unit: $item->base_uom,
             unitPrice: $unitPrice,
             discount: $discount,
-            tax: GstBreakdown::on($taxable, GstRate::of($item->gst_rate), $place),
+            tax: GstBreakdown::on($taxable, $rate ?? GstRate::of($item->gst_rate), $place),
             // The item's own answer, asked once and recorded — see
             // Item::tracksStock(), which pairs capability with the workshop's
             // choice so nothing has to remember both halves.
             movesStock: $item->tracksStock() && $variant !== null,
             memo: $memo,
+            againstLineId: $againstLineId,
+        );
+    }
+
+    /**
+     * The same line, given a further discount — a share of one taken off the
+     * whole bill.
+     *
+     * Rebuilt rather than mutated, because a BillLine's tax is computed at
+     * construction and a line whose discount had moved underneath its
+     * GstBreakdown would be a line whose own arithmetic disagreed with itself —
+     * exactly what this class exists to make impossible.
+     *
+     * The rate is passed back in rather than re-read from the item, so a credit
+     * note being apportioned keeps the rate its invoice actually charged; the
+     * description is passed back for the same reason it was snapshotted in the
+     * first place.
+     *
+     * @see BillDiscount::apportion() for what decides the share.
+     */
+    public function plusDiscount(Money $extra, PlaceOfSupply $place): self
+    {
+        if (! $extra->isPositive()) {
+            return $this;
+        }
+
+        return self::of(
+            lineNo: $this->lineNo,
+            item: $this->item,
+            variant: $this->variant,
+            quantity: $this->quantity,
+            unitPrice: $this->unitPrice,
+            place: $place,
+            discount: $this->discount->plus($extra),
+            description: $this->description,
+            memo: $this->memo,
+            rate: $this->tax->rate,
+            againstLineId: $this->againstLineId,
         );
     }
 
@@ -144,7 +202,10 @@ final class BillLine
      */
     public function isService(): bool
     {
-        return $this->item->type === ItemType::Service;
+        // Asked of the product, which asks its category. A shop may have one
+        // service category or five, called whatever it calls them; what matters
+        // downstream is that labour holds no stock and bills under a SAC code.
+        return $this->item->isService();
     }
 
     /**
@@ -193,6 +254,7 @@ final class BillLine
             'line_total' => $this->total()->amount(),
             'is_stock' => $this->movesStock,
             'memo' => $this->memo,
+            'against_line_id' => $this->againstLineId,
         ];
     }
 

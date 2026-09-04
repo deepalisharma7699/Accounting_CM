@@ -26,6 +26,16 @@ class ReverseTransactionRequest extends FormRequest
             // Why, in the words of whoever noticed. It becomes the reversing
             // transaction's notes, so the record explains itself later.
             'reason' => ['nullable', 'string', 'max:500'],
+
+            // "I know this takes the shelf below zero and I want it anyway."
+            //
+            // Absent on the first attempt, always: reversing a purchase whose
+            // stock has already gone out is refused first and only goes through
+            // when somebody says so — see
+            // {@see \App\Services\Accounting\PostingEngine::assertReversalKeepsStockWhole()}.
+            // A client that sent this by default would be turning the refusal
+            // back off, which is why nothing sets it but the second attempt.
+            'acknowledge_negative_stock' => ['sometimes', 'boolean'],
         ];
     }
 }

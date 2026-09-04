@@ -28,7 +28,23 @@ class UpdatePartyRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'name' => ['sometimes', 'string', 'min:2', 'max:150'],
+            /*
+            | A name that survives leaving the browser.
+            |
+            | The web UI escapes this correctly, so markup in it is not an
+            | injection — it is a name that reads as `<script>alert(1)</script>`
+            | on every statement, remittance advice and export the workshop ever
+            | sends out, and one that a CSV or a PDF renderer is entitled to
+            | treat differently from HTML. Control characters are worse: they
+            | are invisible in the box that accepted them and corrupt the line
+            | they land on.
+            |
+            | Refused rather than stripped, because silently saving a different
+            | name than the one somebody typed is its own bug — and the
+            | whitespace that is merely untidy has already been folded to
+            | ordinary spaces in prepareForValidation().
+            */
+            'name' => ['sometimes', 'string', 'min:2', 'max:150', 'not_regex:/[\x00-\x1F\x7F<>]/u'],
 
             'roles' => ['sometimes', 'array', 'min:1'],
             'roles.*' => [Rule::enum(PartyRole::class)],
@@ -48,6 +64,16 @@ class UpdatePartyRequest extends FormRequest
 
     protected function prepareForValidation(): void
     {
+        // Every run of whitespace folded to one ordinary space before
+        // the rules see the name: a pasted name is commonly untidy rather than
+        // hostile, and refusing it for a line break nobody can see would be a
+        // refusal nobody could act on.
+        if ($this->filled('name')) {
+            $this->merge([
+                'name' => trim((string) preg_replace('/\s+/u', ' ', (string) $this->input('name'))),
+            ]);
+        }
+
         if ($this->filled('gstin')) {
             $this->merge(['gstin' => strtoupper(trim((string) $this->input('gstin')))]);
         }
@@ -59,6 +85,7 @@ class UpdatePartyRequest extends FormRequest
     public function messages(): array
     {
         return [
+            'name.not_regex' => 'A name cannot contain < or > or hidden control characters.',
             'roles.min' => 'A party must be a customer, a vendor, or both.',
             'gstin.size' => 'A GSTIN is exactly 15 characters.',
             'gstin.regex' => 'That does not look like a GSTIN — the format is 2 digits, then a PAN, then 3 characters.',

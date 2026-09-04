@@ -13,8 +13,10 @@ use App\Http\Resources\PartyResource;
 use App\Models\Party;
 use App\Services\Accounting\PartyLedgerService;
 use App\Services\Accounting\PartyService;
+use App\Services\Accounting\PartyStatementService;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 
 /**
@@ -22,9 +24,23 @@ use Illuminate\Support\Collection;
  *
  * Two permissions meet in this controller, and the split is deliberate. PARTIES
  * is authority over the *record* — who exists, what they are called, how they
- * are reached. LEDGER is authority over the *money*, and `ledger()` is guarded
- * by it rather than by PARTIES: a data-entry user who may add the customer at
- * the counter has no business reading what that customer owes.
+ * are reached, and **where they stand**. LEDGER is authority over the *books*,
+ * and `ledger()` and `statement()` are guarded by it rather than by PARTIES.
+ *
+ * The line falls between one number and the entries behind it, not between the
+ * name and the money — M21. A party's `outstanding` is two figures, one per
+ * side, and it travels with the record under READ:PARTIES because deciding
+ * whether to sell on credit is part of writing the invoice: the counter clerk
+ * who may raise one is exactly the person who must be able to see the credit
+ * already extended, and they hold PARTIES and TRANSACTIONS and no LEDGER. Every
+ * entry that moved the position, in date order, with a running balance that
+ * reconciles to the control account, is a different question asked by a
+ * different person, and it stays behind LEDGER.
+ *
+ * `lifetime` rides along with `outstanding` for the same reason and out of the
+ * same query — it is the gross sides of the totals that were summed anyway, and
+ * "billed ₹4,00,000, received ₹3,58,000" says nothing the outstanding figure
+ * does not already imply.
  *
  * There is no `destroy` for a party who has been traded with. Their entries
  * would lose the name that explains them, so they are archived
@@ -35,7 +51,59 @@ class PartyController extends Controller
     public function __construct(
         private readonly PartyService $parties,
         private readonly PartyLedgerService $ledger,
+        private readonly PartyStatementService $statements,
     ) {}
+
+    /**
+     * GET /api/v1/parties/{party}/statement
+     *
+     * The customer and vendor statements of the brief's §14 and §15 — M16.
+     * Headline totals, then one row per invoice saying what it was worth and
+     * what is left on it, then the receipts that settled them.
+     *
+     * Distinct from `{party}/ledger`, and both are wanted. The ledger is the
+     * accountant's view — every entry that moved the party's position, with a
+     * running balance that reconciles to the control account. This is the
+     * counter view: which bills are outstanding, and by how much. Neither can
+     * answer the other's question, which is why there are two routes rather than
+     * one with a mode flag.
+     *
+     * `role` decides which half of the relationship is being asked about,
+     * because a great many workshop counterparties are both — the dealer who
+     * buys motors and sells bearings — and the two are settled separately.
+     * Defaults to whichever single role the party holds, and to customer for
+     * somebody who holds both, since that is the statement a workshop reads far
+     * more often.
+     */
+    public function statement(Request $request, int $party): JsonResponse
+    {
+        $record = $this->parties->find($party);
+
+        $role = PartyRole::tryFrom((string) $request->query('role', ''))
+            ?? ($record->hasRole(PartyRole::Customer) ? PartyRole::Customer : PartyRole::Vendor);
+
+        $statement = $this->statements->forParty($record, $role);
+
+        return ApiResponse::success(
+            [
+                'bills' => $statement['bills'],
+                'settlements' => $statement['settlements'],
+            ],
+            null,
+            200,
+            [
+                'party' => [
+                    'id' => $record->id,
+                    'name' => $record->name,
+                    'roles' => $record->roles ?? [],
+                    'gstin' => $record->gstin,
+                    'is_active' => $record->is_active,
+                ],
+                'role' => $role->value,
+                'totals' => $statement['totals'],
+            ],
+        );
+    }
 
     /* ---------------------------------------------------------------------
      | Reading

@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Transaction;
 
+use App\Enums\PaymentStatus;
 use App\Enums\TransactionSource;
 use App\Enums\TransactionStatus;
 use App\Enums\TransactionType;
@@ -43,6 +44,18 @@ class IndexTransactionRequest extends FormRequest
             // Everything one counterparty was involved in — the drill-down
             // behind a party statement.
             'party_id' => ['nullable', 'integer', 'min:1'],
+            /*
+            | Where a bill stands against what has been paid on it — M16.
+            | Derived on the fly from the document's total, its own counter
+            | payments and the receipts allocated to it, so this filter is
+            | computed in SQL rather than read from a column: filtering the
+            | current page in PHP would produce a page count that disagreed with
+            | the rows on it.
+            */
+            'payment_status' => ['nullable', Rule::enum(PaymentStatus::class)],
+            // "Show me only what is still owed" — the toggle above a bills list,
+            // and a shorthand for every payment status except paid.
+            'outstanding' => ['nullable', 'boolean'],
             'sort' => ['nullable', Rule::in(['date', 'total', 'created_at'])],
             'direction' => ['nullable', Rule::in(['asc', 'desc'])],
             'per_page' => ['nullable', 'integer', 'between:1,200'],
@@ -67,6 +80,11 @@ class IndexTransactionRequest extends FormRequest
             'to' => $this->input('to'),
             'account_id' => $this->filled('account_id') ? (int) $this->input('account_id') : null,
             'party_id' => $this->filled('party_id') ? (int) $this->input('party_id') : null,
+            'payment_status' => $this->input('payment_status'),
+            // Absent rather than false when the toggle is off, so it narrows
+            // nothing — `outstanding=0` is "I did not ask", not "show me the
+            // settled ones", which is what `payment_status=paid` is for.
+            'outstanding' => $this->boolean('outstanding') ?: null,
             'sort' => $this->input('sort'),
             'direction' => $this->input('direction'),
         ];

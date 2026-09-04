@@ -2,7 +2,6 @@
 
 namespace App\Http\Requests\Opening;
 
-use App\Enums\ItemType;
 use App\Enums\OpeningRowKind;
 use App\Services\Onboarding\OpeningBalanceService;
 use App\Services\Onboarding\OpeningCsvParser;
@@ -65,7 +64,11 @@ class OpeningBalanceRequest extends FormRequest
             'rows.*.kind' => ['required', 'string', 'in:'.implode(',', OpeningRowKind::values())],
             'rows.*.name' => ['nullable', 'string', 'max:200'],
             'rows.*.variant' => ['nullable', 'string', 'max:200'],
-            'rows.*.type' => ['nullable', 'string', 'in:'.implode(',', ItemType::values())],
+            // A category name or code. Not constrained to a list here: the
+            // categories are rows an admin edits, so what is valid is a question
+            // for the database — and OpeningBalanceService answers it with a
+            // refusal that names the categories that do exist.
+            'rows.*.type' => ['nullable', 'string', 'max:120'],
             'rows.*.quantity' => ['nullable', 'numeric', 'decimal:0,3'],
             'rows.*.unit_cost' => ['nullable', 'numeric', 'decimal:0,2', 'min:0', 'max:'.self::MAX_AMOUNT],
             'rows.*.amount' => ['nullable', 'numeric', 'decimal:0,2', 'min:0', 'max:'.self::MAX_AMOUNT],

@@ -50,7 +50,7 @@ interface ItemRepositoryInterface
     public function draftCount(): int;
 
     /**
-     * @param  array{search?: string|null, type?: string|null, is_active?: bool|null, is_stock?: bool|null, is_draft?: bool|null, sort?: string|null, direction?: string|null}  $filters
+     * @param  array{search?: string|null, category_ids?: array<int, int>|null, is_active?: bool|null, is_stock?: bool|null, is_draft?: bool|null, sort?: string|null, direction?: string|null}  $filters
      * @return LengthAwarePaginator<int, Item>
      */
     public function paginate(array $filters, int $perPage): LengthAwarePaginator;

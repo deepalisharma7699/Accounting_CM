@@ -45,6 +45,7 @@ enum SystemAccount: string
     case Cogs = 'cogs';
     case MiscExpense = 'misc_expense';
     case SalaryExpense = 'salary_expense';
+    case RoundOff = 'round_off';
 
     public function code(): string
     {
@@ -68,6 +69,21 @@ enum SystemAccount: string
             self::Cogs => '5000',
             self::MiscExpense => '5100',
             self::SalaryExpense => '5200',
+            /*
+            | The very top of the expense band, and not 5300 or 5900, which is
+            | worth saying why.
+            |
+            | Every other seeded account sits at the bottom of its band, so a
+            | workshop adding one of its own reaches for the next round number
+            | up — the chart screen's "add an account" form literally offers
+            | `5300` as its placeholder. Claiming any of those would collide
+            | with the workshops that followed the suggestion, and the collision
+            | surfaces as a failure to provision rather than as a message
+            | anybody could act on.
+            |
+            | 5999 is the one number in the band nobody types by choice.
+            */
+            self::RoundOff => '5999',
         };
     }
 
@@ -93,6 +109,7 @@ enum SystemAccount: string
             self::Cogs => 'COGS',
             self::MiscExpense => 'Misc Expense',
             self::SalaryExpense => 'Salary Expense',
+            self::RoundOff => 'Round Off',
         };
     }
 
@@ -117,7 +134,17 @@ enum SystemAccount: string
 
             self::Cogs,
             self::MiscExpense,
-            self::SalaryExpense => AccountType::Expense,
+            self::SalaryExpense,
+            /*
+            | An expense that spends most of its life with a credit balance,
+            | which is correct rather than odd. Rounding up gains the workshop
+            | paise and rounding down loses them, in roughly equal measure, and
+            | the account is the running net of the two. Filing it under income
+            | would be worse: it is not revenue, nobody earned it, and a P&L
+            | reader looking for "what did the rounding cost us this year" looks
+            | among the expenses.
+            */
+            self::RoundOff => AccountType::Expense,
         };
     }
 
@@ -141,22 +168,28 @@ enum SystemAccount: string
             self::ServiceIncome => 'Revenue from labour: repairs and rewinding.',
 
             self::Cogs => 'Cost of the stock consumed by a sale or a job.',
+            self::RoundOff => 'The paise dropped or added when a bill is taken to the nearest rupee.',
             self::MiscExpense => 'Day-to-day running costs.',
             self::SalaryExpense => 'Staff salaries.',
         };
     }
 
     /**
-     * Reserved for a later phase: seeded now so the ledger structure is
-     * complete and Phase 2 needs no migration, but nothing in Phase 1 posts to
-     * them.
+     * Reserved for a later phase: seeded so the ledger structure is complete
+     * before anything posts to it.
+     *
+     * **Empty as of M22**, and left in place rather than deleted because that is
+     * the whole point of it. Staff Advance and Salary Expense were seeded from
+     * the first day and sat unused for eleven modules; the staff module then
+     * posted to them without a migration, without a backfill, and without a
+     * workshop having to do anything. The next account somebody foresees should
+     * arrive the same way, and this is where it says so.
+     *
+     * @return bool
      */
     public function isDeferredToLaterPhase(): bool
     {
-        return match ($this) {
-            self::StaffAdvance, self::SalaryExpense => true,
-            default => false,
-        };
+        return false;
     }
 
     /**

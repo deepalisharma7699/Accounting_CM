@@ -3,6 +3,7 @@
 namespace App\Http\Requests\Transaction;
 
 use App\Enums\PaymentMode;
+use App\Http\Requests\Transaction\Concerns\CarriesClientRef;
 use App\Services\Accounting\PostingEngine;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -22,6 +23,8 @@ use Illuminate\Validation\Rule;
  */
 class StoreSettlementRequest extends FormRequest
 {
+    use CarriesClientRef;
+
     /** Matches DECIMAL(15, 2). */
     private const MAX_AMOUNT = '9999999999999.99';
 
@@ -44,6 +47,9 @@ class StoreSettlementRequest extends FormRequest
             // because a field was left out.
             'post' => ['required', 'boolean'],
 
+            // A retry after a timeout must not become a second document — M17.
+            ...$this->clientRefRules(),
+
             // Required here where a journal's is optional: money moved to or from
             // somebody, and a settlement attributed to nobody sits in a control
             // account no statement can account for. Whether they hold the right
@@ -61,6 +67,27 @@ class StoreSettlementRequest extends FormRequest
             // 100.01 hides it.
             'payments.*.amount' => ['required', 'numeric', 'decimal:0,2', 'gt:0', 'max:'.self::MAX_AMOUNT],
             'payments.*.reference' => ['nullable', 'string', 'max:100'],
+
+            /*
+            | Which bills this money settles — M16. Optional, and the omission
+            | means something: leave it out and the money is applied to the
+            | party's open bills oldest first, which is what an accounts
+            | department does when nobody says otherwise.
+            |
+            | Send it when the customer *did* say — "this cheque is for invoice
+            | 1012" — and the split is taken as given. An amount left off a line
+            | means "whatever is still owing on this one", so ticking three
+            | invoices off a list needs no figures typed at all.
+            |
+            | That the bill exists, is this party's, is posted, and has that much
+            | left owing are all SettlementService's business, for the same reason
+            | the payment split's arithmetic is the engine's: every entry point
+            | passes through it, and a rule enforced in one controller says
+            | nothing about the others.
+            */
+            'allocations' => ['nullable', 'array', 'max:100'],
+            'allocations.*.bill_transaction_id' => ['required', 'integer', 'min:1'],
+            'allocations.*.amount' => ['nullable', 'numeric', 'decimal:0,2', 'gt:0', 'max:'.self::MAX_AMOUNT],
         ];
     }
 
@@ -80,6 +107,28 @@ class StoreSettlementRequest extends FormRequest
     }
 
     /**
+     * The bills this settlement is pointed at.
+     *
+     * Kept out of {@see payload()} deliberately: an allocation is not part of the
+     * transaction at all — it writes no journal entry and changes no balance —
+     * and putting it in the compose payload would park it on a draft's stored
+     * request, where it would look like something the posting engine ought to
+     * obey. It is applied after the money is in the books, by
+     * {@see \App\Services\Accounting\SettlementService}.
+     *
+     * @return array<int, array{bill_transaction_id: int, amount: string|null}>
+     */
+    public function allocations(): array
+    {
+        return array_map(fn (array $line) => [
+            'bill_transaction_id' => (int) ($line['bill_transaction_id'] ?? 0),
+            'amount' => isset($line['amount']) && $line['amount'] !== ''
+                ? (string) $line['amount']
+                : null,
+        ], array_values((array) $this->input('allocations', [])));
+    }
+
+    /**
      * @return array{date: string, notes: string|null, post: bool, party_id: int, payments: array<int, array<string, mixed>>}
      */
     public function payload(): array
@@ -88,6 +137,7 @@ class StoreSettlementRequest extends FormRequest
             'date' => (string) $this->string('date'),
             'notes' => $this->filled('notes') ? trim((string) $this->string('notes')) : null,
             'post' => $this->boolean('post'),
+            'client_ref' => $this->clientRef(),
             'party_id' => (int) $this->input('party_id'),
             'payments' => array_map(fn (array $split) => [
                 'mode' => $split['mode'] ?? null,

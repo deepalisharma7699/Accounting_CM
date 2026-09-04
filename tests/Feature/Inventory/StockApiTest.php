@@ -2,7 +2,6 @@
 
 namespace Tests\Feature\Inventory;
 
-use App\Enums\ItemType;
 use App\Models\ItemVariant;
 use App\Models\Tenant;
 use App\Models\User;
@@ -51,7 +50,7 @@ class StockApiTest extends TestCase
     #[Test]
     public function the_stock_list_reports_a_position_per_variant(): void
     {
-        $copper = $this->variantFor($this->tenant, ItemType::BulkMaterial);
+        $copper = $this->variantFor($this->tenant, 'bulk_material');
 
         $this->receiveStock($this->tenant, $copper, '10', '700.00');
         $this->receiveStock($this->tenant, $copper, '10', '800.00');
@@ -76,7 +75,7 @@ class StockApiTest extends TestCase
     #[Test]
     public function a_variant_that_has_never_moved_reports_zero_rather_than_being_missing(): void
     {
-        $bearing = $this->variantFor($this->tenant, ItemType::Part);
+        $bearing = $this->variantFor($this->tenant, 'part');
 
         $response = $this->withHeaders($this->authHeader($this->owner))
             ->getJson('/api/v1/stock')
@@ -104,8 +103,8 @@ class StockApiTest extends TestCase
     #[Test]
     public function the_low_stock_filter_reads_the_reorder_level(): void
     {
-        $low = $this->variantFor($this->tenant, ItemType::Part, reorderLevel: '5');
-        $fine = $this->variantFor($this->tenant, ItemType::Part, reorderLevel: '1');
+        $low = $this->variantFor($this->tenant, 'part', reorderLevel: '5');
+        $fine = $this->variantFor($this->tenant, 'part', reorderLevel: '1');
 
         $this->receiveStock($this->tenant, $low, '4', '400.00');
         $this->receiveStock($this->tenant, $fine, '9', '400.00');
@@ -128,7 +127,7 @@ class StockApiTest extends TestCase
     #[Test]
     public function a_negative_position_is_reported_separately_from_a_low_one(): void
     {
-        $bearing = $this->variantFor($this->tenant, ItemType::Part, reorderLevel: '5');
+        $bearing = $this->variantFor($this->tenant, 'part', reorderLevel: '5');
 
         $this->receiveStock($this->tenant, $bearing, '2', '400.00');
         $this->issueStock($this->tenant, $bearing, '5');
@@ -150,7 +149,7 @@ class StockApiTest extends TestCase
     #[Test]
     public function the_summary_reconciles_the_shelf_against_the_inventory_account(): void
     {
-        $copper = $this->variantFor($this->tenant, ItemType::BulkMaterial);
+        $copper = $this->variantFor($this->tenant, 'bulk_material');
 
         $this->receiveStock($this->tenant, $copper, '10', '700.00');
 
@@ -181,7 +180,7 @@ class StockApiTest extends TestCase
     #[Test]
     public function the_stock_card_shows_a_running_balance(): void
     {
-        $copper = $this->variantFor($this->tenant, ItemType::BulkMaterial);
+        $copper = $this->variantFor($this->tenant, 'bulk_material');
 
         $this->receiveStock($this->tenant, $copper, '10', '700.00');
         $this->receiveStock($this->tenant, $copper, '10', '800.00');
@@ -209,7 +208,7 @@ class StockApiTest extends TestCase
     #[Test]
     public function an_adjustment_posts_quantities_and_journal_entries_together(): void
     {
-        $bearing = $this->variantFor($this->tenant, ItemType::Part);
+        $bearing = $this->variantFor($this->tenant, 'part');
 
         $response = $this->withHeaders($this->authHeader($this->owner))
             ->postJson('/api/v1/transactions/stock-adjustment', [
@@ -233,7 +232,7 @@ class StockApiTest extends TestCase
     #[Test]
     public function an_adjustment_of_zero_is_refused_at_the_form(): void
     {
-        $bearing = $this->variantFor($this->tenant, ItemType::Part);
+        $bearing = $this->variantFor($this->tenant, 'part');
 
         $this->withHeaders($this->authHeader($this->owner))
             ->postJson('/api/v1/transactions/stock-adjustment', [
@@ -248,7 +247,7 @@ class StockApiTest extends TestCase
     public function another_workshops_variant_does_not_resolve(): void
     {
         [$other] = $this->tenantWithUser();
-        $theirs = $this->variantFor($other, ItemType::Part);
+        $theirs = $this->variantFor($other, 'part');
 
         $this->withHeaders($this->authHeader($this->owner))
             ->postJson('/api/v1/transactions/stock-adjustment', [
@@ -276,7 +275,7 @@ class StockApiTest extends TestCase
     #[Test]
     public function there_is_no_route_that_writes_stock_directly(): void
     {
-        $bearing = $this->variantFor($this->tenant, ItemType::Part);
+        $bearing = $this->variantFor($this->tenant, 'part');
 
         foreach ([
             ['post', '/api/v1/stock'],
@@ -306,10 +305,10 @@ class StockApiTest extends TestCase
     public function the_stock_screen_is_scoped_to_the_callers_workshop(): void
     {
         [$other] = $this->tenantWithUser();
-        $theirs = $this->variantFor($other, ItemType::Part);
+        $theirs = $this->variantFor($other, 'part');
         $this->receiveStock($other, $theirs, '10', '400.00');
 
-        $mine = $this->variantFor($this->tenant, ItemType::Part);
+        $mine = $this->variantFor($this->tenant, 'part');
         $this->receiveStock($this->tenant, $mine, '2', '100.00');
 
         $response = $this->withHeaders($this->authHeader($this->owner))
@@ -327,7 +326,7 @@ class StockApiTest extends TestCase
     public function a_variant_id_from_another_workshop_is_a_404_on_the_card(): void
     {
         [$other] = $this->tenantWithUser();
-        $theirs = $this->variantFor($other, ItemType::Part);
+        $theirs = $this->variantFor($other, 'part');
 
         $this->withHeaders($this->authHeader($this->owner))
             ->getJson("/api/v1/stock/variants/{$theirs->id}")
@@ -337,7 +336,7 @@ class StockApiTest extends TestCase
     #[Test]
     public function an_archived_variant_keeps_its_stock_but_leaves_the_default_list(): void
     {
-        $bearing = $this->variantFor($this->tenant, ItemType::Part);
+        $bearing = $this->variantFor($this->tenant, 'part');
         $this->receiveStock($this->tenant, $bearing, '4', '400.00');
 
         $this->actingForTenant($this->tenant, fn () => ItemVariant::whereKey($bearing->id)->update(['is_active' => false]));

@@ -21,10 +21,16 @@ export function esc(value) {
 export function debounce(fn, wait = 300) {
     let timer;
 
-    return (...args) => {
+    const run = (...args) => {
         clearTimeout(timer);
         timer = setTimeout(() => fn(...args), wait);
     };
+
+    // For the callers that need to overtake their own wait — a confirmation
+    // that must not open on a figure the last keystroke has already changed.
+    run.cancel = () => clearTimeout(timer);
+
+    return run;
 }
 
 export function formatDate(value) {
@@ -300,9 +306,18 @@ export function showFormErrors(form, error) {
     }
 }
 
-/** Disable a submit button and swap its label while a request is in flight. */
+/**
+ * Disable a submit button and swap its label while a request is in flight.
+ *
+ * The *visible* one. A form that is moved between a level-1 slot and a dialog
+ * carries a footer for each — see `adoptForm()` in workspace.js — and only one
+ * of them is on screen. Disabling the hidden one would leave the button the user
+ * is looking at live, and clickable a second time.
+ */
 export function setSubmitting(form, busy, busyLabel = 'Saving…') {
-    const button = $('[type=submit]', form);
+    const buttons = $$('[type=submit]', form);
+    const button = buttons.find((el) => el.offsetParent !== null) ?? buttons[0];
+
     if (!button) return;
 
     if (busy) {
@@ -323,4 +338,46 @@ export function tableMessage(colspan, message, tone = 'muted') {
     const color = tone === 'error' ? 'text-rose-600' : 'text-muted-foreground';
 
     return `<tr><td colspan="${colspan}" class="px-4 py-12 text-center text-sm ${color}">${esc(message)}</td></tr>`;
+}
+
+/* -------------------------------------------------------------------------
+ | Export
+ | ---------------------------------------------------------------------- */
+
+/**
+ * One cell of a CSV, quoted only when it has to be.
+ *
+ * Quoting everything would be valid and would also make the file unreadable in
+ * a text editor, which is where somebody looks when a spreadsheet has mangled
+ * a column.
+ */
+function csvCell(value) {
+    const text = String(value ?? '');
+
+    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+/**
+ * Hand the browser a CSV of `rows`, the first of which is the header.
+ *
+ * Shared rather than written per module: it was in accounts.js first, and the
+ * BOM below is the sort of detail that gets remembered in one copy and not the
+ * other (§5.1).
+ *
+ * @param {string} filename
+ * @param {Array<Array<unknown>>} rows
+ */
+export function downloadCsv(filename, rows) {
+    const csv = rows.map((row) => row.map(csvCell).join(',')).join('\r\n');
+    // The BOM is what makes Excel open a UTF-8 CSV as UTF-8 rather than as the
+    // system codepage, which is where rupee signs turn into mojibake.
+    const blob = new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+
+    link.href = url;
+    link.download = filename;
+    link.click();
+
+    URL.revokeObjectURL(url);
 }

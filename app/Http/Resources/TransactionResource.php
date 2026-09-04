@@ -27,6 +27,14 @@ class TransactionResource extends JsonResource
     {
         return [
             'id' => $this->id,
+            // What a human calls it — `INV/26-27/1012`. Null on a draft, which
+            // has not earned one: a number that could be discarded is a gap in
+            // the series somebody has to explain. M16.
+            'doc_no' => $this->doc_no,
+            // Echoed back so a client can confirm the document it is holding is
+            // the one its retry was about — M17. Null for anything created
+            // server-side, which legitimately had no client to name it.
+            'client_ref' => $this->client_ref,
             'type' => $this->type->value,
             'type_label' => $this->type->label(),
             'status' => $this->status->value,
@@ -39,32 +47,74 @@ class TransactionResource extends JsonResource
             'notes' => $this->notes,
 
             /*
-            | What was settled on this document, and what is left on it.
+            | What was settled on this document, and what is left on it — M16.
             |
-            | Read these narrowly, because they mean less than their names
-            | suggest. `paid` is the document's *own* payment split — money taken
-            | at the counter when the bill was written. It is not this invoice's
-            | share of everything the customer has paid since, because no such
-            | share exists: a receipt in this product reduces Sundry Debtors for
-            | the party, not a named invoice, so there is nothing linking a later
-            | payment back to the document it happened to be prompted by.
+            | Two figures add up to `paid`, and they are different things: money
+            | taken at the counter when the bill was written, which lives on the
+            | document's own split, and every later receipt allocated to it. Until
+            | `transaction_allocations` existed only the first was knowable, so
+            | this key meant far less than its name — a thirty-day invoice paid by
+            | cheque read as unpaid for ever. It now means what it says.
             |
-            | That is a real limitation and it is reported rather than papered
-            | over. Filling `balance` from the party's outstanding instead would
-            | put the same figure against every one of their invoices, and each
-            | row would look like an answer about itself.
+            | Computed by BillService and attached by TransactionService, not
+            | worked out here: it depends on rows a per-row serialiser cannot see,
+            | and going to look for them would be a query per row of every listing
+            | in the application.
             |
-            | Null for types that cannot carry a split at all — a journal, a stock
-            | adjustment, an opening balance. Zero there would read as "nothing
-            | has been paid", which invites somebody to chase it.
+            | Absent for anything that is not a posted bill — a draft, a reversed
+            | invoice, a receipt, a journal. Zero there would read as "nothing has
+            | been paid", which invites somebody to chase it.
             */
             'paid' => $this->when(
+                $this->settlement !== null,
+                fn () => $this->settlement['paid'],
+            ),
+            // What returns have taken back off it — M18. Beside `paid` rather
+            // than folded into it, because nobody handed over any money: the
+            // goods came back. Both reduce what is due.
+            'credited' => $this->when(
+                $this->settlement !== null,
+                fn () => $this->settlement['credited'],
+            ),
+            'due' => $this->when(
+                $this->settlement !== null,
+                fn () => $this->settlement['due'],
+            ),
+            'payment_status' => $this->when(
+                $this->settlement !== null,
+                fn () => $this->settlement['status']->value,
+            ),
+            'payment_status_label' => $this->when(
+                $this->settlement !== null,
+                fn () => $this->settlement['status']->label(),
+            ),
+            // So a badge's colour is decided in one place rather than in each
+            // screen that renders one — §38.
+            'payment_status_tone' => $this->when(
+                $this->settlement !== null,
+                fn () => $this->settlement['status']->tone(),
+            ),
+            // When the workshop's own terms say it should have been settled.
+            // Null where it has set none, and then nothing is ever overdue.
+            'due_date' => $this->when(
+                $this->settlement !== null,
+                fn () => $this->settlement['due_date'],
+            ),
+
+            /*
+            | Money taken on the document itself, kept separate from `paid`.
+            |
+            | The distinction matters at the counter: "₹2,000 of this ₹5,000 bill
+            | was handed over when it was written" is a different fact from
+            | "₹2,000 of it has been settled since", and a screen printing a
+            | receipt needs the first.
+            |
+            | Null for types that cannot carry a split at all — a journal, a stock
+            | adjustment, an opening balance.
+            */
+            'paid_on_document' => $this->when(
                 $this->type->acceptsPaymentSplit(),
                 fn () => $this->paidOnDocument()->amount(),
-            ),
-            'balance' => $this->when(
-                $this->type->acceptsPaymentSplit(),
-                fn () => Money::of($this->total)->minus($this->paidOnDocument())->amount(),
             ),
 
             // The id is always present so a form can round-trip it; the name
@@ -77,6 +127,41 @@ class TransactionResource extends JsonResource
                 'roles' => $this->party->roles ?? [],
             ]),
 
+            // The employee a staff advance was handed to — M22, and the same
+            // rule as the party above: the id always, the name only where the
+            // relation was loaded. Set on `staff_advance` and on nothing else; a
+            // payroll run pays everybody at once and names none of them here.
+            'employee_id' => $this->employee_id,
+            'employee' => $this->whenLoaded('employee', fn () => $this->employee === null ? null : [
+                'id' => $this->employee->id,
+                'name' => $this->employee->name,
+            ]),
+
+            /*
+            | Who did the work — M22, and on a sale only.
+            |
+            | The workshop's own record, and it stays that way. It is not on the
+            | customer's copy of the invoice and must never be: whose hands were
+            | on the motor is the workshop's business, and a customer who learns
+            | that the apprentice wound it has been handed an argument about the
+            | price. `InvoiceDocumentService` builds the customer's document from
+            | its own list of fields for precisely this reason — so there is no
+            | branch anywhere that could let this through.
+            |
+            | Absent where nothing attached it, rather than an empty array: a
+            | listing that did not ask should not read as forty invoices with
+            | nobody on them. See Transaction::$staffAttribution.
+            */
+            'staff' => $this->when(
+                $this->staffAttribution !== null,
+                fn () => $this->staffAttribution->map(fn ($row) => [
+                    'designation_id' => (int) $row->designation_id,
+                    'designation' => $row->designation?->name,
+                    'employee_id' => (int) $row->employee_id,
+                    'employee' => $row->employee?->name,
+                ])->values()->all(),
+            ),
+
             'is_draft' => $this->isDraft(),
             'is_editable' => $this->status->isEditable(),
 
@@ -85,6 +170,12 @@ class TransactionResource extends JsonResource
             // reverses #7", and neither is derivable from the other end.
             'reverses_id' => $this->reverses_id,
             'reversal_id' => $this->whenLoaded('reversal', fn () => $this->reversal?->id),
+
+            // The bill a credit note takes part of back — M18, and never set
+            // alongside `reverses_id`. Cancelling a document and crediting part
+            // of one are different acts, and a row claiming both would be
+            // readable as neither.
+            'against_transaction_id' => $this->against_transaction_id,
 
             'created_by' => $this->whenLoaded('creator', fn () => $this->creator?->name),
             'posted_at' => $this->posted_at?->toIso8601String(),
@@ -107,7 +198,17 @@ class TransactionResource extends JsonResource
             ),
             // Always present, because a list needs it and a list does not load
             // the lines themselves — the repository counts them instead.
+            //
+            // This is the count of *ledger entries* — a purchase of one item at
+            // 18% is three of them, Dr Inventory / Dr GST Input / Cr Payables.
+            // It is what the Journal means by a line, and it is not what a
+            // purchase list means: see `item_line_count` below.
             'line_count' => $this->lineCount(),
+
+            // The count of rows on the document itself — what somebody scanning
+            // a bill list is counting when they say "lines". Null where it was
+            // not asked for, rather than zero, for the same reason as above.
+            'item_line_count' => $this->documentLineCount(),
 
             // How the money moved, for a payment or a receipt. Same shape whether
             // the transaction is a draft or is posted, exactly as `lines` is, so
@@ -291,6 +392,30 @@ class TransactionResource extends JsonResource
         }
 
         return $this->entries_count === null ? null : (int) $this->entries_count;
+    }
+
+    /**
+     * How many rows the *document* carries — items on a bill, not postings in
+     * the ledger.
+     *
+     * Reported apart from {@link lineCount} rather than instead of it, because
+     * the two questions are both real and have different answers: the Journal
+     * asks how many entries a transaction made, and a purchase list asks how
+     * many things were bought. A single-item bill answers 3 and 1, and a list
+     * that printed the first under a heading meaning the second read one higher
+     * than the rows the document itself showed.
+     */
+    private function documentLineCount(): ?int
+    {
+        if ($this->isDraft()) {
+            return count($this->draft_lines ?? []);
+        }
+
+        if ($this->relationLoaded('lines')) {
+            return $this->lines->count();
+        }
+
+        return $this->lines_count === null ? null : (int) $this->lines_count;
     }
 
     /**

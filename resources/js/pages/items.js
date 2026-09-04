@@ -1,9 +1,48 @@
 import auth from '../auth-client';
+import { formatQuantity } from '../components/badge';
+import {
+    averageCostOf, positionStatus, rollUpPositions, stockStatusBadge,
+} from '../components/stock-position';
 import { can } from '../permissions';
 import {
     $, $$, clearFormErrors, confirmAction, debounce, esc, formatDate, formatMoney,
     hideModal, setSubmitting, showFormErrors, showModal, tableMessage, toast,
 } from '../ui';
+import { adoptForm, mountWorkspace } from '../workspace';
+import { initCatalogueMaster, openCatalogueMaster } from './catalogue-master.js';
+
+/** The §2A frame this module is mounted in. Set at the end of {@link initItems}. */
+let workspace = null;
+
+/**
+ * The item form, held rather than looked up.
+ *
+ * It is one node with two homes — the level-1 slot and the edit dialog — and
+ * while the workspace is showing its list it is detached from the document
+ * entirely (§2A.2). A `document.querySelector('#item-form')` finds nothing at
+ * that moment, which is exactly when "edit this row" needs it.
+ */
+let itemForm = null;
+
+/**
+ * The list surface, held for the same reason {@link itemForm} is.
+ *
+ * §2A.2 keeps exactly one surface in the document, so while the create form is
+ * up the whole table — its rows, its filters, its stat tiles and the draft
+ * banner — is detached. `document.querySelector` finds none of it, which is
+ * precisely the moment a save wants to bring the list up to date: the lookup
+ * came back null, the repaint threw on the first `.classList`, and the refetch
+ * behind it never ran. The list then sat on its pre-creation rows until
+ * somebody reloaded the page, which §3.2 forbids anyway.
+ *
+ * Querying the node itself works whether it is attached or not, so a refresh
+ * from the form paints the detached table and it is already current when it
+ * comes back on screen.
+ */
+let listRoot = null;
+
+const $list = (selector) => $(selector, listRoot ?? document);
+const $$list = (selector) => $$(selector, listRoot ?? document);
 
 /**
  * The catalogue, and what is left of it on the shelf.
@@ -55,7 +94,7 @@ const state = {
     canStock: false,
 
     search: '',
-    type: '',
+    categoryId: '',
     isStock: '',
     isActive: '1',
     pill: 'all',
@@ -65,7 +104,7 @@ const state = {
     page: 1,
     lastPage: 1,
 
-    meta: null,          // types, their attribute schemas, and the units
+    meta: null,          // categories, their field schemas, and the units
     openItem: null,      // the item whose drawer is open
     drawerTab: 'overview',
 };
@@ -87,19 +126,116 @@ async function loadMeta({ refresh = false } = {}) {
     } catch {
         // A user without READ:ITEMS never reaches this page's data at all, so an
         // empty schema simply means the forms explain themselves when opened.
-        state.meta = { types: [], units: [], draft_counts: { items: 0, variants: 0 } };
+        state.meta = { categories: [], units: [], draft_counts: { items: 0, variants: 0 } };
     }
+
+    // The selects whose options are rows rather than a fixed set. Painted here
+    // rather than in the Blade template, so adding a category or a unit shows up
+    // without a deployment.
+    paintVocabularySelects();
 
     return state.meta;
 }
 
 function typeMeta(value) {
-    return state.meta?.types?.find((type) => type.value === value) ?? null;
+    if (value === '' || value === null || value === undefined) return null;
+
+    // Categories are matched on id, sent as a string because that is what a
+    // <select> value always is. `types` and `categories` are the same array —
+    // see ItemController::meta() on why both keys exist.
+    const list = state.meta?.categories ?? [];
+
+    return list.find((category) => String(category.value) === String(value)) ?? null;
+}
+
+/**
+ * Fill the selects whose options are rows rather than a fixed set.
+ *
+ * The categories and the units are tables an admin edits, so rendering them into
+ * the Blade template would be a copy that goes stale the moment one is added —
+ * which is the whole failure this module was rebuilt to remove. They are painted
+ * from the server's answer instead, every time the meta is (re)loaded.
+ */
+function paintVocabularySelects() {
+    const categories = state.meta?.categories ?? [];
+    const brands = state.meta?.brands ?? [];
+    const units = state.meta?.units ?? [];
+
+    const categoryOptions = categories
+        .map((category) => `<option value="${esc(category.value)}">${esc(category.label)}</option>`)
+        .join('');
+
+    // Scoped to the form node rather than the document: `#item-form` lives in a
+    // detached slot while the workspace is showing its list, so a document query
+    // would find nothing there.
+    const formSelect = itemForm ? $('#item-type', itemForm) : null;
+
+    if (formSelect) {
+        const held = formSelect.value;
+        formSelect.innerHTML = categories.length
+            ? categoryOptions
+            : '<option value="">No categories yet — add one first</option>';
+        if (held) formSelect.value = held;
+    }
+
+    if (itemForm) paintBrandSelect($('#item-brand', itemForm), brands);
+
+    const unitSelect = itemForm ? $('#item-uom', itemForm) : null;
+
+    if (unitSelect) {
+        const held = unitSelect.value;
+        unitSelect.innerHTML = units
+            .map((unit) => `<option value="${esc(unit.value)}">${esc(unit.label)} (${esc(unit.symbol)})</option>`)
+            .join('');
+        if (held) unitSelect.value = held;
+    }
+
+    const filter = $list('#filter-type');
+
+    if (filter) {
+        const held = filter.value;
+        filter.innerHTML = `<option value="">All categories</option>${categoryOptions}`;
+        filter.value = held;
+    }
+}
+
+/**
+ * Fill the brand dropdown, keeping whatever it was already on.
+ *
+ * Two things it has to survive. The blank option is first and stays selected by
+ * default — an unbranded bush is a real thing, and a dropdown that pre-picked
+ * whichever make came first alphabetically would file half the catalogue under
+ * it. And the held value may be a brand `/items/meta` does not send, because meta
+ * publishes active brands only and a product being edited may carry an archived
+ * one; that option is put back, labelled, for as long as it is the answer.
+ * Dropping it silently would turn "save this description" into "and also clear
+ * the brand".
+ *
+ * @param {HTMLSelectElement|null} select
+ * @param {Array<{value: string, label: string}>} brands
+ * @param {{id: string|number|null, label: string|null}} held  A brand to keep offered even if meta omits it.
+ */
+function paintBrandSelect(select, brands, held = null) {
+    if (!select) return;
+
+    const keepId = held?.id != null && held.id !== '' ? String(held.id) : select.value;
+    const keepLabel = held?.label ?? select.selectedOptions[0]?.textContent?.trim() ?? null;
+
+    let options = brands
+        .map((brand) => `<option value="${esc(brand.value)}">${esc(brand.label)}</option>`)
+        .join('');
+
+    if (keepId && !brands.some((brand) => String(brand.value) === keepId)) {
+        options += `<option value="${esc(keepId)}">${esc(keepLabel ?? 'Brand')} (archived)</option>`;
+    }
+
+    select.innerHTML = `<option value="">No brand</option>${options}`;
+    select.value = keepId ?? '';
 }
 
 function renderDraftBanner() {
     const count = state.meta?.draft_counts?.items ?? 0;
-    const banner = $('#draft-banner');
+    const banner = $list('#draft-banner');
 
     // Hidden when there is nothing in the queue rather than shown reading "0":
     // a permanent empty banner is a banner people stop seeing.
@@ -107,7 +243,7 @@ function renderDraftBanner() {
     banner.classList.toggle('flex', count > 0);
 
     if (count > 0) {
-        $('#draft-banner-title').textContent =
+        $list('#draft-banner-title').textContent =
             `${count} item${count === 1 ? '' : 's'} need${count === 1 ? 's' : ''} reviewing`;
     }
 }
@@ -165,31 +301,18 @@ async function loadStock() {
 
     const { rows } = await fetchAll('/stock', {});
 
+    // Grouped here, summed by the shared rule — the Stock module rolls the same
+    // rows up the same way, and two copies of "what is average cost" is two
+    // answers (§4.4).
+    const byItem = new Map();
+
     rows.forEach((row) => {
-        const key = row.item_id;
+        if (!byItem.has(row.item_id)) byItem.set(row.item_id, []);
+        byItem.get(row.item_id).push(row);
+    });
 
-        const roll = state.stock.get(key) ?? {
-            quantity: 0,
-            value: 0,
-            variants: 0,
-            low: 0,
-            negative: 0,
-            out: 0,
-            positions: [],
-        };
-
-        const quantity = Number(row.quantity ?? 0);
-
-        roll.quantity += quantity;
-        roll.value += Number(row.value ?? 0);
-        roll.variants += 1;
-
-        if (row.is_negative) roll.negative += 1;
-        else if (row.is_low) roll.low += 1;
-        else if (!row.has_stock) roll.out += 1;
-
-        roll.positions.push(row);
-        state.stock.set(key, roll);
+    byItem.forEach((positions, itemId) => {
+        state.stock.set(itemId, rollUpPositions(positions));
     });
 }
 
@@ -212,61 +335,17 @@ function statusOf(item) {
     if (!state.canStock) return null;
     if (!item.tracks_stock) return 'untracked';
 
-    const roll = state.stock.get(item.id);
-
-    if (!roll || roll.variants === 0) return 'out';
-    if (roll.negative > 0) return 'negative';
-    if (roll.quantity <= 0) return 'out';
-    if (roll.low > 0) return 'low';
-
-    return 'in_stock';
-}
-
-const STATUS_BADGE = {
-    in_stock: { label: 'In Stock', chip: 'border-emerald-100 bg-emerald-50 text-emerald-700', dot: 'bg-emerald-500' },
-    low: { label: 'Low Stock', chip: 'border-amber-100 bg-amber-50 text-amber-700', dot: 'bg-amber-500' },
-    out: { label: 'Out of Stock', chip: 'border-rose-100 bg-rose-50 text-rose-600', dot: 'bg-rose-500' },
-    // Its own badge, never folded into "low". A negative position is a data
-    // problem, and the fix is to find the missing purchase.
-    negative: { label: 'Negative', chip: 'border-rose-200 bg-rose-100 text-rose-700', dot: 'bg-rose-600' },
-    untracked: { label: 'Not stocked', chip: 'border-border bg-muted text-muted-foreground', dot: 'bg-muted-foreground' },
-};
-
-function statusBadge(status) {
-    const badge = STATUS_BADGE[status];
-
-    if (!badge) return '';
-
-    return `
-        <span class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5
-                     text-[11.5px] font-semibold ${badge.chip}">
-            <span class="size-1.5 rounded-full ${badge.dot}"></span>
-            ${badge.label}
-        </span>`;
-}
-
-/** Quantities are decimal strings; "8" reads better than "8.000". */
-function formatQty(value) {
-    if (value === null || value === undefined) return '—';
-
-    const number = Number(value);
-
-    if (!Number.isFinite(number)) return String(value);
-
-    return number.toLocaleString('en-IN', { maximumFractionDigits: 3 });
+    // Worst-wins, decided by the shared rule.
+    return positionStatus(state.stock.get(item.id));
 }
 
 function money(value) {
     return value === null || value === undefined ? '—' : `₹${formatMoney(value)}`;
 }
 
-/** Total value over total quantity — not the mean of the variants' averages. */
+/** This family's average cost, by the shared rule: value over quantity. */
 function averageCost(item) {
-    const roll = state.stock.get(item.id);
-
-    if (!roll || roll.quantity <= 0) return null;
-
-    return (roll.value / roll.quantity).toFixed(2);
+    return averageCostOf(state.stock.get(item.id));
 }
 
 /**
@@ -304,7 +383,7 @@ function matchesSearch(item, needle) {
         item.name,
         item.code,
         item.hsn_sac,
-        item.type_label,
+        item.category_label,
         // Variant labels and SKUs too: a fitter looking for "1440" is after a
         // motor by its speed, and the family name is the one thing nobody
         // remembers.
@@ -334,10 +413,26 @@ function matchesPill(item) {
     return status === state.pill;
 }
 
+/**
+ * How many things are on the shelf under this family.
+ *
+ * The loaded variants where the row carries them and the server's count where it
+ * does not — the list asks for `with_variants`, so the first is the usual answer
+ * and the second is the honest fallback rather than a guess. Never null: a family
+ * nobody has hung a variant off yet has none, and printing a dash for it would
+ * read as "not known" when it means zero.
+ */
+function variantCount(item) {
+    if (Array.isArray(item.variants)) return item.variants.length;
+
+    return item.variant_count ?? 0;
+}
+
 const SORTERS = {
     name: (item) => item.name?.toLowerCase() ?? '',
-    type: (item) => item.type_label?.toLowerCase() ?? '',
+    type: (item) => item.category_label?.toLowerCase() ?? '',
     code: (item) => item.code?.toLowerCase() ?? '',
+    variants: (item) => variantCount(item),
     stock: (item) => state.stock.get(item.id)?.quantity ?? -Infinity,
     cost: (item) => Number(averageCost(item) ?? -Infinity),
     price: (item) => {
@@ -357,7 +452,7 @@ function visibleRows() {
 
     const rows = state.items.filter((item) => {
         if (!matchesSearch(item, needle)) return false;
-        if (state.type && item.type !== state.type) return false;
+        if (state.categoryId && String(item.category_id ?? '') !== String(state.categoryId)) return false;
         if (state.isStock !== '' && item.is_stock !== (state.isStock === '1')) return false;
         if (state.isActive !== '' && item.is_active !== (state.isActive === '1')) return false;
         if (state.onlyDrafts && !item.is_draft) return false;
@@ -394,9 +489,11 @@ function render() {
 
     const start = (state.page - 1) * PAGE_SIZE;
     const pageRows = rows.slice(start, start + PAGE_SIZE);
-    const columns = state.canStock ? 9 : 6;
+    // Name, Category, Code, Variants, Status, Actions — and the four stock
+    // columns where the caller may read them.
+    const columns = state.canStock ? 10 : 7;
 
-    $('#items-body').innerHTML = pageRows.length
+    $list('#items-body').innerHTML = pageRows.length
         ? pageRows.map(renderRow).join('')
         : tableMessage(columns, emptyMessage());
 
@@ -405,11 +502,11 @@ function render() {
     renderPager();
     renderSortIndicators();
 
-    const filtered = Boolean(state.search) || state.pill !== 'all' || state.type
+    const filtered = Boolean(state.search) || state.pill !== 'all' || state.categoryId
         || state.isStock !== '' || state.isActive !== '1' || state.onlyDrafts;
 
-    $('#clear-filters').classList.toggle('hidden', !filtered);
-    $('#clear-filters').classList.toggle('flex', filtered);
+    $list('#clear-filters').classList.toggle('hidden', !filtered);
+    $list('#clear-filters').classList.toggle('flex', filtered);
 }
 
 function emptyMessage() {
@@ -425,6 +522,11 @@ function renderRow(item) {
     const roll = state.stock.get(item.id);
     const quantity = roll ? roll.quantity : null;
 
+    // Zero is printed rather than dashed, and printed in amber: a family with no
+    // variants cannot be sold, priced or counted, so it should look like the
+    // thing needing attention that it is.
+    const variants = variantCount(item);
+
     const flags = [
         item.is_draft ? '<span class="badge bg-amber-100 text-amber-800">Needs review</span>' : '',
         item.is_active ? '' : '<span class="badge bg-muted text-muted-foreground">Archived</span>',
@@ -437,7 +539,7 @@ function renderRow(item) {
             <td class="px-4 py-3">
                 <div class="flex items-center gap-1.5">
                     <span class="text-[13px] font-bold ${quantityTone(status)}">
-                        ${item.tracks_stock ? formatQty(quantity ?? 0) : '—'}
+                        ${item.tracks_stock ? formatQuantity(quantity ?? 0) : '—'}
                     </span>
                     ${item.tracks_stock && (status === 'low' || status === 'out' || status === 'negative')
                         ? `<span class="${status === 'low' ? 'text-amber-400' : 'text-rose-400'}">${iconWarn}</span>`
@@ -449,8 +551,12 @@ function renderRow(item) {
             <td class="px-4 py-3 text-[13px] font-semibold text-foreground">${sellPrice(item) ?? '—'}</td>`
         : `<td class="px-4 py-3 text-[13px] text-muted-foreground">${esc(item.base_uom_symbol)}</td>`;
 
+    // §2A.8 — an item written on the form while the list was not on screen is
+    // flashed the first time the list is looked at, so the eye can find it.
+    const flash = workspace?.isNew(item.id) ? ' row-new' : '';
+
     return `
-        <tr class="group cursor-pointer transition hover:bg-background ${item.is_active ? '' : 'opacity-60'}"
+        <tr class="group cursor-pointer transition hover:bg-background${flash} ${item.is_active ? '' : 'opacity-60'}"
             data-row="${item.id}" tabindex="0" role="link"
             aria-label="Open ${esc(item.name)}">
             <td class="px-4 py-3">
@@ -468,7 +574,7 @@ function renderRow(item) {
 
             <td class="px-4 py-3">
                 <span class="rounded-full bg-muted px-2 py-0.5 text-[12.5px] text-muted-foreground">
-                    ${esc(item.type_label)}
+                    ${esc(item.category_label)}
                 </span>
             </td>
 
@@ -478,9 +584,15 @@ function renderRow(item) {
                     : '<span class="text-[13px] text-muted-foreground">—</span>'}
             </td>
 
+            <td class="px-4 py-3">
+                <span class="text-[13px] font-semibold ${variants === 0 ? 'text-amber-600' : 'text-secondary-foreground'}">
+                    ${variants}
+                </span>
+            </td>
+
             ${stockCells}
 
-            <td class="px-4 py-3">${statusBadge(status ?? (item.is_active ? 'active' : 'archived')) || catalogueBadge(item)}</td>
+            <td class="px-4 py-3">${stockStatusBadge(status ?? (item.is_active ? 'active' : 'archived')) || catalogueBadge(item)}</td>
 
             <td class="px-4 py-3">
                 <div class="relative flex justify-end" data-menu-host>
@@ -518,7 +630,7 @@ function renderStats() {
     const scope = state.items.filter((item) =>
         state.isActive === '' || item.is_active === (state.isActive === '1'));
 
-    $('#stat-total').textContent = scope.length.toLocaleString('en-IN');
+    $list('#stat-total').textContent = scope.length.toLocaleString('en-IN');
 
     if (!state.canStock) return;
 
@@ -530,11 +642,11 @@ function renderStats() {
         if (status in counts) counts[status] += 1;
     });
 
-    $('#stat-in-stock').textContent = counts.in_stock.toLocaleString('en-IN');
-    $('#stat-low').textContent = counts.low.toLocaleString('en-IN');
+    $list('#stat-in-stock').textContent = counts.in_stock.toLocaleString('en-IN');
+    $list('#stat-low').textContent = counts.low.toLocaleString('en-IN');
     // Negative positions are counted with "out" here for the same reason the
     // filter includes them: neither is on the shelf.
-    $('#stat-out').textContent = (counts.out + counts.negative).toLocaleString('en-IN');
+    $list('#stat-out').textContent = (counts.out + counts.negative).toLocaleString('en-IN');
 
     $$('[data-stat-filter]').forEach((tile) => {
         const on = state.pill === tile.dataset.statFilter;
@@ -553,11 +665,11 @@ function renderSummary(matched) {
     if (matched !== total) parts.push('· Filtered');
     if (state.truncated) parts.push(`· first ${total.toLocaleString('en-IN')} loaded`);
 
-    $('#items-summary').textContent = parts.join(' ');
+    $list('#items-summary').textContent = parts.join(' ');
 }
 
 function renderPager() {
-    const host = $('#items-pager');
+    const host = $list('#items-pager');
 
     if (state.lastPage <= 1) {
         host.innerHTML = '';
@@ -591,7 +703,7 @@ function renderPager() {
 }
 
 function renderSortIndicators() {
-    $$('#items-head [data-sort]').forEach((th) => {
+    $$list('#items-head [data-sort]').forEach((th) => {
         const on = th.dataset.sort === state.sort.column;
 
         th.setAttribute('aria-sort', on
@@ -724,11 +836,11 @@ async function openDrawer(itemId, { tab = 'overview' } = {}) {
     $('#drawer-title').textContent = item.name;
     $('#drawer-subtitle').textContent = [
         item.code,
-        item.type_label,
+        item.category_label,
         `counted in ${item.base_uom_label.toLowerCase()}`,
     ].filter(Boolean).join(' · ');
 
-    $('#drawer-status').innerHTML = statusBadge(status) || catalogueBadge(item);
+    $('#drawer-status').innerHTML = stockStatusBadge(status) || catalogueBadge(item);
 
     renderDrawerAlert(item, status);
 
@@ -749,8 +861,13 @@ function renderDrawerAlert(item, status) {
     let message = '';
 
     if (status === 'negative') {
-        message = 'More has been issued than was ever received. A sale was probably recorded '
-            + 'before the purchase that supplied it.';
+        // Deliberately does not name a cause. It used to say a sale was probably
+        // recorded before the purchase that supplied it, which is one of three
+        // ways a position goes negative — a reversed purchase and a stock count
+        // are the others — and naming the wrong one sends somebody looking
+        // through the wrong document.
+        message = 'More has been issued than was ever received. Check the stock history for the '
+            + 'movement that took it below zero.';
     } else if (status === 'out' && item.tracks_stock) {
         message = 'Nothing on the shelf.';
     } else if (status === 'low') {
@@ -795,7 +912,7 @@ function drawerOverview(item) {
                     <div>
                         <p class="section-label mb-0.5">Current stock</p>
                         <p class="text-[32px] font-bold leading-none text-foreground">
-                            ${formatQty(roll?.quantity ?? 0)}
+                            ${formatQuantity(roll?.quantity ?? 0)}
                             <span class="ml-1 text-base font-medium text-muted-foreground">${esc(item.base_uom_symbol)}</span>
                         </p>
                     </div>
@@ -815,16 +932,17 @@ function drawerOverview(item) {
 
     const details = [
         ['Item name', esc(item.name)],
-        ['Category', esc(item.type_label)],
+        ['Category', esc(item.category_label)],
+        ['Brand', item.brand ? esc(item.brand) : '—'],
         ['Code', item.code ? `<code class="rounded bg-muted px-2 py-0.5 font-mono text-xs">${esc(item.code)}</code>` : '—'],
         [`${esc(item.tax_code_label)} code`, item.hsn_sac ? esc(item.hsn_sac) : '—'],
         ['GST rate', `${esc(item.gst_rate)}%`],
         ['Counted in', esc(item.base_uom_label)],
         ['Keeps stock', item.can_hold_stock ? (item.is_stock ? 'Yes' : 'No') : 'Cannot — a service is produced when sold'],
-        ['Variants', String(item.variants?.length ?? item.variant_count ?? 0)],
+        ['Variants', String(variantCount(item))],
         ...(state.canStock && item.tracks_stock ? [['Average cost', money(averageCost(item))]] : []),
         ['Selling price', sellPrice(item) ?? '—'],
-        ['Status', statusBadge(status) || catalogueBadge(item)],
+        ['Status', stockStatusBadge(status) || catalogueBadge(item)],
         ['Added', item.created_at ? esc(formatDate(item.created_at)) : '—'],
     ];
 
@@ -894,12 +1012,12 @@ function drawerVariants(item) {
                             <p class="text-[13px] font-bold ${
                                 position.is_negative || !position.has_stock ? 'text-rose-500'
                                     : position.is_low ? 'text-amber-600' : 'text-foreground'}">
-                                ${formatQty(position.quantity)}
+                                ${formatQuantity(position.quantity)}
                                 <span class="text-[11px] font-medium text-muted-foreground">${esc(item.base_uom_symbol)}</span>
                             </p>
                             <p class="text-[11.5px] text-muted-foreground">
                                 ${position.reorder_level !== null && position.reorder_level !== undefined
-                                    ? `reorder at ${formatQty(position.reorder_level)}`
+                                    ? `reorder at ${formatQuantity(position.reorder_level)}`
                                     : 'no reorder level'}
                             </p>
                         </div>`
@@ -999,6 +1117,18 @@ function historyTable(rows, item) {
                         const quantity = Number(movement.quantity ?? 0);
                         const chip = MOVEMENT_CHIP[movement.type] ?? 'bg-muted text-muted-foreground';
 
+                        /*
+                        | A reversed purchase is stored as an adjustment, so
+                        | without this it read exactly like a physical count and
+                        | there was no way to tell which document had taken the
+                        | stock off the shelf. The server decides what to call it
+                        | — see StockMovement::sourceLabel() — and sends null for
+                        | every movement whose type already says everything, so
+                        | every other row is unchanged.
+                        */
+                        const source = movement.source_label ?? null;
+                        const document = movement.transaction ?? null;
+
                         return `
                             <tr class="transition hover:bg-background">
                                 <td class="px-3 py-2.5 text-xs whitespace-nowrap text-muted-foreground">
@@ -1006,16 +1136,20 @@ function historyTable(rows, item) {
                                 </td>
                                 <td class="px-3 py-2.5">
                                     <span class="inline-flex items-center rounded-full px-2 py-0.5
-                                                 text-[11.5px] font-semibold ${chip}">
-                                        ${esc(movement.type_label ?? movement.type ?? '—')}
+                                                 text-[11.5px] font-semibold ${source ? 'bg-amber-50 text-amber-800' : chip}">
+                                        ${esc(source ?? movement.type_label ?? movement.type ?? '—')}
                                     </span>
+                                    ${document ? `
+                                        <span class="mt-0.5 block text-[11px] text-muted-foreground">
+                                            ${esc(document.doc_no ?? `#${document.id}`)}
+                                        </span>` : ''}
                                 </td>
                                 <td class="px-3 py-2.5 text-xs text-muted-foreground">
                                     ${esc(variant.display_label)}
                                 </td>
                                 <td class="px-3 py-2.5 text-[13px] font-semibold whitespace-nowrap
                                            ${quantity < 0 ? 'text-rose-500' : 'text-emerald-600'}">
-                                    ${quantity > 0 ? '+' : ''}${formatQty(movement.quantity)}
+                                    ${quantity > 0 ? '+' : ''}${formatQuantity(movement.quantity)}
                                     <span class="text-[11px] font-medium text-muted-foreground">${esc(item.base_uom_symbol)}</span>
                                 </td>
                             </tr>`;
@@ -1069,123 +1203,386 @@ async function loadActivity(item) {
  | ---------------------------------------------------------------------- */
 
 /**
- * Reflect the chosen type into the rest of the form.
+ * Reflect the chosen category into the rest of the form.
  *
- * The type decides three things, and saying so as the user picks it is much better
- * than refusing the save afterwards: which word the tax code goes by, which unit
- * it is counted in, and whether stock is even possible.
+ * The category decides four things, and saying so as the user picks it is much
+ * better than refusing the save afterwards: **which fields the form asks for**,
+ * which word the tax code goes by, which unit it is counted in, and whether stock
+ * is even possible.
+ *
+ * The first of those is what makes this form universal. Nothing here knows what a
+ * motor or a bearing or an LED lamp is; it draws whatever the server said this
+ * category asks for.
  */
 function applyTypeToForm({ editing }) {
-    const type = typeMeta($('#item-type').value);
-    if (!type) return;
+    /*
+    | Scoped to the form rather than to the document.
+    |
+    | `#item-form` is one node with two homes — the level-1 slot and the edit
+    | dialog — and while the workspace is showing its list the level-1 slot is
+    | detached. A `document.querySelector` would find nothing there and this
+    | would throw; the form itself is always a real node.
+    */
+    const form = itemForm;
+    const category = typeMeta($('#item-type', form).value);
 
-    $('#item-hsn-label').textContent = `${type.tax_code_label} code`;
+    const section = $('#item-attributes-section', form);
+    const host = $('#item-attributes', form);
 
-    if (!editing) {
-        $('#item-uom').value = type.default_uom;
+    if (!category) {
+        if (section) section.classList.add('hidden');
+
+        return;
     }
 
-    const canHoldStock = type.can_hold_stock;
-    const checkbox = $('#item-stock');
+    $('#item-hsn-label', form).textContent = `${category.tax_code_label} code`;
+
+    if (!editing) {
+        $('#item-uom', form).value = category.default_uom;
+
+        // The category's defaults are *copied* onto the product, never
+        // referenced — correcting a category's rate next March must not restate
+        // what every product already charges. So they are filled in only where
+        // the user has not typed something of their own.
+        const gst = $('#item-gst', form);
+        if (!gst.value.trim() && category.default_gst_rate !== null) gst.value = category.default_gst_rate;
+
+        // Which of the two it is, said on the form: a rate that arrived from the
+        // category is a value somebody can tab past, so it has to be visible
+        // that it arrived rather than that it was typed.
+        const hint = $('#item-gst-hint', form);
+
+        if (hint) {
+            hint.textContent = category.default_gst_rate === null
+                ? `${category.label ?? 'This category'} has no default rate — enter one, or 0 if this is exempt.`
+                : `${category.default_gst_rate}% from ${category.label ?? 'the category'}. Change it if this product differs.`;
+        }
+
+        const hsn = $('#item-hsn', form);
+        if (!hsn.value.trim() && category.default_hsn_sac) hsn.value = category.default_hsn_sac;
+    }
+
+    const canHoldStock = category.can_hold_stock;
+    const checkbox = $('#item-stock', form);
 
     checkbox.disabled = !canHoldStock;
 
     if (!canHoldStock) checkbox.checked = false;
 
-    $('#item-stock-hint').textContent = canHoldStock
+    $('#item-stock-hint', form).textContent = canHoldStock
         ? 'Turn this off for something you buy to order and never hold.'
-        : 'A service cannot be held in stock — an hour is produced when it is sold.';
+        : 'This category holds no stock — an hour of labour is produced when it is sold.';
 
-    $('#item-type-hint').textContent = editing
-        ? 'Fixed once the item exists: changing it would reinterpret everything recorded against it.'
-        : `Described by ${describeAttributes(type)}.`;
+    // Hidden wholesale rather than merely disabled: offering an opening quantity
+    // for labour teaches somebody it is possible.
+    const stockSection = $('#item-stock-section', form);
+    if (stockSection) stockSection.classList.toggle('hidden', !canHoldStock);
+
+    applyStockFieldsState();
+    paintUnitSuffix();
+
+    $('#item-type-hint', form).textContent = editing
+        ? 'Fixed once the product exists: changing it would reinterpret everything recorded against it.'
+        : (category.description || `Asks for ${describeAttributes(category)}.`);
+
+    // The specification section: whatever this category asks for.
+    const schema = category.attributes ?? {};
+    const keys = Object.keys(schema);
+
+    if (section) section.classList.toggle('hidden', keys.length === 0);
+
+    const forLabel = $('#item-attributes-for', form);
+    if (forLabel) forLabel.textContent = keys.length ? `— what a ${category.label.toLowerCase()} is described by` : '';
+
+    if (host) renderAttributeFields(host, schema, editing ? undefined : defaultsFor(schema));
 }
 
-function describeAttributes(type) {
-    const keys = Object.keys(type.attributes ?? {});
+/**
+ * The pre-filled values a category's fields declare.
+ *
+ * Applied only on create. Filling defaults into an edit form would quietly
+ * rewrite a product that had deliberately been left blank.
+ */
+function defaultsFor(schema) {
+    const values = {};
+
+    Object.keys(schema).forEach((key) => {
+        if (schema[key].default !== undefined) values[key] = schema[key].default;
+    });
+
+    return values;
+}
+
+/**
+ * Grey the opening-stock boxes out when the product is not being stocked.
+ *
+ * Left visible rather than removed: the checkbox above them is what explains
+ * why they are inert, and a box that vanishes reads as a bug.
+ */
+function applyStockFieldsState() {
+    const form = itemForm;
+    const on = $('#item-stock', form)?.checked;
+    const fields = $('#item-stock-fields', form);
+
+    if (!fields) return;
+
+    fields.classList.toggle('opacity-50', !on);
+
+    $$('input', fields).forEach((input) => {
+        input.disabled = !on;
+    });
+}
+
+/** Print the product's unit after the opening-stock box, so "5" says 5 what. */
+function paintUnitSuffix() {
+    const form = itemForm;
+    const code = $('#item-uom', form)?.value;
+    const unit = (state.meta?.units ?? []).find((candidate) => candidate.value === code);
+
+    $$('[data-uom-suffix]', form).forEach((node) => {
+        node.textContent = unit?.symbol ?? '';
+    });
+}
+
+function describeAttributes(category) {
+    const keys = Object.keys(category.attributes ?? {});
 
     return keys.length
-        ? keys.map((key) => type.attributes[key].label.toLowerCase()).join(', ')
-        : 'nothing — a service has no variations';
+        ? keys.map((key) => category.attributes[key].label.toLowerCase()).join(', ')
+        : 'no specification fields yet';
 }
 
+/**
+ * Fill the item form in, and put it where it belongs.
+ *
+ * One form, two homes (§4.4): writing a new item is the module's level-1 landing
+ * surface, and editing one is a dialog over the list you found it in. The fields
+ * are identical, so they are declared once and the node is moved.
+ */
 async function openItemForm(item = null) {
     await loadMeta();
 
-    const form = $('#item-form');
+    const form = itemForm;
     const editing = item !== null;
+
+    adoptForm(
+        form,
+        editing ? $('[data-item-modal-slot]') : $('[data-item-form-slot]'),
+        { chrome: editing ? 'modal' : 'inline' },
+    );
 
     clearFormErrors(form);
     form.reset();
 
-    $('#item-modal-title').textContent = editing ? `Edit ${item.name}` : 'Add New Item';
-    $('#item-modal-subtitle').textContent = editing
-        ? 'Type and unit are fixed once an item exists.'
-        : 'Fill in the details for the new catalogue item.';
+    $('#item-modal-title', form).textContent = editing ? `Edit ${item.name}` : 'Add product';
+    $('#item-modal-subtitle', form).textContent = editing
+        ? 'Category and unit are fixed once a product exists.'
+        : 'The fields below the category are the ones that category asks for.';
 
     form.elements.id.value = editing ? item.id : '';
 
-    $('#item-name').value = editing ? item.name : '';
-    $('#item-code').value = editing ? (item.code ?? '') : '';
-    $('#item-hsn').value = editing ? (item.hsn_sac ?? '') : '';
-    $('#item-gst').value = editing ? item.gst_rate : '';
-    $('#item-type').value = editing ? item.type : ($('#item-type').options[0]?.value ?? '');
-    $('#item-uom').value = editing ? item.base_uom : '';
-    $('#item-stock').checked = editing ? item.is_stock : true;
-    $('#item-description').value = editing ? (item.description ?? '') : '';
+    $('#item-name', form).value = editing ? item.name : '';
+    $('#item-code', form).value = editing ? (item.code ?? '') : '';
+    // The brand the product already carries, kept offered even where it has since
+    // been archived — see paintBrandSelect(). On a create it lands on "No brand".
+    paintBrandSelect(
+        $('#item-brand', form),
+        state.meta?.brands ?? [],
+        editing ? { id: item.brand_id ?? '', label: item.brand } : { id: '', label: null },
+    );
+    $('#item-hsn', form).value = editing ? (item.hsn_sac ?? '') : '';
+    $('#item-gst', form).value = editing ? item.gst_rate : '';
+    $('#item-type', form).value = editing
+        ? String(item.category_id ?? '')
+        : ($('#item-type', form).options[0]?.value ?? '');
+    $('#item-uom', form).value = editing ? item.base_uom : '';
+    $('#item-stock', form).checked = editing ? item.is_stock : true;
+    $('#item-description', form).value = editing ? (item.description ?? '') : '';
 
-    // Both are fixed once the item exists, and disabled rather than hidden so the
-    // record still reads completely.
-    $('#item-type').disabled = editing;
-    $('#item-uom').disabled = editing;
+    /*
+    | The variant half of the form, and why it disappears on an edit.
+    |
+    | Creating is one act — the product and the first thing on the shelf — so the
+    | form carries both. Editing is not: a product has many variants by then, and
+    | a single set of SKU/price boxes could only mean one of them. Those are
+    | edited from the drawer, against the variant they belong to.
+    */
+    const variantOnly = $$('[data-variant-half]', form);
+    variantOnly.forEach((node) => node.classList.toggle('hidden', editing));
+
+    if (!editing) {
+        $('#item-sku', form).value = '';
+        $('#item-barcode', form).value = '';
+        $('#item-sell-price', form).value = '';
+        $('#item-purchase-price', form).value = '';
+        $('#item-opening-stock', form).value = '';
+        $('#item-opening-cost', form).value = '';
+        $('#item-reorder', form).value = '';
+        $('#item-min-stock', form).value = '';
+    }
+
+    // Both are fixed once the product exists, and disabled rather than hidden so
+    // the record still reads completely.
+    $('#item-type', form).disabled = editing;
+    $('#item-uom', form).disabled = editing;
 
     applyTypeToForm({ editing });
-    showModal('#item-modal');
+
+    if (editing) {
+        showModal('#item-modal');
+
+        return;
+    }
+
+    await workspace?.showForm();
+    $('#item-name', form).focus();
 }
 
 async function submitItem() {
-    const form = $('#item-form');
+    const form = itemForm;
     const id = form.elements.id.value;
 
     clearFormErrors(form);
 
-    if (!$('#item-name').value.trim()) {
+    if (!$('#item-name', form).value.trim()) {
         showFormErrors(form, {
-            fields: { name: ['Give the item a name.'] },
-            message: 'Give the item a name.',
+            fields: { name: ['Give the product a name.'] },
+            message: 'Give the product a name.',
         });
 
         return;
     }
 
+    if (!id && !$('#item-type', form).value) {
+        showFormErrors(form, {
+            fields: { category_id: ['Choose a category.'] },
+            message: 'Choose a category — it decides what this product records and how it is taxed.',
+        });
+
+        return;
+    }
+
+    /*
+    | A rate nobody has stated, on a category that cannot state one for them.
+    |
+    | The server's fallback is the category's `default_gst_rate`, and where that
+    | is null it settles on 0% — which is a real answer for exempt goods and the
+    | wrong one for everything else. Asked here rather than assumed, because 0%
+    | applies silently to every line of every bill the product ever appears on
+    | and nothing afterwards points at the day it was chosen.
+    */
+    if (!$('#item-gst', form).value.trim() && typeMeta($('#item-type', form).value)?.default_gst_rate === null) {
+        showFormErrors(form, {
+            fields: { gst_rate: ['Enter a GST rate — 0 if this is exempt.'] },
+            message: 'This category has no default GST rate, so this product needs one of its own.',
+        });
+
+        return;
+    }
+
+    const value = (selector) => $(selector, form).value.trim() || null;
+
     const body = {
-        name: $('#item-name').value.trim(),
-        code: $('#item-code').value.trim() || null,
-        hsn_sac: $('#item-hsn').value.trim() || null,
-        gst_rate: $('#item-gst').value.trim() || '0',
-        is_stock: $('#item-stock').checked,
-        description: $('#item-description').value.trim() || null,
+        name: $('#item-name', form).value.trim(),
+        code: value('#item-code'),
+        // The id, not the name. Null clears it, which is a real edit.
+        brand_id: $('#item-brand', form).value ? Number($('#item-brand', form).value) : null,
+        hsn_sac: value('#item-hsn'),
+        /*
+        | Null, not '0'.
+        |
+        | The server resolves a missing rate from the category's own
+        | `default_gst_rate` — but `'0'` is a value, not a missing one, so
+        | sending it defeated that fallback and saved every product at 0% GST
+        | whatever its category said. The box being empty means "you decide",
+        | and this is the only way to say so.
+        */
+        gst_rate: value('#item-gst'),
+        is_stock: $('#item-stock', form).checked,
+        description: value('#item-description'),
     };
 
-    // Sent only on create. Both are fixed afterwards, and the server ignores them
-    // on a PATCH — sending them anyway would suggest they had been applied.
+    /*
+    | Sent only on create.
+    |
+    | The category and the unit are fixed afterwards, and the server ignores them
+    | on a PATCH — sending them anyway would suggest they had been applied. The
+    | variant half is create-only for the reason openItemForm() explains: on an
+    | edit there are many variants and one set of boxes could only mean one.
+    */
     if (!id) {
-        body.type = $('#item-type').value;
-        body.base_uom = $('#item-uom').value;
+        body.category_id = Number($('#item-type', form).value);
+        body.base_uom = $('#item-uom', form).value;
+
+        // This form always creates the first thing on the shelf as well as the
+        // product — it collected the specification, the SKU and the price on the
+        // same screen. Said outright rather than inferred, so an API client
+        // adding a family alone is not given a blank variant it never asked for.
+        body.with_variant = true;
+
+        body.attributes = collectAttributes($('#item-attributes', form));
+
+        body.sku = value('#item-sku');
+        body.barcode = value('#item-barcode');
+        body.sell_price = value('#item-sell-price');
+        body.purchase_price = value('#item-purchase-price');
+        body.reorder_level = value('#item-reorder');
+        body.min_stock = value('#item-min-stock');
+        body.opening_stock = value('#item-opening-stock');
+        body.opening_cost = value('#item-opening-cost');
     }
 
     setSubmitting(form, true);
 
     try {
+        const saved = id
+            ? await auth.call(`/items/${id}`, { method: 'PATCH', body })
+            : await auth.call('/items', { method: 'POST', body });
+
         if (id) {
-            await auth.call(`/items/${id}`, { method: 'PATCH', body });
-        } else {
-            await auth.call('/items', { method: 'POST', body });
+            hideModal('#item-modal');
+            toast('Product updated.');
+            await refresh({ keepPage: true });
+
+            return;
         }
 
-        hideModal('#item-modal');
-        toast(id ? 'Item updated.' : 'Item created.');
-        await refresh({ keepPage: true });
+        /*
+        | The server may have saved the product and declined the opening stock —
+        | recording a quantity is a TRANSACTIONS grant and cataloguing is not.
+        | Surfaced rather than swallowed: somebody who typed "5" needs to know
+        | the 5 was not recorded.
+        */
+        const warning = saved?.meta?.warnings?.[0];
+
+        if (warning) toast(warning.message, 'warning');
+        else toast('Product created.');
+
+        /*
+        | §2A.8 — a save stays on the form.
+        |
+        | Somebody entering the workshop's catalogue writes several in a row, and
+        | dropping them onto a table after each one would cost a click back to
+        | the form every time. The new row is flagged instead, so it is
+        | highlighted whenever they next choose to look at the list.
+        */
+        workspace?.flagNew(saved?.data?.id);
+
+        /*
+        | The list is refetched *and* repainted even though it is detached —
+        | `$list` reaches it either way — so it is already current when it next
+        | comes on screen, rather than showing the pre-creation rows until
+        | somebody reloads.
+        |
+        | The header follows in both branches: the count rides on the Show
+        | control (§2A.4), and a badge still reading the old total is the one
+        | figure somebody on the form can actually see.
+        */
+        if (workspace?.hasList()) await refresh({ keepPage: true });
+
+        workspace?.refresh();
+
+        await openItemForm();
     } catch (error) {
         showFormErrors(form, error);
     } finally {
@@ -1198,25 +1595,27 @@ async function submitItem() {
  | ---------------------------------------------------------------------- */
 
 /**
- * Build the attribute inputs from the server's schema for this item's type.
+ * Build the specification inputs from the server's schema.
  *
- * A select where the values are genuinely fixed — a motor's phase is 1 or 3 — and a
- * text box where the range is open, because pinning frame size to a list would make
- * the product wrong about the next frame.
+ * **Nothing here is written per category.** The control drawn for each field
+ * comes from its declared data type — a select where the values are genuinely
+ * fixed, a date picker for a date, a numeric box for a rating — and the labels,
+ * units, options and bounds all come from the same payload. Adding "Lumens" to a
+ * category is therefore a change to rows in `item_attributes` and to nothing in
+ * this file, which is the module's whole acceptance criterion.
+ *
+ * @param {HTMLElement} host   Where to draw them — the create form or the variant dialog.
+ * @param {object} schema      The category's resolved question set, keyed by field.
+ * @param {object} values      Current values, keyed by field.
  */
-function renderAttributeFields(item, values = {}) {
-    const type = typeMeta(item.type);
-    const schema = type?.attributes ?? {};
-    const host = $('#variant-attributes');
-
+function renderAttributeFields(host, schema = {}, values = {}) {
     const keys = Object.keys(schema);
 
     if (!keys.length) {
         host.innerHTML = `
             <p class="sm:col-span-2 rounded-[10px] border border-border bg-secondary/40 px-3.5 py-2.5
                       text-[0.8125rem] text-secondary-foreground">
-                A ${esc((type?.label ?? item.type_label).toLowerCase())} has no variations to describe —
-                an hour of work is an hour of work.
+                This category has no specification fields. Add them under Categories if it should have any.
             </p>`;
 
         return;
@@ -1225,35 +1624,85 @@ function renderAttributeFields(item, values = {}) {
     host.innerHTML = keys.map((key) => {
         const field = schema[key];
         const value = values[key] ?? '';
-        const suffix = field.suffix ? ` <span class="font-normal text-muted-foreground">(${esc(field.suffix)})</span>` : '';
+        const suffix = field.suffix
+            ? ` <span class="font-normal text-muted-foreground">(${esc(field.suffix)})</span>`
+            : '';
 
-        const input = field.values
-            ? `<select class="field-input" data-attribute="${esc(key)}">
-                   <option value="">Choose…</option>
-                   ${field.values.map((option) => `
-                       <option value="${esc(option)}" ${String(option) === String(value) ? 'selected' : ''}>
-                           ${esc(option)}
-                       </option>`).join('')}
-               </select>`
-            : `<input type="text" class="field-input" data-attribute="${esc(key)}"
-                      value="${esc(value)}" autocomplete="off">`;
+        const help = field.help
+            ? `<p class="mt-1.5 text-xs text-muted-foreground">${esc(field.help)}</p>`
+            : '';
 
         return `
             <div>
-                <label class="field-label">
+                <label class="field-label" for="attr-${esc(key)}">
                     ${esc(field.label)}${suffix}
                     ${field.required ? '' : '<span class="font-normal text-muted-foreground">(optional)</span>'}
                 </label>
-                ${input}
+                ${attributeInput(key, field, value)}
+                ${help}
             </div>`;
     }).join('');
 }
 
-function collectAttributes() {
+/**
+ * The control one field asks for.
+ *
+ * The data types are the *system's* capability rather than the shop's vocabulary
+ * — the set of inputs this function knows how to draw — which is exactly why they
+ * stayed an enum on the server while the categories and units became tables.
+ */
+function attributeInput(key, field, value) {
+    const id = `attr-${esc(key)}`;
+    const common = `id="${id}" class="field-input" data-attribute="${esc(key)}"`;
+
+    switch (field.type) {
+        case 'dropdown':
+            return `
+                <select ${common}>
+                    <option value="">Choose…</option>
+                    ${(field.values ?? []).map((option) => `
+                        <option value="${esc(option)}" ${String(option) === String(value) ? 'selected' : ''}>
+                            ${esc(option)}
+                        </option>`).join('')}
+                </select>`;
+
+        case 'boolean':
+            // A select rather than a checkbox, because a checkbox has two states
+            // and this field has three: yes, no, and never answered. A tick box
+            // would record "no" for every field nobody looked at.
+            return `
+                <select ${common}>
+                    <option value="">—</option>
+                    <option value="yes" ${String(value) === 'yes' ? 'selected' : ''}>Yes</option>
+                    <option value="no" ${String(value) === 'no' ? 'selected' : ''}>No</option>
+                </select>`;
+
+        case 'date':
+            return `<input type="date" ${common} value="${esc(value)}">`;
+
+        case 'number':
+        case 'decimal': {
+            const step = field.type === 'number' ? '1' : 'any';
+            const min = field.min !== undefined ? ` min="${esc(field.min)}"` : '';
+            const max = field.max !== undefined ? ` max="${esc(field.max)}"` : '';
+
+            return `<input type="number" step="${step}"${min}${max} inputmode="${
+                field.type === 'number' ? 'numeric' : 'decimal'
+            }" ${common} value="${esc(value)}" autocomplete="off">`;
+        }
+
+        default:
+            return `<input type="text" ${common} value="${esc(value)}" autocomplete="off">`;
+    }
+}
+
+function collectAttributes(host) {
     const bag = {};
 
-    $$('[data-attribute]', $('#variant-attributes')).forEach((input) => {
-        const value = input.value.trim();
+    if (!host) return bag;
+
+    $$('[data-attribute]', host).forEach((input) => {
+        const value = String(input.value ?? '').trim();
 
         // Blank is absent, not "". A form submits every field it renders, and
         // storing an untouched box would be noise every reader has to filter out.
@@ -1291,7 +1740,11 @@ async function openVariantForm(variant = null) {
     // A reorder level is meaningless for something that is never held.
     $('#variant-reorder-field').classList.toggle('hidden', !item.tracks_stock);
 
-    renderAttributeFields(item, editing ? variant.attributes : {});
+    renderAttributeFields(
+        $('#variant-attributes'),
+        typeMeta(String(item.category_id ?? ''))?.attributes ?? {},
+        editing ? (variant.attributes ?? {}) : {},
+    );
 
     showModal('#variant-modal');
 }
@@ -1304,7 +1757,7 @@ async function submitVariant() {
     clearFormErrors(form);
 
     const body = {
-        attributes: collectAttributes(),
+        attributes: collectAttributes($('#variant-attributes')),
         sku: $('#variant-sku').value.trim() || null,
         label: $('#variant-label').value.trim() || null,
         sell_price: $('#variant-price').value.trim() || null,
@@ -1412,6 +1865,7 @@ const SORT_OPTIONS = [
     { column: 'name', label: 'Name' },
     { column: 'type', label: 'Category' },
     { column: 'code', label: 'Code' },
+    { column: 'variants', label: 'Variants' },
     { column: 'stock', label: 'Stock', stock: true },
     { column: 'cost', label: 'Average cost', stock: true },
     { column: 'price', label: 'Selling price', stock: true },
@@ -1419,7 +1873,7 @@ const SORT_OPTIONS = [
 ];
 
 function renderSortPanel() {
-    $('#sort-panel').innerHTML = SORT_OPTIONS
+    $list('#sort-panel').innerHTML = SORT_OPTIONS
         .filter((option) => !option.stock || state.canStock)
         .flatMap((option) => ['asc', 'desc'].map((direction) => {
             const on = state.sort.column === option.column && state.sort.direction === direction;
@@ -1450,12 +1904,12 @@ function applySort(column, direction = null) {
 
 function renderFilterCount() {
     const active = [
-        state.type !== '',
+        state.categoryId !== '',
         state.isStock !== '',
         state.isActive !== '1',
     ].filter(Boolean).length;
 
-    const badge = $('#filter-count');
+    const badge = $list('#filter-count');
 
     badge.textContent = active;
     badge.classList.toggle('hidden', active === 0);
@@ -1467,7 +1921,7 @@ function setPill(pill) {
     state.pill = state.pill === pill ? 'all' : pill;
     state.page = 1;
 
-    $$('#filter-pills [data-pill]').forEach((button) =>
+    $$list('#filter-pills [data-pill]').forEach((button) =>
         button.setAttribute('aria-pressed', String(button.dataset.pill === state.pill)));
 
     render();
@@ -1475,20 +1929,20 @@ function setPill(pill) {
 
 function clearFilters() {
     state.search = '';
-    state.type = '';
+    state.categoryId = '';
     state.isStock = '';
     state.isActive = '1';
     state.pill = 'all';
     state.onlyDrafts = false;
     state.page = 1;
 
-    $('#filter-search').value = '';
-    $('#filter-type').value = '';
-    $('#filter-stock').value = '';
-    $('#filter-status').value = '1';
-    $('#draft-banner').classList.remove('ring-2', 'ring-amber-300');
+    $list('#filter-search').value = '';
+    $list('#filter-type').value = '';
+    $list('#filter-stock').value = '';
+    $list('#filter-status').value = '1';
+    $list('#draft-banner').classList.remove('ring-2', 'ring-amber-300');
 
-    $$('#filter-pills [data-pill]').forEach((button) =>
+    $$list('#filter-pills [data-pill]').forEach((button) =>
         button.setAttribute('aria-pressed', String(button.dataset.pill === 'all')));
 
     renderFilterCount();
@@ -1532,73 +1986,130 @@ async function refresh({ keepPage = false } = {}) {
 export default async function initItems() {
     state.canStock = can('READ', 'STOCK');
 
+    // Held now, while everything is still in the document — see the note on the
+    // declaration.
+    itemForm = $('#item-form');
+    listRoot = $('[data-ws-list]');
+
     applyStockVisibility();
     renderSortPanel();
     renderFilterCount();
 
-    const columns = state.canStock ? 9 : 6;
-    $('#items-body').innerHTML = tableMessage(columns, 'Loading items…');
+    // Name, Category, Code, Variants, Status, Actions — and the four stock
+    // columns where the caller may read them.
+    const columns = state.canStock ? 10 : 7;
 
+    // The types, units and attribute schema the *form* is built from. Fetched on
+    // open because the form is what the module opens on; the catalogue itself is
+    // not — see `loadList` below.
     await loadMeta();
     renderDraftBanner();
 
-    try {
-        await Promise.all([loadCatalogue(), loadStock()]);
-        render();
-    } catch (error) {
-        // A platform super-admin holds every permission but belongs to no
-        // workshop, so they can reach this page by typing the URL and there is
-        // nothing to show them. Not their mistake — say so plainly.
-        $('#items-body').innerHTML = error.code === 'NO_WORKSPACE'
-            ? tableMessage(columns, 'Your account administers the platform rather than a single workshop, so it has no catalogue of its own.')
-            : tableMessage(columns, error.message, 'error');
+    /*
+    | The Category and Unit masters, which live in a drawer over this workspace
+    | rather than a page of their own (§1.5).
+    |
+    | `onChange` is what keeps the create form honest: adding a category has to
+    | invalidate the vocabulary the form is built from, or the dropdown keeps
+    | offering yesterday's list until somebody reloads — which §3.2 forbids
+    | anyway.
+    */
+    initCatalogueMaster();
 
-        $('#items-summary').textContent = '';
-        $('#new-item')?.classList.add('hidden');
-    }
+    const openMaster = (options = {}) => openCatalogueMaster({
+        ...options,
+        onChange: async (change = null) => {
+            await loadMeta({ refresh: true });
+
+            // A brand created from "Add brand" is the answer to the field the
+            // user was on, so it is selected rather than merely offered — going
+            // back to the form to pick what you just typed is a step nobody
+            // needs (§7.5).
+            if (change?.resource === 'brand' && change.action === 'created' && change.id) {
+                $('#item-brand', itemForm).value = String(change.id);
+            }
+
+            applyTypeToForm({ editing: Boolean(itemForm.elements.id.value) });
+        },
+    });
+
+    $('#manage-catalogue')?.addEventListener('click', () => openMaster());
+
+    // "Add brand" beside the brand field, landing straight on the Brand tab —
+    // the shortest route from "the make I need is missing" to the place it is
+    // added, without losing what is already typed on the form (§7.5).
+    $('#manage-brands', itemForm)?.addEventListener('click', () => openMaster({ tab: 'brands' }));
+
+    // "Configure fields" beside the specification section, which lands straight
+    // inside the category the form is currently on — the shortest route from
+    // "this field is missing" to the place it is added (§7.5).
+    $('#item-attributes-configure', itemForm)?.addEventListener('click', () => openMaster({
+        categoryId: $('#item-type', itemForm).value || null,
+    }));
+
+    /*
+    | §2A.7 — the catalogue is fetched the first time the list is asked for, and
+    | held from then on. Somebody who opened Items only to add one never pays for
+    | two hundred rows they did not look at.
+    */
+    const loadList = async () => {
+        $list('#items-body').innerHTML = tableMessage(columns, 'Loading items…');
+
+        try {
+            await Promise.all([loadCatalogue(), loadStock()]);
+            render();
+        } catch (error) {
+            // A platform super-admin holds every permission but belongs to no
+            // workshop, so they can reach this module and there is nothing to
+            // show them. Not their mistake — say so plainly.
+            $list('#items-body').innerHTML = error.code === 'NO_WORKSPACE'
+                ? tableMessage(columns, 'Your account administers the platform rather than a single workshop, so it has no catalogue of its own.')
+                : tableMessage(columns, error.message, 'error');
+
+            $list('#items-summary').textContent = '';
+        }
+    };
 
     /* Toolbar ---------------------------------------------------------- */
 
-    $('#new-item')?.addEventListener('click', () => openItemForm());
-
-    $('#filter-search').addEventListener('input', debounce((event) => {
+    $list('#filter-search').addEventListener('input', debounce((event) => {
         state.search = event.target.value.trim();
         state.page = 1;
         render();
     }, 200));
 
-    $('#filter-toggle').addEventListener('click', (event) => {
+    $list('#filter-toggle').addEventListener('click', (event) => {
         event.stopPropagation();
 
-        const panel = $('#filter-panel');
+        const panel = $list('#filter-panel');
         const open = panel.classList.toggle('hidden');
 
-        $('#filter-toggle').setAttribute('aria-expanded', String(!open));
-        $('#sort-panel').classList.add('hidden');
+        $list('#filter-toggle').setAttribute('aria-expanded', String(!open));
+        $list('#sort-panel').classList.add('hidden');
     });
 
-    $('#sort-toggle').addEventListener('click', (event) => {
+    $list('#sort-toggle').addEventListener('click', (event) => {
         event.stopPropagation();
 
-        const panel = $('#sort-panel');
+        const panel = $list('#sort-panel');
         const open = panel.classList.toggle('hidden');
 
-        $('#sort-toggle').setAttribute('aria-expanded', String(!open));
-        $('#filter-panel').classList.add('hidden');
+        $list('#sort-toggle').setAttribute('aria-expanded', String(!open));
+        $list('#filter-panel').classList.add('hidden');
     });
 
-    $('#sort-panel').addEventListener('click', (event) => {
+    $list('#sort-panel').addEventListener('click', (event) => {
         const option = event.target.closest('[data-sort-option]');
         if (!option) return;
 
         applySort(option.dataset.sortOption, option.dataset.sortDirection);
-        $('#sort-panel').classList.add('hidden');
-        $('#sort-toggle').setAttribute('aria-expanded', 'false');
+        $list('#sort-panel').classList.add('hidden');
+        $list('#sort-toggle').setAttribute('aria-expanded', 'false');
     });
 
     ['filter-type', 'filter-stock', 'filter-status'].forEach((id) => {
         $(`#${id}`)?.addEventListener('change', (event) => {
-            const key = { 'filter-type': 'type', 'filter-stock': 'isStock', 'filter-status': 'isActive' }[id];
+            const key = { 'filter-type': 'categoryId', 'filter-stock': 'isStock', 'filter-status': 'isActive' }[id];
 
             state[key] = event.target.value;
             state.page = 1;
@@ -1608,7 +2119,7 @@ export default async function initItems() {
         });
     });
 
-    $('#filter-pills').addEventListener('click', (event) => {
+    $list('#filter-pills').addEventListener('click', (event) => {
         const pill = event.target.closest('[data-pill]');
 
         if (pill) setPill(pill.dataset.pill);
@@ -1617,23 +2128,23 @@ export default async function initItems() {
     $$('[data-stat-filter]').forEach((tile) =>
         tile.addEventListener('click', () => setPill(tile.dataset.statFilter)));
 
-    $('#clear-filters').addEventListener('click', clearFilters);
+    $list('#clear-filters').addEventListener('click', clearFilters);
 
-    $('#draft-banner').addEventListener('click', () => {
+    $list('#draft-banner').addEventListener('click', () => {
         state.onlyDrafts = !state.onlyDrafts;
-        $('#draft-banner').classList.toggle('ring-2', state.onlyDrafts);
-        $('#draft-banner').classList.toggle('ring-amber-300', state.onlyDrafts);
+        $list('#draft-banner').classList.toggle('ring-2', state.onlyDrafts);
+        $list('#draft-banner').classList.toggle('ring-amber-300', state.onlyDrafts);
         state.page = 1;
         render();
     });
 
-    $('#items-head').addEventListener('click', (event) => {
+    $list('#items-head').addEventListener('click', (event) => {
         const th = event.target.closest('[data-sort]');
 
         if (th) applySort(th.dataset.sort);
     });
 
-    $('#items-pager').addEventListener('click', (event) => {
+    $list('#items-pager').addEventListener('click', (event) => {
         const button = event.target.closest('[data-page]');
         if (!button) return;
 
@@ -1644,7 +2155,7 @@ export default async function initItems() {
 
     /* The table -------------------------------------------------------- */
 
-    $('#items-body').addEventListener('click', (event) => {
+    $list('#items-body').addEventListener('click', (event) => {
         const menuButton = event.target.closest('[data-menu]');
 
         if (menuButton) {
@@ -1682,7 +2193,7 @@ export default async function initItems() {
     window.addEventListener('resize', closeMenus, { passive: true });
 
     // A row is a link, so it answers to the keyboard like one.
-    $('#items-body').addEventListener('keydown', (event) => {
+    $list('#items-body').addEventListener('keydown', (event) => {
         if (event.key !== 'Enter' && event.key !== ' ') return;
 
         const row = event.target.closest('[data-row]');
@@ -1729,29 +2240,81 @@ export default async function initItems() {
 
     /* Forms ------------------------------------------------------------ */
 
-    $('#item-form').addEventListener('submit', (event) => {
+    itemForm.addEventListener('submit', (event) => {
         event.preventDefault();
         submitItem();
     });
 
-    $('#item-type').addEventListener('change', () => applyTypeToForm({ editing: false }));
+    $('#item-type', itemForm).addEventListener('change', () => applyTypeToForm({ editing: false }));
 
     $('#variant-form').addEventListener('submit', (event) => {
         event.preventDefault();
         submitVariant();
     });
 
-    // One listener for every "click away to dismiss": the row menus and both
-    // toolbar popovers.
+    /*
+    | One listener for every "click away to dismiss": the row menus and both
+    | toolbar popovers.
+    |
+    | Optional throughout, because this is bound to the document and the toolbar
+    | it reaches for is *detached* whenever the workspace is showing its form —
+    | the list surface keeps its DOM off screen rather than being rebuilt
+    | (§2A.2). A click on the form would otherwise throw on every one of these.
+    */
     document.addEventListener('click', () => {
         closeMenus();
-        $('#filter-panel').classList.add('hidden');
-        $('#sort-panel').classList.add('hidden');
-        $('#filter-toggle').setAttribute('aria-expanded', 'false');
-        $('#sort-toggle').setAttribute('aria-expanded', 'false');
+        $list('#filter-panel')?.classList.add('hidden');
+        $list('#sort-panel')?.classList.add('hidden');
+        $list('#filter-toggle')?.setAttribute('aria-expanded', 'false');
+        $list('#sort-toggle')?.setAttribute('aria-expanded', 'false');
     });
 
-    $('#filter-panel').addEventListener('click', (event) => event.stopPropagation());
+    $list('#filter-panel').addEventListener('click', (event) => event.stopPropagation());
+
+    /* The workspace ---------------------------------------------------- */
+
+    /*
+    | Mounted last, and that matters: everything above binds to nodes that are
+    | still in the document, and mounting is what detaches whichever of the two
+    | surfaces is not in use. Listeners survive the detachment — they belong to
+    | the elements, not to the document.
+    */
+    const canWrite = can('WRITE', 'ITEMS');
+
+    if (canWrite) await openItemForm();
+
+    workspace = mountWorkspace(itemForm.closest('[data-module-root]'), {
+        key: 'items',
+        title: 'Items',
+        formSubtitle: 'Add an item to the catalogue, or show what is already there.',
+        listSubtitle: (count) => (count === null
+            ? 'Catalogue, stock levels and pricing.'
+            : `${count} item${count === 1 ? '' : 's'} in the catalogue. Click a row to open it.`),
+        createLabel: 'Create item',
+        count: () => (state.items.length ? state.items.length : null),
+        canCreate: canWrite,
+        onShowList: loadList,
+
+        /*
+        | Bring the form home.
+        |
+        | It may have been left in the edit dialog — closed with Cancel, with
+        | Escape, or by a save — and level 1 is where it lives. A form still
+        | holding an item's id is that item's *edit* form, so it is reset to a
+        | blank one rather than offered as a draft: a half-typed new item is
+        | worth keeping (§2A.6), somebody else's record is not.
+        */
+        onShowForm: async () => {
+            if (itemForm.elements.id.value) {
+                await openItemForm();
+
+                return;
+            }
+
+            adoptForm(itemForm, $('[data-item-form-slot]'), { chrome: 'inline' });
+            $('#item-name', itemForm)?.focus();
+        },
+    });
 }
 
 /** The row menu's entries, in one place so the menu markup stays declarative. */
