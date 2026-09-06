@@ -330,6 +330,22 @@ CGST + SGST, and the Discount column appears only if something was discounted. A
 fixed set means a column of zeroes on most invoices, and a column of nothing is a
 column somebody has to read past.
 
+### There is one sheet, and the preview borrows it
+
+Sales opens the customer's copy over the form as soon as a sale posts
+(`#invoice-preview`, level 2, with Print and Share). That drawer renders **no
+invoice markup**: `pages/sales.js` moves the single `[data-invoice-document]`
+node out of `#invoice-print` while it is open and hands it back before anything
+prints.
+
+A second sheet would break the rule below rather than merely duplicate markup.
+The rule keeps whichever child of `body` *contains* the document, so a copy
+mounted under `<main>` makes `<main>` worth keeping, and every print after that
+carries the whole application around the invoice. Both hosts are children of
+`body` — the sheet and the preview that borrows it — and the sheet is released by
+Print, by closing the preview, and by `beforeprint` (plus the
+`matchMedia('print')` change, which is what Safari has instead).
+
 ### Printing does not leave the page
 
 The sheet is a hidden `#invoice-print` in `layouts/app.blade.php`; Print paints it

@@ -354,4 +354,86 @@ class StockApiTest extends TestCase
 
         $this->assertSame('1600.00', $row['value']);
     }
+
+    /* ---------------------------------------------------------------------
+     | Asking about named variants
+     |
+     | The bill form's "4 PCS on hand" is captured when a line is picked, and a
+     | posting anywhere else moves it. This is how the open document brings every
+     | line back up to date in one request instead of one request per line.
+     |-------------------------------------------------------------------- */
+
+    #[Test]
+    public function naming_variants_answers_for_exactly_those(): void
+    {
+        $bearing = $this->variantFor($this->tenant, 'part');
+        $copper = $this->variantFor($this->tenant, 'bulk_material');
+        $unasked = $this->variantFor($this->tenant, 'part');
+
+        $this->receiveStock($this->tenant, $bearing, '4', '400.00');
+        $this->receiveStock($this->tenant, $copper, '10', '700.00');
+        $this->receiveStock($this->tenant, $unasked, '9', '100.00');
+
+        $response = $this->withHeaders($this->authHeader($this->owner))
+            ->getJson("/api/v1/stock?variant_ids[]={$bearing->id}&variant_ids[]={$copper->id}")
+            ->assertOk();
+
+        $rows = collect($response->json('data'));
+
+        $this->assertCount(2, $rows);
+        $this->assertSame('4.000', $rows->firstWhere('variant_id', $bearing->id)['quantity']);
+        $this->assertSame('10.000', $rows->firstWhere('variant_id', $copper->id)['quantity']);
+        $this->assertNull($rows->firstWhere('variant_id', $unasked->id));
+    }
+
+    #[Test]
+    public function naming_an_archived_variant_still_answers_for_it(): void
+    {
+        /*
+        | A bill written last week can carry a line for something archived since,
+        | and the default list deliberately hides those. Dropping it here would
+        | answer a question about two lines with one position and say nothing
+        | about the other — leaving the stale figure on screen looking current.
+        */
+        $bearing = $this->variantFor($this->tenant, 'part');
+        $this->receiveStock($this->tenant, $bearing, '4', '400.00');
+
+        $this->actingForTenant($this->tenant, fn () => ItemVariant::whereKey($bearing->id)->update(['is_active' => false]));
+
+        $response = $this->withHeaders($this->authHeader($this->owner))
+            ->getJson("/api/v1/stock?variant_ids[]={$bearing->id}")
+            ->assertOk();
+
+        $this->assertSame('4.000', collect($response->json('data'))->firstWhere('variant_id', $bearing->id)['quantity']);
+    }
+
+    #[Test]
+    public function another_workshops_variant_cannot_be_named(): void
+    {
+        [$other] = $this->tenantWithUser();
+        $theirs = $this->variantFor($other, 'part');
+        $this->receiveStock($other, $theirs, '7', '100.00');
+
+        $mine = $this->variantFor($this->tenant, 'part');
+        $this->receiveStock($this->tenant, $mine, '2', '100.00');
+
+        $response = $this->withHeaders($this->authHeader($this->owner))
+            ->getJson("/api/v1/stock?variant_ids[]={$theirs->id}&variant_ids[]={$mine->id}")
+            ->assertOk();
+
+        $rows = collect($response->json('data'));
+
+        $this->assertCount(1, $rows);
+        $this->assertSame($mine->id, $rows->first()['variant_id']);
+    }
+
+    #[Test]
+    public function the_named_variant_list_is_bounded(): void
+    {
+        // Not a way to ask for the whole report in one go: the cap is what keeps
+        // it a lookup for the lines on one document.
+        $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/stock?'.collect(range(1, 201))->map(fn ($id) => "variant_ids[]={$id}")->implode('&'))
+            ->assertStatus(422);
+    }
 }

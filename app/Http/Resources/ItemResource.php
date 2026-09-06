@@ -63,6 +63,8 @@ class ItemResource extends JsonResource
             // parsed back into a float by every client that receives it, and this
             // one gets multiplied by an amount to compute tax.
             'gst_rate' => (string) $this->gst_rate,
+            // The bill form's toggle starts here — see BillLine.
+            'price_includes_tax' => (bool) $this->price_includes_tax,
 
             'base_uom' => $this->base_uom?->value,
             'base_uom_label' => $this->base_uom?->label(),

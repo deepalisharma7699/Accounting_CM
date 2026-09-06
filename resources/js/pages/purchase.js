@@ -1088,6 +1088,9 @@ export default async function initPurchase() {
         canCreate: canWrite,
         onShowList: load,
 
+        // As Sales, mirrored: the documents, and what is still owed on them.
+        refreshOn: ['transactions', 'parties'],
+
         // §2A.8 — back on the form, the supplier is where the next bill starts.
         onShowForm: () => doc.party().focus(),
     });

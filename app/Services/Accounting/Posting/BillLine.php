@@ -32,6 +32,14 @@ use App\Support\Quantity;
  *   * the **base** is quantity × price − discount, because a discount reduces
  *     what was supplied for, and therefore what tax is due on.
  *
+ * A fourth thing *is* typed, and only because no arithmetic can infer it:
+ * whether that price was quoted **with the tax already in it**. "₹100 plus GST"
+ * and "₹118 all-in" are the same line and the counter says both. It changes
+ * whether the tax is added to the base or taken out of it — {@see GstBreakdown}
+ * — and nothing else: the rate still comes from the item, the shape still comes
+ * from the two state codes, and what is stored is the same taxable value and the
+ * same split either way.
+ *
  * ## What is *not* here
  *
  * The cost. A line's cost is the value of the stock movement it produced, and
@@ -52,6 +60,18 @@ final class BillLine
         public readonly Money $unitPrice,
         public readonly Money $discount,
         public readonly GstBreakdown $tax,
+        /**
+         * Whether {@see $unitPrice} already had the GST in it.
+         *
+         * Recorded rather than derived, because after construction it is
+         * genuinely unrecoverable: a line of ₹100 + ₹18 and a line of ₹118
+         * inclusive are the same three stored figures. It is kept for the two
+         * places that have to reproduce the line rather than merely read it —
+         * a credit note restating its invoice, and the form loading a posted
+         * document back for correction. Everything else downstream reads
+         * `taxable` and the split and neither knows nor needs to.
+         */
+        public readonly bool $priceIncludesTax,
         public readonly bool $movesStock,
         public readonly ?string $memo = null,
         /**
@@ -93,6 +113,23 @@ final class BillLine
          */
         ?GstRate $rate = null,
         ?int $againstLineId = null,
+        /**
+         * Whether the price given already has the GST in it.
+         *
+         * The counter quotes both ways — "₹100 plus tax" for a job it is pricing
+         * and "₹118" for a part with the figure printed on the box — and which
+         * one was meant is not something the arithmetic can infer. So it is
+         * stated, and it changes exactly one thing: whether the tax is added to
+         * the net amount or taken out of it.
+         *
+         * The discount is subtracted **before** either happens, in the terms the
+         * price was quoted in. ₹18 off a ₹118 inclusive part leaves ₹100 for the
+         * customer to pay, which is what somebody taking ₹18 off it meant; the
+         * base and the tax then follow from that ₹100. Discounting the extracted
+         * base instead would hand back ₹18 of goods *and* ₹3.24 of tax, and the
+         * customer would pay ₹96.76 for a ₹18 reduction.
+         */
+        bool $priceIncludesTax = false,
     ): self {
         $quantity = $quantity->absolute();
         $discount ??= Money::zero();
@@ -103,7 +140,13 @@ final class BillLine
         // put a negative taxable value on an invoice and tax owed *to* the
         // customer. Clamped rather than refused, because the intent — "make this
         // line free" — is unambiguous and refusing it helps nobody.
-        $taxable = $discount->compareTo($gross) >= 0 ? Money::zero() : $gross->minus($discount);
+        //
+        // Net of the discount, and still in whichever terms the price was quoted
+        // in — tax-exclusive or tax-inclusive. What that means is settled two
+        // lines further down and nowhere else.
+        $net = $discount->compareTo($gross) >= 0 ? Money::zero() : $gross->minus($discount);
+
+        $rate ??= GstRate::of($item->gst_rate);
 
         return new self(
             lineNo: $lineNo,
@@ -114,7 +157,10 @@ final class BillLine
             unit: $item->base_uom,
             unitPrice: $unitPrice,
             discount: $discount,
-            tax: GstBreakdown::on($taxable, $rate ?? GstRate::of($item->gst_rate), $place),
+            tax: $priceIncludesTax
+                ? GstBreakdown::within($net, $rate, $place)
+                : GstBreakdown::on($net, $rate, $place),
+            priceIncludesTax: $priceIncludesTax,
             // The item's own answer, asked once and recorded — see
             // Item::tracksStock(), which pairs capability with the workshop's
             // choice so nothing has to remember both halves.
@@ -158,6 +204,11 @@ final class BillLine
             memo: $this->memo,
             rate: $this->tax->rate,
             againstLineId: $this->againstLineId,
+            // Carried for the same reason the rate is. A share of a bill
+            // discount lands on a line that was quoted one way or the other, and
+            // rebuilding it as tax-exclusive would silently add GST on top of a
+            // price that already had it in.
+            priceIncludesTax: $this->priceIncludesTax,
         );
     }
 
@@ -165,10 +216,42 @@ final class BillLine
      | Amounts
      |-------------------------------------------------------------------- */
 
-    /** Quantity × price, before any discount. */
+    /** Quantity × price, before any discount — as it was typed, tax or no tax. */
     public function gross(): Money
     {
         return $this->quantity->costAt($this->unitPrice);
+    }
+
+    /**
+     * What this line would have been taxed on had nothing been taken off.
+     *
+     * The same figure as {@see gross()} on an ordinary line, and the *extracted*
+     * one where the price had the tax in it — so a panel reading "subtotal,
+     * discount, taxable value" is stating three figures on one basis instead of
+     * quietly counting the GST as a discount on the inclusive lines.
+     */
+    public function grossTaxable(): Money
+    {
+        return $this->priceIncludesTax
+            ? $this->tax->rate->baseWithin($this->gross())
+            : $this->gross();
+    }
+
+    /**
+     * What a share of a bill-level discount is worked out against.
+     *
+     * A line's own terms, which is the whole subtlety: ₹1,000 off a bill means
+     * ₹1,000 off the taxable value of the lines quoted before tax — the customer
+     * saves that plus the tax on it, which is what this application has always
+     * done — and ₹1,000 off what is actually paid for the lines quoted with tax
+     * in. Each is what somebody typing "₹1,000 off" against that line would have
+     * meant, so each line is asked rather than one basis being imposed on both.
+     *
+     * @see BillDiscount::apportion()
+     */
+    public function discountBase(): Money
+    {
+        return $this->priceIncludesTax ? $this->tax->inclusive() : $this->taxable();
     }
 
     /** What tax is charged on: quantity × price − discount. */
@@ -253,6 +336,7 @@ final class BillLine
             'igst_amount' => $this->tax->igst->amount(),
             'line_total' => $this->total()->amount(),
             'is_stock' => $this->movesStock,
+            'price_includes_tax' => $this->priceIncludesTax,
             'memo' => $this->memo,
             'against_line_id' => $this->againstLineId,
         ];

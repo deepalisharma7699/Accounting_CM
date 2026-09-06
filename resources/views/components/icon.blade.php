@@ -93,6 +93,12 @@
         'menu' => '<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>',
         'award' => '<circle cx="12" cy="9" r="6"/><path d="m15.5 14.5 1.4 6.6a.5.5 0 0 1-.77.52l-3.83-2.5a.5.5 0 0 0-.6 0l-3.83 2.5a.5.5 0 0 1-.77-.52l1.4-6.6"/>',
         'gauge' => '<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>',
+        // Passkeys. A fingerprint for the way in — chosen over a key or a
+        // shield because it names what the person is actually asked to do, and
+        // a phone for a row in the enrolled-device list.
+        'fingerprint' => '<path d="M12 10a2 2 0 0 0-2 2c0 1.02-.1 2.51-.26 4"/><path d="M14 13.12c0 2.38 0 6.38-1 8.88"/><path d="M17.29 21.02c.12-.6.43-2.3.5-3.02"/><path d="M2 12a10 10 0 0 1 18-6"/><path d="M2 16h.01"/><path d="M21.8 16c.2-2 .131-5.354 0-6"/><path d="M5 19.5C5.5 18 6 15 6 12a6 6 0 0 1 .34-2"/><path d="M8.65 22c.21-.66.45-1.32.57-2"/><path d="M9 6.8a6 6 0 0 1 9 5.2v2"/>',
+        'smartphone' => '<rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/>',
+        'cloud' => '<path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9"/>',
         default => '<circle cx="12" cy="12" r="10"/>',
     };
 @endphp

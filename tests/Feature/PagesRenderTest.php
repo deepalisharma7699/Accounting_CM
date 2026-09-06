@@ -58,10 +58,11 @@ class PagesRenderTest extends TestCase
         $response = $this->get('/')->assertOk();
 
         // What a visitor came for: the trade, and how to reach the shop.
+        // Deeper coverage of the site itself is in tests/Feature/Site.
         $response->assertSee('Motor rewinding', escape: false)
-            ->assertSee('Submersible pump repairs', escape: false)
+            ->assertSee('Submersible &amp; openwell pumps', escape: false)
             ->assertSee('Visit the shop', escape: false)
-            ->assertSee('data-page="welcome"', escape: false);
+            ->assertSee('data-page="site"', escape: false);
 
         // And the way in, in a modal on the same page rather than on a screen
         // of its own. The ids are what initLogin() binds to, so they are
@@ -98,6 +99,8 @@ class PagesRenderTest extends TestCase
 
     public function test_the_register_page_renders_the_workshop_and_owner_fields(): void
     {
+        config()->set('tenancy.allow_public_signup', true);
+
         $response = $this->get('/register')->assertOk();
 
         // Sign-up provisions a workshop and its owner together, so the form
@@ -121,11 +124,13 @@ class PagesRenderTest extends TestCase
 
     public function test_the_sign_in_modal_only_offers_sign_up_when_it_is_enabled(): void
     {
-        $this->get('/')->assertOk()->assertSee('Create your workshop', escape: false);
-
-        config()->set('tenancy.allow_public_signup', false);
-
+        // Onboarding is sales-led, so the shipped default offers no sign-up
+        // link at all — the modal signs people in and does nothing else.
         $this->get('/')->assertOk()->assertDontSee('Create your workshop', escape: false);
+
+        config()->set('tenancy.allow_public_signup', true);
+
+        $this->get('/')->assertOk()->assertSee('Create your workshop', escape: false);
     }
 
     /* ---------------------------------------------------------------------
@@ -320,6 +325,61 @@ class PagesRenderTest extends TestCase
             1,
             (new DOMXPath($document))->query('/html/body/*[@id="invoice-print"]')->length,
             'The invoice print sheet must be a direct child of <body> — see the print rule in app.css.',
+        );
+    }
+
+    /**
+     * There is one invoice sheet in the shell, and the preview borrows it.
+     *
+     * `pages/sales.js` moves that single node into `#invoice-preview` while
+     * somebody reads a freshly posted invoice, and hands it back before anything
+     * prints. The print rule keeps whichever child of `body` *contains* the
+     * document and hides every other one, so a second `[data-invoice-document]`
+     * rendered anywhere under `<main>` would make `<main>` worth keeping — and
+     * every print from then on would carry the whole application around the
+     * invoice, which nothing on the screen would show.
+     *
+     * So what is asserted is the precondition the moving depends on: the shell
+     * renders exactly one sheet, in one child of `body`, and the drawer that
+     * borrows it is a child of `body` too — nested inside a module it would be
+     * detached with that module, taking the document off the page with it.
+     */
+    public function test_the_shell_renders_one_invoice_sheet_and_a_body_level_preview_to_lend_it_to(): void
+    {
+        $html = (string) $this->get('/dashboard')->assertOk()->getContent();
+
+        $document = new DOMDocument;
+
+        libxml_use_internal_errors(true);
+        $document->loadHTML($html);
+        libxml_clear_errors();
+
+        $xpath = new DOMXPath($document);
+
+        $this->assertSame(
+            1,
+            $xpath->query('//*[@data-invoice-document]')->length,
+            'The shell must render exactly one invoice sheet — see the print rule in app.css.',
+        );
+
+        $this->assertSame(
+            1,
+            $xpath->query('/html/body/*[descendant-or-self::*[@data-invoice-document]]')->length,
+            'Exactly one child of <body> must hold the invoice — see the print rule in app.css.',
+        );
+
+        $this->assertSame(
+            1,
+            $xpath->query('/html/body/*[@id="invoice-preview"]')->length,
+            'The invoice preview must be a direct child of <body>, or the shell detaches it with its module.',
+        );
+
+        // It borrows the sheet; it never renders one. A copy here would be a
+        // second document, which is the failure the whole arrangement avoids.
+        $this->assertSame(
+            0,
+            $xpath->query('//*[@id="invoice-preview"]//*[@data-invoice-document]')->length,
+            'The preview must render no invoice markup of its own.',
         );
     }
 
@@ -1601,7 +1661,7 @@ class PagesRenderTest extends TestCase
      */
     public function test_the_reports_module_no_longer_exists_separately(): void
     {
-        $this->assertArrayNotHasKey('reports', \App\Support\Modules::declared());
+        $this->assertArrayNotHasKey('reports', Modules::declared());
 
         $this->get('/modules/reports')->assertNotFound();
     }

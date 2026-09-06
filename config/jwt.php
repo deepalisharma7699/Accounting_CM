@@ -45,6 +45,19 @@ return [
     'ttl' => [
         'access' => (int) env('JWT_ACCESS_TTL', 15 * 60),          // 15 minutes
         'refresh' => (int) env('JWT_REFRESH_TTL', 7 * 24 * 60 * 60), // 7 days
+
+        /*
+        | A session started with a passkey.
+        |
+        | Long on purpose: signing in should be something a workshop does when
+        | it takes on somebody new, not something it does every Monday. What
+        | makes the length safe is what started the session — a key bound to
+        | one device, unlocked by that person's fingerprint, face or PIN at
+        | every use, and revocable from the passkey list and from "sign out of
+        | all devices" the moment a phone goes missing. A password earns
+        | nothing of the sort, which is why it keeps the seven days above.
+        */
+        'refresh_trusted' => (int) env('JWT_REFRESH_TRUSTED_TTL', 90 * 24 * 60 * 60), // 90 days
     ],
 
     /*

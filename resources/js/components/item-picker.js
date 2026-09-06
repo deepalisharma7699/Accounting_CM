@@ -63,6 +63,9 @@ function fromStock(row) {
         unit: row.item?.base_uom ?? null,
         unit_symbol: row.item?.base_uom_symbol ?? '',
         gst_rate: row.item?.gst_rate ?? '0',
+        // Which basis the price below is quoted on. The bill line's toggle
+        // starts here and the operator may flip it per line.
+        price_includes_tax: row.item?.price_includes_tax === true,
         price: row.sell_price ?? '',
         quantity: row.quantity,
         average_cost: row.average_cost,
@@ -85,6 +88,7 @@ function fromServiceVariant(item, variant) {
         unit: item.base_uom,
         unit_symbol: item.base_uom_symbol ?? '',
         gst_rate: item.gst_rate ?? '0',
+        price_includes_tax: item.price_includes_tax === true,
         price: variant?.sell_price ?? '',
         quantity: null,
         average_cost: null,
@@ -200,6 +204,7 @@ function needsVariant(item) {
         unit: item.base_uom,
         unit_symbol: item.base_uom_symbol ?? '',
         gst_rate: item.gst_rate ?? '0',
+        price_includes_tax: item.price_includes_tax === true,
         price: '',
         quantity: null,
         average_cost: null,

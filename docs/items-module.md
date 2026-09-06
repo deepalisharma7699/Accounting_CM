@@ -98,6 +98,21 @@ roles by the enum.
 A form submits every field it renders. Storing an untouched optional box as `""`
 is noise that then has to be filtered out everywhere it is read.
 
+## How the price is quoted
+
+`items.price_includes_tax` says whether the selling price is written with the GST
+already in it — a tick under the GST rate on the item form, for a shop that
+prices parts at the figure printed on the box.
+
+It is a **default and nothing more**. It prefills the toggle beside a bill line's
+rate box; the line carries its own copy and is what actually decides the
+arithmetic, so flipping this restates no document already issued. There is
+deliberately no category default: what a shop charges on a kind of thing is a
+property of the tax code, and whether it folds the tax into the figure is a habit
+it applies to some products and not others.
+
+See [inclusive-pricing.md](inclusive-pricing.md).
+
 ## Stock capability
 
 Two flags, and the asymmetry between them is the point:

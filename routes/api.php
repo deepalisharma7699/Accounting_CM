@@ -7,14 +7,15 @@ use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\ChartOfAccountController;
 use App\Http\Controllers\Api\V1\EmployeeController;
 use App\Http\Controllers\Api\V1\InsightController;
+use App\Http\Controllers\Api\V1\InvoiceController;
 use App\Http\Controllers\Api\V1\ItemBrandController;
 use App\Http\Controllers\Api\V1\ItemCategoryController;
-use App\Http\Controllers\Api\V1\InvoiceController;
 use App\Http\Controllers\Api\V1\ItemController;
 use App\Http\Controllers\Api\V1\JobRunController;
 use App\Http\Controllers\Api\V1\LedgerController;
 use App\Http\Controllers\Api\V1\OpeningBalanceController;
 use App\Http\Controllers\Api\V1\PartyController;
+use App\Http\Controllers\Api\V1\PasskeyController;
 use App\Http\Controllers\Api\V1\PayrollController;
 use App\Http\Controllers\Api\V1\PermissionController;
 use App\Http\Controllers\Api\V1\ReportController;
@@ -22,9 +23,9 @@ use App\Http\Controllers\Api\V1\RoleController;
 use App\Http\Controllers\Api\V1\StaffAdvanceController;
 use App\Http\Controllers\Api\V1\StaffDesignationController;
 use App\Http\Controllers\Api\V1\StockController;
-use App\Http\Controllers\Api\V1\UnitController;
 use App\Http\Controllers\Api\V1\TenantController;
 use App\Http\Controllers\Api\V1\TransactionController;
+use App\Http\Controllers\Api\V1\UnitController;
 use App\Http\Controllers\Api\V1\UserController;
 use App\Http\Controllers\Api\V1\WorkshopJobController;
 use App\Http\Controllers\Api\V1\WorkspaceController;
@@ -62,9 +63,46 @@ Route::prefix('v1')->group(function () {
 
         Route::post('logout', [AuthController::class, 'logout']);
 
+        /*
+        | Passkeys.
+        |
+        | The two public ones are the sign-in itself, and they are public for
+        | the same reason `login` is: somebody with no session is exactly who
+        | is asking. Neither reveals anything — `login/options` takes no input
+        | and answers with a random challenge, and `login` either verifies a
+        | signature this server already holds the public half of, or refuses
+        | with one message for every possible cause.
+        |
+        | Everything that *adds* a way in sits behind auth.jwt below. Enrolling
+        | a device from the sign-in screen would be a way in that anybody who
+        | reached that screen could grant themselves, so enrolment is something
+        | an already-signed-in person does, never a step in signing in.
+        */
+        Route::prefix('passkeys')->group(function () {
+            Route::post('login/options', [PasskeyController::class, 'loginOptions'])
+                ->middleware('throttle:passkey-ceremony');
+
+            Route::post('login', [PasskeyController::class, 'login'])
+                ->middleware('throttle:passkey-ceremony');
+        });
+
         Route::middleware('auth.jwt')->group(function () {
             Route::get('me', [AuthController::class, 'me']);
             Route::post('logout-all', [AuthController::class, 'logoutAll']);
+
+            /*
+            | Managing your own devices. No permission gate: these are
+            | self-service, like signing out everywhere, and every one of them
+            | is scoped to the caller in the repository — an id belonging to
+            | somebody else is not found rather than found and refused.
+            */
+            Route::prefix('passkeys')->group(function () {
+                Route::get('/', [PasskeyController::class, 'index']);
+                Route::post('options', [PasskeyController::class, 'registerOptions']);
+                Route::post('/', [PasskeyController::class, 'store']);
+                Route::patch('{passkey}', [PasskeyController::class, 'update'])->whereNumber('passkey');
+                Route::delete('{passkey}', [PasskeyController::class, 'destroy'])->whereNumber('passkey');
+            });
         });
     });
 
@@ -444,7 +482,6 @@ Route::prefix('v1')->group(function () {
                 ->whereNumber('unit')
                 ->middleware('permission:DELETE,ITEMS');
         });
-
 
         /*
         | Transactions and the ledger behind them.
@@ -1218,7 +1255,6 @@ Route::prefix('v1')->group(function () {
                 ->whereNumber('employee')
                 ->middleware('permission:DELETE,STAFF');
         });
-
 
         /*
         | User management. Scoped to the caller's own tenant — see

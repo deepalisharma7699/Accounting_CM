@@ -113,7 +113,7 @@ class BillPreviewService
     private function totalsOf(array $lines, PostingTemplate $template, array $input): array
     {
         $totals = GstBreakdown::totals(array_map(fn (BillLine $line) => $line->tax, $lines));
-        $gross = Money::sum(array_map(fn (BillLine $line) => $line->gross(), $lines));
+        $gross = Money::sum(array_map(fn (BillLine $line) => $line->grossTaxable(), $lines));
 
         /*
         | What the party is asked for, which is not always what the lines add up
@@ -129,6 +129,11 @@ class BillPreviewService
         return [
             // What the lines came to before anything was taken off, so a panel
             // showing a discount can show what it was a discount from.
+            //
+            // Stated before tax on every line, including the ones quoted with tax
+            // in — see BillLine::grossTaxable(). A subtotal that mixed the two
+            // would make the GST on an inclusive line look like a discount, since
+            // the figure below is gross less taxable.
             'gross' => $gross->amount(),
             /*
             | Everything that came off — a line's own discount and its share of
@@ -175,6 +180,10 @@ class BillPreviewService
             'unit_price' => $line->unitPrice->amount(),
             'discount_amount' => $line->discount->amount(),
             'gst_rate' => (string) $line->tax->rate->percent(),
+            // Whether the rate above already had the tax in it — what the form's
+            // toggle was set to, echoed back so the row can say "₹118 incl."
+            // rather than leaving the operator to compare two figures.
+            'price_includes_tax' => $line->priceIncludesTax,
             'taxable_value' => $line->tax->taxable->amount(),
             'cgst_amount' => $line->tax->cgst->amount(),
             'sgst_amount' => $line->tax->sgst->amount(),

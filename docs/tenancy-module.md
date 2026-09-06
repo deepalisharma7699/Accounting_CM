@@ -179,10 +179,13 @@ Joining an *existing* workshop is an invitation, issued by its owner through
 `POST /v1/users` — never self-serve, or anyone could type their way into
 someone else's books.
 
-Set `TENANCY_ALLOW_PUBLIC_SIGNUP=false` for sales-led onboarding: registration
-then returns 403 `SIGNUP_DISABLED`, and workshops are created only by a
+`TENANCY_ALLOW_PUBLIC_SIGNUP` is **false by default**: onboarding is sales-led,
+so registration returns 403 `SIGNUP_DISABLED`, `/register` answers 404, the
+sign-in modal offers no sign-up link, and workshops are created only by a
 platform super-admin via `POST /v1/tenants` (which accepts an optional `owner`
-block to do both in one call).
+block to do both in one call). Set it true to re-open self-serve sign-up — one
+switch moves the endpoint, the page and the link together, because a visible
+form whose endpoint refuses is worse than no form.
 
 ## Roles
 
@@ -292,7 +295,7 @@ owner account in the same call.
 
 | Path | Who | What |
 | --- | --- | --- |
-| `/register` | Anyone | Sign-up: workshop + owner in one form. **404** when `TENANCY_ALLOW_PUBLIC_SIGNUP=false` — a visible page whose endpoint answers 403 is worse than no page |
+| `/register` | Anyone | Sign-up: workshop + owner in one form. **404 by default** — `TENANCY_ALLOW_PUBLIC_SIGNUP` ships false; a visible page whose endpoint answers 403 is worse than no page |
 | `/workspace` | `READ:WORKSPACE` + membership | The owner's own workshop: identity and book settings. Read-only without `UPDATE` |
 | `/tenants` | `READ:TENANTS` | Platform administration of every workshop |
 

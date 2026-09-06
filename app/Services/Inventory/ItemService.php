@@ -312,6 +312,12 @@ class ItemService
             'gst_rate' => $this->normaliseRate(
                 $data['gst_rate'] ?? $category->default_gst_rate
             ),
+            // How this product's price is quoted. No category default: what a
+            // shop charges on a kind of thing is a property of the tax code, and
+            // whether it writes the figure with the tax folded in is a habit of
+            // the shop. A workshop that prices everything at MRP still has to say
+            // so per product, once.
+            'price_includes_tax' => (bool) ($data['price_includes_tax'] ?? false),
             'base_uom' => $this->resolveUom($category, $data['base_uom'] ?? null),
             'is_stock' => $this->resolveStockFlag($category, $data['is_stock'] ?? null),
             'is_draft' => (bool) ($data['is_draft'] ?? false),
@@ -388,6 +394,19 @@ class ItemService
 
         if (array_key_exists('gst_rate', $data)) {
             $attributes['gst_rate'] = $this->normaliseRate($data['gst_rate']);
+        }
+
+        /*
+        | Editable, and it restates nothing already posted.
+        |
+        | Every line that has been written carries its own copy — see
+        | `transaction_lines.price_includes_tax` — so flipping this changes what
+        | the *next* bill prefills and no invoice already issued. Which is the
+        | same guarantee `gst_rate` beside it gives, and it is audited for the
+        | same reason: the shelf price has not moved, but what it means has.
+        */
+        if (array_key_exists('price_includes_tax', $data)) {
+            $attributes['price_includes_tax'] = (bool) $data['price_includes_tax'];
         }
 
         if (array_key_exists('is_stock', $data)) {

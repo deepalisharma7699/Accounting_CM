@@ -10,6 +10,8 @@
  * that need it must be same-origin and sent with credentials.
  */
 
+import { announceWrite } from './data-bus';
+
 const BASE = '/api/v1';
 
 let accessToken = null;
@@ -110,6 +112,79 @@ export async function register(fields) {
     accessToken = payload.data.access_token;
 
     return payload.data.user;
+}
+
+/* -------------------------------------------------------------------------
+ | Passkeys
+ | ---------------------------------------------------------------------- */
+
+/**
+ * A challenge to sign in with, naming no account.
+ *
+ * Unauthenticated, and takes nothing: the whole point of a discoverable
+ * credential is that the browser already knows which passkeys it holds for this
+ * site, so there is nothing for the page to tell the server first.
+ */
+export async function passkeyLoginOptions() {
+    const { response, payload } = await request('/auth/passkeys/login/options', {
+        method: 'POST',
+        auth: false,
+    });
+
+    if (!response.ok) {
+        throw toError(response, payload);
+    }
+
+    return payload.data;
+}
+
+/**
+ * Redeem an assertion for a session. Same shape as login(), deliberately —
+ * everything downstream of a started session is identical however it started.
+ */
+export async function passkeyLogin(state, credential) {
+    const { response, payload } = await request('/auth/passkeys/login', {
+        method: 'POST',
+        body: { state, credential },
+        auth: false,
+        // Required so the browser stores the Set-Cookie refresh token.
+        credentials: 'include',
+    });
+
+    if (!response.ok) {
+        throw toError(response, payload);
+    }
+
+    accessToken = payload.data.access_token;
+
+    return payload.data.user;
+}
+
+/** The devices on this account. */
+export async function passkeys() {
+    return (await call('/auth/passkeys')).data;
+}
+
+/**
+ * Enrol the device this page is running on.
+ *
+ * Both halves are authenticated — the ceremony that adds a way into an account
+ * is something you do from inside it, never on the way in.
+ */
+export async function passkeyRegisterOptions() {
+    return (await call('/auth/passkeys/options', { method: 'POST' })).data;
+}
+
+export async function registerPasskey(state, credential, label) {
+    return (await call('/auth/passkeys', { method: 'POST', body: { state, credential, label } })).data;
+}
+
+export async function renamePasskey(id, label) {
+    return (await call(`/auth/passkeys/${id}`, { method: 'PATCH', body: { label } })).data;
+}
+
+export async function deletePasskey(id) {
+    await call(`/auth/passkeys/${id}`, { method: 'DELETE' });
 }
 
 /**
@@ -215,6 +290,21 @@ export async function call(path, options = {}) {
         throw toError(response, payload);
     }
 
+    /*
+    | Every write in the application comes through here, which is the only
+    | reason the announcement is made here and not at the call sites.
+    |
+    | The screens that hold rows — Stock's shelf, the Items catalogue, a module's
+    | level-1 list — are held detached and alive for the life of the tab, so
+    | nothing about a write reaches them on its own. A convention that each write
+    | site remembers to say what it changed fails silently, one site at a time;
+    | this cannot be forgotten because there is nowhere else to write from.
+    |
+    | It marks screens stale and fetches nothing (`data-bus.js`), so a write in
+    | one module still never loads another module's data (§7.2).
+    */
+    announceWrite(path, options.method ?? 'GET');
+
     return payload;
 }
 
@@ -233,6 +323,13 @@ export async function bootstrapSession() {
 export default {
     login,
     register,
+    passkeyLoginOptions,
+    passkeyLogin,
+    passkeys,
+    passkeyRegisterOptions,
+    registerPasskey,
+    renamePasskey,
+    deletePasskey,
     logout,
     logoutEverywhere,
     refresh,

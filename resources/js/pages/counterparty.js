@@ -1677,6 +1677,10 @@ export function initCounterpartyPage(config) {
             canCreate: canWrite,
             onShowList: loadList,
 
+            // The record, and what it owes — and the second of those moves
+            // whenever a bill or a receipt is posted in another module.
+            refreshOn: ['parties', 'transactions'],
+
             /*
             | Bring the form home.
             |

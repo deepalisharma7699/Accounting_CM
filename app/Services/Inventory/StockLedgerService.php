@@ -520,7 +520,7 @@ class StockLedgerService
      * of which none may be low. One query fetches the variants and one more
      * fetches every position behind them, however many rows there are.
      *
-     * @param  array{search?: string|null, item_id?: int|null, type?: string|null, is_active?: bool|null, status?: string|null, sort?: string|null, direction?: string|null}  $filters
+     * @param  array{search?: string|null, item_id?: int|null, variant_ids?: array<int, int>|null, type?: string|null, is_active?: bool|null, status?: string|null, sort?: string|null, direction?: string|null}  $filters
      * @return array{rows: array<int, array{variant: ItemVariant, position: StockPosition}>, totals: array{quantity: Quantity, value: Money, variants: int, low: int, negative: int, out_of_stock: int}}
      */
     public function report(array $filters = []): array

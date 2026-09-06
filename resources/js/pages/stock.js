@@ -865,6 +865,11 @@ export default async function initStock() {
         listSubtitle: () => 'What is on the shelf, and what it is worth. Every figure is a sum of stock movements — there is no quantity column anywhere to go out of step.',
         createLabel: '',
         canCreate: false,
+        // The shelf is a sum of stock movements, so anything that posts one
+        // — a sale, a purchase, a return, a count, a job issuing parts —
+        // leaves these rows behind. `items` too: a new variant is a new row
+        // here, at a position of zero.
+        refreshOn: ['stock', 'items'],
         onShowList: async () => {
             await load();
             await loadReconciliation();

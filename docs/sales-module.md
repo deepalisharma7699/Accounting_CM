@@ -61,6 +61,23 @@ A purchase line opens **empty**, because a rate typed there becomes the weighted
 average cost, and a wrong average is permanent and invisible. See
 [purchase-module.md](purchase-module.md#the-rate-box-starts-empty-on-a-purchase).
 
+### A rate may be quoted with the tax already in it
+
+Beside the rate box is a toggle reading `+GST` or `incl`, prefilled from the item
+and flippable per line — because the same invoice routinely carries a part sold
+at the figure printed on its box and labour quoted before tax.
+
+Where it says `incl`, ₹11,800 is ₹10,000 of goods and ₹1,800 of GST, and the
+customer is asked for the ₹11,800 that was said out loud. Nothing downstream can
+tell the difference: the taxable value, the split and the total are the same
+three figures a rate of ₹10,000 quoted the other way would have produced, which
+is the invariant that keeps the GST return independent of how somebody typed a
+line.
+
+**The customer's copy prints the rate before tax regardless.** A tax invoice's
+rate column has to be the same kind of figure as the taxable value beside it. See
+[inclusive-pricing.md](inclusive-pricing.md).
+
 ### The customer's position is stated at the pick
 
 Choosing the customer is the last moment at which "they already owe ₹42,000"
@@ -175,6 +192,9 @@ came from exactly as it stands.
 | Posted invoice, part paid or part credited | Collect payment, Accept return, Repeat, Print, Share, Reverse |
 | Posted invoice, settled | Accept return, Repeat, Print, Share, Reverse |
 | Posted credit note | Print, Share, Reverse |
+
+The preview a freshly posted invoice lands on offers the same two, gated the same
+way — see [the customer's copy comes up over it](#and-the-customers-copy-comes-up-over-it).
 | Reversed | nothing but Close |
 
 **Correct disappears the moment anything is against the invoice**, because the
@@ -223,6 +243,51 @@ list after each one means a trip back for every customer in the queue. The
 document is emptied for the next sale, focus returns to the customer box, and the
 new row is *flagged* rather than shown — the highlight happens whenever the list
 is next looked at, not at a moment nobody was watching.
+
+### …and the customer's copy comes up over it
+
+A posted sale opens `#invoice-preview` — level 2, the customer's document as they
+would receive it, with **Print**, **Share** and **Next invoice**. It is the other
+half of raising an invoice, and it used to be missing: the only route to the copy
+was to show the list, find the row just written and open its drawer, for every
+single sale.
+
+Over the emptied form rather than instead of it, so the paragraph above is
+untouched. Closing the preview leaves a blank document with the cursor already in
+the customer box, and the observer that puts it back watches the drawer's class
+rather than its close button — the backdrop and Escape are two of the three ways
+out and neither is a click on anything.
+
+Only for a document there is a copy *of*. A draft has no number, no priced lines
+and no tax, so `onPosted` opens nothing for one; a correction that posted is an
+ordinary posted sale and does come here.
+
+### One invoice sheet, borrowed
+
+The preview renders **no invoice markup of its own.** `pages/sales.js` moves the
+single `[data-invoice-document]` node out of `#invoice-print` while the preview
+is open and hands it back before anything prints — the `adoptForm()` pattern from
+`workspace.js`, for the same reason.
+
+That is not tidiness. The print rule keeps whichever child of `body` *contains*
+the document and hides every other one, so a second sheet anywhere under `<main>`
+would make `<main>` a thing worth keeping, and every print from then on would
+carry the whole application around the invoice — with nothing on the screen
+saying so. One node makes the rule true by construction.
+
+Three things hand it back, and the redundancy is deliberate because each covers
+a different way of asking for paper. **Print** releases it before
+`window.print()`. **Closing the preview** releases it, so the borrowing lasts
+exactly as long as the preview does and a later Ctrl+P from anywhere cannot find
+an empty `#invoice-print`. And `beforeprint`/`afterprint` — plus the
+`matchMedia('print')` change, because Safari fires neither — cover a browser
+print taken while the preview is open.
+
+The preview is declared in `layouts/app.blade.php`, beside the sheet and for the
+same reason: the shell caches a module's root **detached**, so a drawer declared
+in `modules/sales.blade.php` would carry the document off the page with it the
+moment somebody opened another module. `PagesRenderTest` asserts both — one sheet
+in one child of `body`, and a body-level preview that renders none.
 
 ### Sharing is a row, and revoking is its whole lifetime
 

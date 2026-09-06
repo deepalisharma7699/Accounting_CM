@@ -8,6 +8,7 @@ use App\Exceptions\Auth\AccountInactiveException;
 use App\Exceptions\Auth\InvalidCredentialsException;
 use App\Exceptions\Auth\InvalidTokenException;
 use App\Exceptions\Tenancy\TenantInactiveException;
+use App\Models\Passkey;
 use App\Models\Tenant;
 use App\Models\User;
 use App\Repositories\Contracts\RefreshTokenRepositoryInterface;
@@ -123,19 +124,67 @@ class AuthService
             throw new InvalidCredentialsException($remaining);
         }
 
+        // Rehash transparently if the configured cost has since increased.
+        if (Hash::needsRehash($user->password)) {
+            $user->forceFill(['password' => Hash::make($credentials['password'])])->save();
+        }
+
+        /*
+        | A password buys the ordinary session length, never the long one. See
+        | TokenService::refreshTtl() for why that is the rule rather than a
+        | "remember me" box: the box would let somebody trade the whole of this
+        | scheme's safety margin for one fewer tap, on the screen least likely
+        | to be read carefully.
+        */
+        return $this->startSession($user, $request, trusted: false, via: 'password');
+    }
+
+    /**
+     * Sign in with a passkey.
+     *
+     * The proof has already happened — {@see PasskeyService::authenticate()}
+     * checked the signature, the origin, the challenge and the user
+     * verification, and would have refused rather than returned a user. What is
+     * left is the same set of questions the password path asks after the
+     * password checks out, which is exactly why they are asked in one place.
+     *
+     * There is no lockout to consult and none to clear: a passkey cannot be
+     * guessed, so there is nothing to count failed guesses of.
+     *
+     * @param  array{user: User, passkey: Passkey}  $verified
+     * @return array{user: User, tokens: TokenPair}
+     *
+     * @throws AccountInactiveException|TenantInactiveException
+     */
+    public function loginWithPasskey(array $verified, ?Request $request = null): array
+    {
+        return $this->startSession($verified['user'], $request, trusted: true, via: 'passkey');
+    }
+
+    /**
+     * Everything that is true of starting a session, whatever proved identity.
+     *
+     * One place, because these are the checks that decide whether somebody who
+     * has *proved who they are* may actually work — and a second way in that
+     * forgot one of them would be a suspended employee, or a workshop whose
+     * subscription lapsed, still posting entries. Adding a third way in means
+     * calling this, not copying it (CLAUDE.md §4.4).
+     *
+     * @return array{user: User, tokens: TokenPair}
+     *
+     * @throws AccountInactiveException|TenantInactiveException
+     */
+    private function startSession(User $user, ?Request $request, bool $trusted, string $via): array
+    {
         if (! $user->isActive()) {
             throw new AccountInactiveException($user->status);
         }
 
-        // Checked after the password so a suspended workshop cannot be used to
+        // On the password path this is deliberately reached only after the
+        // password has been checked, so a suspended workshop cannot be used to
         // probe whether a given email exists.
         if ($user->tenant !== null && ! $user->tenant->isActive()) {
             throw new TenantInactiveException($user->tenant->status);
-        }
-
-        // Rehash transparently if the configured cost has since increased.
-        if (Hash::needsRehash($user->password)) {
-            $user->forceFill(['password' => Hash::make($credentials['password'])])->save();
         }
 
         $this->throttle->clear($user);
@@ -145,11 +194,11 @@ class AuthService
             'last_login_ip' => $request?->ip(),
         ])->save();
 
-        Log::info('auth.login', ['user_id' => $user->id, 'ip' => $request?->ip()]);
+        Log::info('auth.login', ['user_id' => $user->id, 'ip' => $request?->ip(), 'via' => $via]);
 
         return [
             'user' => $user->load('customRole'),
-            'tokens' => $this->tokens->issueTokenPair($user, $request),
+            'tokens' => $this->tokens->issueTokenPair($user, $request, null, $trusted),
         ];
     }
 

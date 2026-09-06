@@ -65,6 +65,18 @@ class PreviewBillRequest extends FormRequest
                 'nullable', 'numeric', 'min:0', 'max:100', 'prohibits:items.*.discount',
             ],
 
+
+            /*
+            | Whether the rate above already has the GST in it.
+            |
+            | Absent means "ask the item", which is how a caller that predates the
+            | toggle still gets the treatment the workshop set on the product.
+            | Sent explicitly, it wins — the form prefills it from the item and
+            | the operator may flip a line, because a shop selling parts at their
+            | printed price still quotes the odd job before tax. See BillLine.
+            */
+            'items.*.price_includes_tax' => ['nullable', 'boolean'],
+
             'items.*.memo' => ['nullable', 'string', 'max:255'],
 
             // The discount on the whole bill, apportioned across the lines
@@ -119,6 +131,10 @@ class PreviewBillRequest extends FormRequest
                 'discount_percent' => ($line['discount_percent'] ?? null) === ''
                     ? null
                     : ($line['discount_percent'] ?? null),
+                'price_includes_tax' => array_key_exists('price_includes_tax', $line)
+                    && $line['price_includes_tax'] !== null && $line['price_includes_tax'] !== ''
+                    ? filter_var($line['price_includes_tax'], FILTER_VALIDATE_BOOLEAN)
+                    : null,
                 'memo' => $line['memo'] ?? null,
             ], array_values((array) $this->input('items', []))),
         ];

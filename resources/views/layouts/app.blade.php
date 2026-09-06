@@ -27,6 +27,11 @@
     --}}
     @include('partials.confirm-modal')
 
+    {{-- Level 2, mounted once for the same reason the confirm modal is: it is
+         opened from the topbar, which never unmounts, so it belongs to the
+         layout rather than to whichever module happens to be open. --}}
+    @include('partials.security-drawer')
+
     {{--
         The workshop's own copy of an invoice, waiting to be printed.
 
@@ -48,6 +53,12 @@
     <div id="invoice-print" role="document" aria-hidden="true">
         @include('partials.invoice-document')
     </div>
+
+    {{-- Level 2, and a body child for the same reason the sheet above is one:
+         it borrows that single node while somebody reads the invoice on screen,
+         and a drawer declared inside a module would carry the document off the
+         page when the shell detached that module. See the partial. --}}
+    @include('partials.invoice-preview')
 
     <div id="toast-host" class="toast-host" aria-live="polite"></div>
 

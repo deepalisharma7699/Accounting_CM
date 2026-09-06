@@ -937,6 +937,7 @@ function drawerOverview(item) {
         ['Code', item.code ? `<code class="rounded bg-muted px-2 py-0.5 font-mono text-xs">${esc(item.code)}</code>` : '—'],
         [`${esc(item.tax_code_label)} code`, item.hsn_sac ? esc(item.hsn_sac) : '—'],
         ['GST rate', `${esc(item.gst_rate)}%`],
+        ['Price basis', item.price_includes_tax ? 'Includes GST' : 'Before GST'],
         ['Counted in', esc(item.base_uom_label)],
         ['Keeps stock', item.can_hold_stock ? (item.is_stock ? 'Yes' : 'No') : 'Cannot — a service is produced when sold'],
         ['Variants', String(variantCount(item))],
@@ -1392,6 +1393,7 @@ async function openItemForm(item = null) {
     );
     $('#item-hsn', form).value = editing ? (item.hsn_sac ?? '') : '';
     $('#item-gst', form).value = editing ? item.gst_rate : '';
+    $('#item-price-incl', form).checked = editing ? item.price_includes_tax === true : false;
     $('#item-type', form).value = editing
         ? String(item.category_id ?? '')
         : ($('#item-type', form).options[0]?.value ?? '');
@@ -1498,6 +1500,10 @@ async function submitItem() {
         | and this is the only way to say so.
         */
         gst_rate: value('#item-gst'),
+        // Whether the selling price above has the tax in it. A plain boolean and
+        // never null: unticked is a real answer, and the only way to turn it back
+        // off on an item that had it on.
+        price_includes_tax: $('#item-price-incl', form).checked,
         is_stock: $('#item-stock', form).checked,
         description: value('#item-description'),
     };
@@ -2294,6 +2300,10 @@ export default async function initItems() {
         count: () => (state.items.length ? state.items.length : null),
         canCreate: canWrite,
         onShowList: loadList,
+
+        // The catalogue *and* the position beside each row (M7 joined to M8),
+        // so this list goes behind on a sale as surely as on an edit here.
+        refreshOn: ['items', 'stock'],
 
         /*
         | Bring the form home.

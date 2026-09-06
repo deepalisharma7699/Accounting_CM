@@ -1,7 +1,9 @@
 import auth from './auth-client';
+import { mountPasskeyManager } from './components/passkey-manager';
+import passkeys from './passkeys';
 import { applyPermissionGates, setGrants, setWorkspace } from './permissions';
 import { initShell } from './shell';
-import { $, $$, initModals, toast } from './ui';
+import { $, $$, initModals, showModal, toast } from './ui';
 
 /* -------------------------------------------------------------------------
  | Chrome
@@ -100,6 +102,32 @@ function initChrome() {
     });
 
     initLogout();
+    initSecurityDrawer();
+}
+
+/**
+ * "Sign-in security" in the account menu, and the drawer behind it.
+ *
+ * The manager is mounted once — the drawer lives in the layout and never
+ * unmounts — and its `open()` is what fetches the list, so a session that never
+ * opens this screen never asks for it (§7.2).
+ *
+ * Delegated from the document for the same reason initLogout() is: the chrome
+ * hydrates after the markup lands, and a click that arrives first should still
+ * work.
+ */
+function initSecurityDrawer() {
+    const manager = mountPasskeyManager(document);
+
+    if (!manager) return;
+
+    document.addEventListener('click', (event) => {
+        // closest(), not matches(): the control wraps an <svg>.
+        if (!event.target.closest('[data-security-open]')) return;
+
+        manager.open();
+        showModal('#security-drawer');
+    });
 }
 
 /**
@@ -207,6 +235,112 @@ function initAuthForm(form, { bannerId, idleLabel, busyLabel, submit, redirectTo
     });
 }
 
+/* -------------------------------------------------------------------------
+ | Signing in with a passkey
+ | ---------------------------------------------------------------------- */
+
+/**
+ * The passkey half of the sign-in dialog.
+ *
+ * Two ways in, both ending in the same two API calls: a challenge, and the
+ * assertion the device signs it with.
+ *
+ *   the button    — an explicit tap, which opens the browser's account picker.
+ *   autofill      — `mediation: 'conditional'`, which puts the same passkeys
+ *                   inside the email field's own autofill list. It is armed on
+ *                   load and waits, invisibly, until somebody focuses the
+ *                   field. This is the smoothest path there is: no button, no
+ *                   dialog, and nothing typed.
+ *
+ * The block starts hidden and is revealed only once the browser has confirmed
+ * it can perform a ceremony at all. A fingerprint button on a machine with no
+ * authenticator is a dead end on the one screen nobody can get past.
+ *
+ * Only one WebAuthn request may be in flight at a time, so the conditional one
+ * is aborted before the explicit one starts — without that, tapping the button
+ * while autofill is armed rejects with an unhelpful InvalidStateError.
+ */
+async function initPasskeySignIn(root) {
+    const panel = $('#passkey-signin', root);
+    const button = $('[data-passkey-signin]', root);
+
+    if (!panel || !button || !passkeys.isSupported()) return;
+
+    const spinner = $('[data-passkey-spinner]', button);
+    const icon = $('[data-passkey-icon]', button);
+    const label = $('[data-passkey-label]', button);
+    const error = $('[data-passkey-error]', root);
+    const idleLabel = label.textContent;
+    const busyLabel = label.dataset.busy || 'Waiting for your device…';
+
+    let conditional = null;
+
+    const setBusy = (busy) => {
+        button.disabled = busy;
+        spinner.classList.toggle('hidden', !busy);
+        icon.classList.toggle('hidden', busy);
+        label.textContent = busy ? busyLabel : idleLabel;
+    };
+
+    const showError = (message) => {
+        error.textContent = message;
+        error.classList.toggle('hidden', !message);
+    };
+
+    /** One ceremony, from challenge to session. */
+    const signIn = async (options) => {
+        const { state, options: publicKey } = await auth.passkeyLoginOptions();
+
+        const credential = await passkeys.get(publicKey, options);
+
+        await auth.passkeyLogin(state, credential);
+
+        window.location.assign('/dashboard');
+    };
+
+    button.addEventListener('click', async () => {
+        showError('');
+
+        // Stand the autofill request down first: the browser allows one.
+        conditional?.abort();
+        conditional = null;
+
+        setBusy(true);
+
+        try {
+            await signIn();
+        } catch (err) {
+            // Closing the sheet is a decision, not a failure. Saying "that
+            // passkey could not be verified" to somebody who chose to type
+            // their password instead is answering a question they did not ask.
+            if (!passkeys.wasDismissed(err)) {
+                showError(err.message || 'That did not work. Try your password instead.');
+            }
+
+            setBusy(false);
+        }
+    });
+
+    // Reveal it now the browser has agreed it can do this at all.
+    panel.classList.remove('hidden');
+
+    if (!(await passkeys.hasConditionalMediation())) return;
+
+    conditional = new AbortController();
+
+    try {
+        await signIn({ signal: conditional.signal, mediation: 'conditional' });
+    } catch {
+        /*
+         * Silent by design. This request was never asked for — it sits waiting
+         * on the off-chance the field is focused — so every way it can end
+         * (aborted for the button, no passkey chosen, the dialog dismissed, the
+         * page closed) is ordinary. An error here would be the page complaining
+         * about something nobody did.
+         */
+    }
+}
+
 function initLogin(form) {
     initAuthForm(form, {
         bannerId: '#login-error',
@@ -307,20 +441,30 @@ async function initAuthenticatedPage() {
 
 document.addEventListener('DOMContentLoaded', () => {
     /*
-    | The public page carries the sign-in form in a modal rather than being a
+    | The public site carries the sign-in form in a modal rather than being a
     | sign-in page, so it boots two things: its own behaviour, and — below,
     | through the same branch every credential form takes — the unchanged login
-    | handler. Loaded lazily, so none of the marketing page's code is shipped to
+    | handler. Loaded lazily, so none of the public site's code is shipped to
     | the screens behind the login.
+    |
+    | One key for every public page: the home page and the service pages share
+    | a header, a nameplate guide and an action bar, and resources/js/pages/site
+    | returns early for whatever is not in the document it landed on.
     */
-    if (document.body.dataset.page === 'welcome') {
-        import('./pages/welcome').then((module) => module.default());
+    if (document.body.dataset.page === 'site') {
+        import('./pages/site').then((module) => module.default());
     }
 
     const loginForm = $('#login-form');
 
     if (loginForm) {
         initLogin(loginForm);
+
+        // Deliberately not awaited: it ends in a request that waits for the
+        // person to focus the email field, which may be never. Awaiting it
+        // here would hold up everything after this line for the life of the
+        // page.
+        initPasskeySignIn(document);
 
         return;
     }

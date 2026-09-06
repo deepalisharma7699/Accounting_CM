@@ -28,6 +28,12 @@
  *   cannot happen, because `default()` is called on the first open only.
  * - **A module is paid for once** (§2.5, §7.2). Markup, code and data all
  *   arrive on first open. A module never opened costs nothing at all.
+ *
+ * The cost of holding them is that a module's rows are a snapshot of whenever it
+ * was last looked at, and something else may have written since. So re-attaching
+ * dispatches `module:shown` on the root, and a module that has been told it is
+ * stale refetches then — at the moment it is back in front of somebody, never at
+ * the moment of the write. See `data-bus.js`.
  */
 
 import { applyPermissionGates, can, hasWorkspace } from './permissions';
@@ -222,6 +228,23 @@ async function mount(key) {
     if (mounted.has(key)) {
         const root = mounted.get(key);
         host.replaceChildren(root);
+
+        /*
+        | Back on screen, after however long detached.
+        |
+        | The counterpart of the cache above: holding a module alive is what
+        | makes reopening it instant, and it is also the only reason its rows can
+        | be out of date — something else wrote while it was away. A module that
+        | has been told it is stale (`data-bus.js`) refetches here, at the moment
+        | somebody is actually looking at it, rather than when the write happened
+        | (§7.2). `workspace.js` listens for every module with a level-1 list, so
+        | nothing per-module has to.
+        |
+        | Announced on re-attach only. A first mount has just fetched everything
+        | it has, and telling it to refresh would be a second request for the
+        | rows already arriving.
+        */
+        root.dispatchEvent(new CustomEvent('module:shown'));
 
         /*
         | A module that is already up cannot read its intent from `default()`,

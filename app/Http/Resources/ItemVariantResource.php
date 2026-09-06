@@ -67,6 +67,7 @@ class ItemVariantResource extends JsonResource
                 'brand' => $this->item->brandLabel(),
                 'base_uom_symbol' => $this->item->base_uom?->symbol(),
                 'gst_rate' => (string) $this->item->gst_rate,
+                'price_includes_tax' => (bool) $this->item->price_includes_tax,
                 'tracks_stock' => $this->item->tracksStock(),
             ]),
 

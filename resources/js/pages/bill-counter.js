@@ -163,15 +163,21 @@ async function loadJob(id, { silent = false } = {}) {
  * rightly carries nothing a screen invented. So each line is looked up once, and
  * until that lands the rows read "Item #14". Doing it in one pass afterwards
  * rather than one request per line keeps a ten-part job to a single round trip.
+ *
+ * The lines are named in the request. It used to ask for the first two hundred
+ * stock rows and look for them in there, which is right until a workshop has two
+ * hundred and one — and then a job's parts start coming back as "Item #14" with
+ * no figure beside them, on the catalogue that needs the lookup most.
  */
 async function labelJobLines() {
     const lines = doc.lines();
-    const variantIds = lines.map((line) => line.variant_id).filter(Boolean);
+    const variantIds = [...new Set(lines.map((line) => line.variant_id).filter(Boolean))];
 
     if (variantIds.length === 0) return;
 
     try {
-        const { data } = await auth.call('/stock?per_page=200&is_active=1');
+        const query = variantIds.map((id) => `variant_ids[]=${encodeURIComponent(id)}`).join('&');
+        const { data } = await auth.call(`/stock?per_page=200&${query}`);
         const byVariant = new Map(data.map((row) => [row.variant_id, row]));
 
         lines.forEach((line) => {

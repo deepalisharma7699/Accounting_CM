@@ -18,6 +18,7 @@ use Illuminate\Support\Carbon;
  * @property string $jti
  * @property string $token_hash
  * @property string $family_id
+ * @property bool $trusted
  * @property Carbon $expires_at
  * @property Carbon|null $revoked_at
  * @property string|null $revoked_reason
@@ -28,6 +29,7 @@ use Illuminate\Support\Carbon;
     'jti',
     'token_hash',
     'family_id',
+    'trusted',
     'expires_at',
     'revoked_at',
     'revoked_reason',
@@ -40,6 +42,7 @@ class RefreshToken extends Model
     protected function casts(): array
     {
         return [
+            'trusted' => 'boolean',
             'expires_at' => 'datetime',
             'revoked_at' => 'datetime',
         ];

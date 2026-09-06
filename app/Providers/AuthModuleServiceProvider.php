@@ -2,10 +2,12 @@
 
 namespace App\Providers;
 
+use App\Repositories\Contracts\PasskeyRepositoryInterface;
 use App\Repositories\Contracts\PermissionRepositoryInterface;
 use App\Repositories\Contracts\RefreshTokenRepositoryInterface;
 use App\Repositories\Contracts\RoleRepositoryInterface;
 use App\Repositories\Contracts\UserRepositoryInterface;
+use App\Repositories\Eloquent\EloquentPasskeyRepository;
 use App\Repositories\Eloquent\EloquentPermissionRepository;
 use App\Repositories\Eloquent\EloquentRefreshTokenRepository;
 use App\Repositories\Eloquent\EloquentRoleRepository;
@@ -34,6 +36,7 @@ class AuthModuleServiceProvider extends ServiceProvider
         RoleRepositoryInterface::class => EloquentRoleRepository::class,
         PermissionRepositoryInterface::class => EloquentPermissionRepository::class,
         RefreshTokenRepositoryInterface::class => EloquentRefreshTokenRepository::class,
+        PasskeyRepositoryInterface::class => EloquentPasskeyRepository::class,
     ];
 
     public function register(): void
@@ -97,6 +100,22 @@ class AuthModuleServiceProvider extends ServiceProvider
         RateLimiter::for('auth-register', fn (Request $request) => Limit::perHour(10)->by((string) $request->ip()));
 
         RateLimiter::for('auth-refresh', fn (Request $request) => Limit::perMinute(30)->by((string) $request->ip()));
+
+        /*
+        | Passkey ceremonies, keyed by IP because there is no account named in
+        | either request — that privacy is the point of the empty credential
+        | list, and it is also why the limit cannot be per-account here.
+        |
+        | Looser than the password limiter on purpose. A passkey cannot be
+        | guessed, so this is not standing between anybody and a secret; what it
+        | is for is the cost of the ceremony itself and the cache entry each
+        | challenge writes. Tight enough to make issuing challenges in bulk
+        | pointless, loose enough that a counter with several staff on one
+        | connection, each retrying a prompt they fumbled, is never locked out
+        | of the way in.
+        */
+        RateLimiter::for('passkey-ceremony', fn (Request $request) => Limit::perMinute(60)
+            ->by('passkey:'.$request->ip()));
 
         RateLimiter::for('api', fn (Request $request) => Limit::perMinute(120)
             ->by($request->user()?->getAuthIdentifier() ?? (string) $request->ip()));

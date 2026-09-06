@@ -69,6 +69,18 @@ class StoreItemRequest extends FormRequest
             // rate above that is a typo rather than a tax.
             'gst_rate' => ['nullable', 'numeric', 'decimal:0,2', 'between:0,100'],
 
+
+            /*
+            | Whether the price on the shelf is quoted with the GST already in it.
+            |
+            | A default for the bill form to prefill and nothing more — the flag
+            | that decides a document's arithmetic is the one on its line. A shop
+            | that prices parts at the figure printed on the box sets this once
+            | and stops thinking about it; one that quotes before tax leaves it
+            | alone, which is what every item has always meant.
+            */
+            'price_includes_tax' => ['nullable', 'boolean'],
+
             // A unit *code* rather than a fixed set: the Unit Master is a table
             // the admin edits, so the allowed values are not knowable here. The
             // service resolves it and falls back to the category's default.
@@ -161,6 +173,7 @@ class StoreItemRequest extends FormRequest
             'brand_id' => $this->filled('brand_id') ? $this->integer('brand_id') : null,
             'hsn_sac' => $this->filled('hsn_sac') ? trim((string) $this->string('hsn_sac')) : null,
             'gst_rate' => $this->filled('gst_rate') ? $this->input('gst_rate') : null,
+            'price_includes_tax' => $this->boolean('price_includes_tax'),
             'base_uom' => $this->filled('base_uom') ? (string) $this->string('base_uom') : null,
             'is_stock' => $this->has('is_stock') ? $this->boolean('is_stock') : null,
             'is_draft' => $this->boolean('is_draft'),

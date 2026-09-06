@@ -157,6 +157,22 @@ so `BelongsToTenant`'s cross-tenant guard is *satisfied* rather than worked
 around — that guard exists so a stray mass-assignment cannot plant a row in
 another workshop's books, and it should keep meaning exactly what it says.
 
+### A sign-in device reads its workshop through its owner
+
+`Passkey` is the one audited model with no `tenant_id` column of its own. A
+passkey belongs to a *person*, and the person belongs to a workshop, so
+`Passkey::auditTenantId()` reads through the user rather than off the row.
+
+Without that override the default returns null, which is not "unaudited" — it is
+worse. The entry is written, to no workshop, where the owner who needs it cannot
+see it. Null stays null for a platform administrator, who is in no workshop, and
+that is the correct answer for the same reason it is on their own user record.
+
+Enrolling a device and removing one are on the trail because they are the two
+acts that change who can open an account and leave no other mark: the user's row
+is untouched either way. The stored public key is deliberately not in the
+snapshot — a blob nobody can read is not evidence of anything.
+
 ### The chart provisioner is suppressed
 
 `AuditRecorder::silently()` has exactly one caller: `ChartOfAccountProvisioner`.

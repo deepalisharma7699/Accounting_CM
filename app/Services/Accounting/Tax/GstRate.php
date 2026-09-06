@@ -100,6 +100,39 @@ final class GstRate implements Stringable
     }
 
     /**
+     * The taxable value hiding inside a tax-inclusive amount.
+     *
+     * The counter's other way of quoting: "that bearing is ₹118" already has the
+     * tax in it, and what the invoice has to print is ₹100 of goods and ₹18 of
+     * GST. So the base is the amount divided by one-and-the-rate —
+     * `118 × 10000 ÷ (10000 + 1800)` — and the tax is whatever is **left over**,
+     * never a second multiplication.
+     *
+     * That last part is the whole reason this is one method and not two. Working
+     * the tax out afresh with {@see taxOn()} on the extracted base is a second
+     * rounding, and it does not always land back on the figure somebody typed:
+     * ₹118.01 at 18% extracts a base of ₹100.01, whose tax is ₹18.00, and
+     * ₹100.01 + ₹18.00 is ₹118.01 — but push the same sum through ₹1,062.36 and
+     * the pair can miss by a paisa. A customer handing over a hundred-rupee note
+     * for a hundred-rupee price is the one thing this mode exists to guarantee,
+     * so the subtraction is done by {@see GstBreakdown::within()} and the two
+     * always add back to exactly what was quoted.
+     *
+     * Integer arithmetic throughout, for the reason {@see taxOn()} gives.
+     */
+    public function baseWithin(Money $inclusive): Money
+    {
+        if ($this->points === 0 || $inclusive->isZero()) {
+            return $inclusive;
+        }
+
+        return Money::fromMinor(self::divideRounded(
+            $inclusive->minor() * self::POINTS_PER_WHOLE,
+            self::POINTS_PER_WHOLE + $this->points,
+        ));
+    }
+
+    /**
      * Half the tax, rounded down — the CGST share of an intra-state supply.
      *
      * Deliberately *not* symmetrical with the SGST half: see

@@ -533,6 +533,28 @@
                         <p class="mt-1.5 text-xs text-muted-foreground" id="item-gst-hint">A percentage — 18, not 0.18.</p>
                         <p class="field-error hidden" data-error-for="gst_rate"></p>
                     </div>
+
+                    {{-- Which basis the selling price above is quoted on.
+                         Full-width under the pair, because it qualifies both the
+                         price and the rate rather than sitting beside either, and
+                         because what it changes is what a bill *charges* — the
+                         one thing on this form that reaches a customer's
+                         invoice. A default for the bill line's toggle and never
+                         more than that: the line carries its own copy, so
+                         flipping this restates nothing already posted. --}}
+                    <div class="sm:col-span-2">
+                        <div class="flex items-start gap-2.5">
+                            <input id="item-price-incl" name="price_includes_tax" type="checkbox"
+                                   class="mt-0.5 size-4 rounded border-border">
+                            <label for="item-price-incl" class="text-sm text-secondary-foreground">
+                                This price already includes GST
+                                <span class="mt-0.5 block text-xs text-muted-foreground" id="item-price-incl-hint">
+                                    For parts sold at the figure printed on the box. A bill line starts this way
+                                    and can still be changed.
+                                </span>
+                            </label>
+                        </div>
+                    </div>
                 </div>
 
                 {{-- ── Stock ────────────────────────────────────────────────

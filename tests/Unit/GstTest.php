@@ -138,6 +138,110 @@ class GstTest extends TestCase
         );
     }
 
+    /* ---------------------------------------------------------------------
+     | A rate quoted with the tax already in it
+     |-------------------------------------------------------------------- */
+
+    #[Test]
+    public function it_takes_the_tax_out_of_an_inclusive_price(): void
+    {
+        // The whole point of the mode: ₹118 at 18% is ₹100 of goods and ₹18 of
+        // tax, and the customer is asked for the ₹118 that was quoted.
+        $breakdown = GstBreakdown::within(Money::of('118.00'), GstRate::of(18), PlaceOfSupply::between('27', '27'));
+
+        $this->assertSame('100.00', $breakdown->taxable->amount());
+        $this->assertSame('9.00', $breakdown->cgst->amount());
+        $this->assertSame('9.00', $breakdown->sgst->amount());
+        $this->assertSame('18.00', $breakdown->total()->amount());
+        $this->assertSame('118.00', $breakdown->inclusive()->amount());
+    }
+
+    #[Test]
+    public function an_inclusive_line_always_adds_back_to_the_price_that_was_quoted(): void
+    {
+        $place = PlaceOfSupply::between('27', '27');
+
+        /*
+        | The guarantee the mode exists for, and the reason the tax is a
+        | subtraction rather than a second multiplication: a price somebody typed
+        | is a price a customer hands over, so base + tax has to be that figure
+        | exactly — at every rate, on awkward paise, every time.
+        */
+        foreach (['0.25', '3', '5', '12', '18', '28'] as $percent) {
+            $rate = GstRate::of($percent);
+
+            foreach (['0.01', '1.00', '99.99', '118.00', '1062.36', '4237.29', '99999.99'] as $amount) {
+                $quoted = Money::of($amount);
+                $breakdown = GstBreakdown::within($quoted, $rate, $place);
+
+                $this->assertSame(
+                    $quoted->amount(),
+                    $breakdown->inclusive()->amount(),
+                    "{$amount} inclusive of {$percent}% did not add back to itself",
+                );
+
+                // And the two halves still add back to the tax, as they must
+                // whichever way round the tax was arrived at.
+                $this->assertSame(
+                    $breakdown->total()->amount(),
+                    $breakdown->cgst->plus($breakdown->sgst)->plus($breakdown->igst)->amount(),
+                );
+            }
+        }
+    }
+
+    #[Test]
+    public function extracting_from_a_zero_rate_leaves_the_price_alone(): void
+    {
+        // Nothing to take out. An exempt line quoted "inclusive" is just its
+        // price, and must not become 0.00 of goods or gain a paisa of tax.
+        $breakdown = GstBreakdown::within(Money::of('500.00'), GstRate::zero(), PlaceOfSupply::domestic('27'));
+
+        $this->assertSame('500.00', $breakdown->taxable->amount());
+        $this->assertSame('0.00', $breakdown->total()->amount());
+        $this->assertSame('500.00', $breakdown->inclusive()->amount());
+    }
+
+    #[Test]
+    public function an_inclusive_price_splits_as_igst_across_two_states(): void
+    {
+        // Extraction decides how much tax there is; the place of supply decides
+        // its shape. The two questions stay independent.
+        $breakdown = GstBreakdown::within(Money::of('118.00'), GstRate::of(18), PlaceOfSupply::between('27', '29'));
+
+        $this->assertSame('100.00', $breakdown->taxable->amount());
+        $this->assertSame('18.00', $breakdown->igst->amount());
+        $this->assertSame('0.00', $breakdown->cgst->amount());
+        $this->assertSame('118.00', $breakdown->inclusive()->amount());
+    }
+
+    #[Test]
+    public function the_two_ways_of_quoting_the_same_supply_agree(): void
+    {
+        $place = PlaceOfSupply::between('27', '27');
+
+        // ₹100 plus tax and ₹118 all-in are the same line, and everything stored
+        // about them has to be identical — otherwise the same sale reaches the
+        // GST return as two different figures depending on how it was typed.
+        $added = GstBreakdown::on(Money::of('100.00'), GstRate::of(18), $place);
+        $extracted = GstBreakdown::within(Money::of('118.00'), GstRate::of(18), $place);
+
+        $this->assertSame($added->taxable->amount(), $extracted->taxable->amount());
+        $this->assertSame($added->cgst->amount(), $extracted->cgst->amount());
+        $this->assertSame($added->sgst->amount(), $extracted->sgst->amount());
+        $this->assertSame($added->inclusive()->amount(), $extracted->inclusive()->amount());
+    }
+
+    #[Test]
+    public function the_base_within_a_price_is_integer_arithmetic(): void
+    {
+        // ₹1,062.36 at 18% is 106236 × 10000 ÷ 11800 = 90,030.5 paise, rounded
+        // half away from zero → ₹900.31, leaving ₹162.05 of tax.
+        $this->assertSame('900.31', GstRate::of(18)->baseWithin(Money::of('1062.36'))->amount());
+        $this->assertSame('4237.29', GstRate::zero()->baseWithin(Money::of('4237.29'))->amount());
+        $this->assertSame('0.00', GstRate::of(18)->baseWithin(Money::zero())->amount());
+    }
+
     #[Test]
     public function a_line_with_no_rate_carries_no_tax(): void
     {

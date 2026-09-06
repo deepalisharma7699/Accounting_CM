@@ -92,6 +92,15 @@
                     <span class="block truncate text-xs text-muted-foreground" data-workspace-scope>&nbsp;</span>
                 </div>
 
+                {{-- Above sign-out, and separated from it: they are the two
+                     things you do to your own session, but one of them ends it
+                     and a mis-tap there costs somebody their unsaved work. --}}
+                <button type="button" class="row-menu-item" role="menuitem"
+                        data-security-open title="Sign-in security">
+                    <x-icon name="fingerprint" :size="17" />
+                    <span>Sign-in security</span>
+                </button>
+
                 <button type="button" class="row-menu-item" data-danger role="menuitem"
                         data-logout title="Sign out" aria-label="Sign out">
                     <x-icon name="log-out" :size="17" />

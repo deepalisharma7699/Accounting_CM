@@ -83,6 +83,23 @@ An item's `purchase_price`, typed when the product was created, is not that rate
 and is not stored as one. It is a reference figure, used as the unit cost of the
 opening-stock adjustment if one is recorded, and nothing reads it afterwards.
 
+### A supplier's rate may be quoted with the tax already in it
+
+Beside the rate box is a toggle reading `+GST` or `incl`, prefilled from the
+item and flippable per line. Where it says `incl`, the tax is **extracted** from
+the figure typed rather than added to it, and the stock arrives at what is left.
+
+This is the same unrecoverable-costing problem as the section above, arriving
+from the other direction. A supplier who invoices at printed prices was being
+entered at the inclusive figure with no way to say so, which carried the shelf
+at a value inflated by the whole rate — ₹826 a kilo of copper booked as ₹826
+rather than ₹700, permanently, with every later margin wrong by the difference
+and nothing on any screen saying it had happened.
+
+`GstRate::baseWithin()` is the one place that division lives. The full account —
+where the flag is stored, why the line keeps its own copy, and what a credit note
+does with it — is in [inclusive-pricing.md](inclusive-pricing.md).
+
 ### Paying and returning are states of the drawer, not dialogs over it
 
 Both are forms. A form stacked on a drawer is level 3 doing level 2's job, which

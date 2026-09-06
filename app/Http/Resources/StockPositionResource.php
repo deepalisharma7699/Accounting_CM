@@ -55,6 +55,7 @@ class StockPositionResource extends JsonResource
                 'base_uom_symbol' => $item->base_uom->symbol(),
                 'is_fractional' => $item->base_uom->isFractional(),
                 'gst_rate' => (string) $item->gst_rate,
+                'price_includes_tax' => (bool) $item->price_includes_tax,
             ],
 
             // Decimal strings, like every other number leaving this API: a JSON

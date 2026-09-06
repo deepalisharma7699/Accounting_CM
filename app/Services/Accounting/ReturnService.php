@@ -240,6 +240,13 @@ class ReturnService
                     ->shareOf($line->discountMoney(), $line->quantityValue())
                     ->amount(),
                 'gst_rate' => (string) $line->gst_rate,
+                // Pinned off the invoice for the same reason the rate above is,
+                // and against a sharper failure: the price and the rate alone
+                // cannot say which basis they were struck on. Crediting a ₹118
+                // inclusive line back as ₹118 plus tax would refund ₹21.24 of
+                // GST against ₹18 that was charged, and the pair would not net
+                // out on the return that reports both.
+                'price_includes_tax' => (bool) $line->price_includes_tax,
                 'memo' => $line->memo,
                 'against_line_id' => (int) $line->id,
                 'stock_value' => $this->valueOfReturn(

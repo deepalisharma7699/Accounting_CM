@@ -23,6 +23,14 @@ use App\Support\Money;
  * workshop's chart harder to read for a distinction their accountant already
  * knows how to make from the invoice.
  *
+ * ## Two ways in, one shape out
+ *
+ * {@see on()} adds tax to a value; {@see within()} takes it out of one. Which
+ * applies is the line's own `price_includes_tax`, and nothing downstream of here
+ * can tell the difference — the taxable value, the split and the total are the
+ * same three fields either way, so the ledger, the invoice and the GST return
+ * never learn how the rate happened to be quoted.
+ *
  * ## Why the halves are not both rounded
  *
  * ₹762.71 of tax split in two is ₹381.355 each. Rounding both gives ₹381.36 +
@@ -44,10 +52,44 @@ final class GstBreakdown
         public readonly bool $interState,
     ) {}
 
+    /**
+     * Tax added on top of a value — a rate quoted before GST.
+     */
     public static function on(Money $taxable, GstRate $rate, PlaceOfSupply $place): self
     {
-        $tax = $rate->taxOn($taxable);
+        return self::split($rate, $taxable, $rate->taxOn($taxable), $place);
+    }
 
+    /**
+     * Tax already inside an amount — a rate quoted with GST in it.
+     *
+     * The counter's other way of pricing: "₹118" rather than "₹100 plus tax". No
+     * tax is added; it is *extracted*, and the figure somebody typed is the
+     * figure the customer pays.
+     *
+     * The tax is the remainder rather than a second multiplication, for the
+     * reason {@see GstRate::baseWithin()} sets out: base plus tax has to come back
+     * to exactly what was quoted, and two roundings do not reliably do that.
+     * Which is the same rule the CGST and SGST halves already follow below — a
+     * split has to add back to the thing it split.
+     */
+    public static function within(Money $inclusive, GstRate $rate, PlaceOfSupply $place): self
+    {
+        $taxable = $rate->baseWithin($inclusive);
+
+        return self::split($rate, $taxable, $inclusive->minus($taxable), $place);
+    }
+
+    /**
+     * One tax figure, put into the shape the invoice has to print it in.
+     *
+     * Shared by both constructors deliberately: the intra/inter-state split and
+     * the floor-and-remainder rule for the two halves are the same question
+     * whichever way the rate was quoted, and a second copy of them would be a
+     * second answer on a government return.
+     */
+    private static function split(GstRate $rate, Money $taxable, Money $tax, PlaceOfSupply $place): self
+    {
         if ($place->isInterState()) {
             return new self($rate, $taxable, Money::zero(), Money::zero(), $tax, true);
         }

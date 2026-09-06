@@ -296,6 +296,10 @@ class TransactionResource extends JsonResource
 
             'hsn_sac' => $line->hsn_sac,
             'gst_rate' => (string) $line->gst_rate,
+            // What the rate on this line was quoted on. Carried because a
+            // correction reloads the document into the create form, and a line
+            // that came back on the wrong basis would restate the whole bill.
+            'price_includes_tax' => (bool) $line->price_includes_tax,
             'cgst_amount' => (string) $line->cgst_amount,
             'sgst_amount' => (string) $line->sgst_amount,
             'igst_amount' => (string) $line->igst_amount,

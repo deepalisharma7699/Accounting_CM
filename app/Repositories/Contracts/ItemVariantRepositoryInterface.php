@@ -42,7 +42,7 @@ interface ItemVariantRepositoryInterface
      * query however many rows there are; M12 revisits this if a catalogue ever
      * grows past that.
      *
-     * @param  array{search?: string|null, item_id?: int|null, type?: string|null, is_active?: bool|null}  $filters
+     * @param  array{search?: string|null, item_id?: int|null, variant_ids?: array<int, int>|null, category_ids?: array<int, int>|null, type?: string|null, is_active?: bool|null}  $filters
      * @return Collection<int, ItemVariant>
      */
     public function stocked(array $filters = []): Collection;

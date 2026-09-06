@@ -139,6 +139,14 @@ the browser's `confirm()`.
 3.6 Preserve module state. A search, a filter, an open record, a closed drawer
 must not reset the workspace or refetch what is already held.
 
+3.7 **Held is not the same as stale.** §3.6 and §2A.7 keep a module's rows for
+the life of the tab, so a write in *another* module leaves them wrong. A screen
+that holds a copy of something declares what it is a copy of — `refreshOn` on
+`mountWorkspace`, or `onChange` from [data-bus.js](resources/js/data-bus.js) —
+and refetches when it is next looked at. Never a refresh button, never a poll,
+never a reload, and never a per-module notification: writes announce themselves
+from `auth-client` so a new one cannot forget to.
+
 ## 4. Business logic
 
 4.1 The existing business logic outranks any UI change. Never alter it to make
@@ -258,6 +266,28 @@ one level at a time. A module's markup arrives once from `/modules/{key}`, and
 its root is then cached **detached** — so reopening it re-attaches the same node,
 refetches nothing, and runs its `pages/*.js` `default()` exactly once.
 
+**Holding a module alive is also the only way its rows go wrong.** A module's
+data is a snapshot of whenever it was last looked at, and the module that
+invalidates it is usually a different one — post a sale and Stock's shelf is a
+sale out of date, with nothing on screen saying so. Before
+[data-bus.js](resources/js/data-bus.js) the only cure was reloading the page,
+which §3.2 rules out, and one stale figure survived even that: the bill form's
+"4 PCS on hand" is captured when a line is picked and rides in the autosaved
+draft, so a reload restored the same wrong number for up to a week.
+
+Three decisions in it are load-bearing. **The announcement is made in
+`auth-client`**, from one table of paths, because the failure being fixed is a
+*missed* invalidation and a convention that every write site remembers to call
+`announce()` fails in exactly that way — silently, one site at a time. **Nothing
+in the bus fetches**: it marks screens stale, and the refetch waits for
+`module:shown` or the next Show, or a write in one module would be loading
+another module's data (§7.2). And the table is **generous on purpose** — a
+receipt moves no stock but is listed under `transactions` all the same, because
+a false positive costs one refetch and a false negative is a workshop selling
+stock it does not have. The one thing it must never treat as a write is a
+**read-only POST**: `transactions/preview` runs on a debounce as somebody types,
+and announcing on it refetched every line's position every few keystrokes.
+
 **The registry.** [config/modules.php](config/modules.php) is the single source
 of truth for which modules exist, what grant each needs, and which are switched
 on. [Modules.php](app/Support/Modules.php) reads it, and is the whitelist the
@@ -325,6 +355,38 @@ blank document, the correction handle being dropped from the autosaved draft, th
 client reference regenerated per attempt instead of per correction, a correction
 allowed to park as a draft — so it must not be forked either.
 
+**A rate can be quoted with the GST already in it, and the line remembers
+which.** A counter prices both ways — "ten thousand plus tax" for a rewind,
+"eleven eight" for a part with the figure on the box — so a bill line carries a
+toggle beside its rate, prefilled from `items.price_includes_tax` and flippable
+per line. `GstRate::baseWithin()` divides by one-and-the-rate in integer paise
+and `GstBreakdown::within()` takes the tax as **what is left over**, never as a
+second multiplication: two roundings do not reliably land back on the figure
+somebody typed, and a customer handing over a hundred-rupee note for a
+hundred-rupee price is the whole point of the mode. Add a reader, never a second
+copy (§4.4).
+
+This was never only a convenience. **Stock arrives at the taxable value**, and
+that arrival recomputes the weighted average — so a supplier's MRP-inclusive
+rate entered as exclusive carried the shelf inflated by the whole rate,
+permanently, with every later margin wrong and nothing on any screen saying so.
+
+Three parts of it are load-bearing. The **line keeps its own copy** in
+`transaction_lines.price_includes_tax`, because after posting it is
+unrecoverable: ₹100 plus tax and ₹118 inclusive are the same taxable value, the
+same split and the same total, and only `unit_price` differs. `ReturnService`
+pins it exactly as it pins the rate and the intra/inter-state shape, or a credit
+note refunds tax that was never charged and the pair fails to net out on the
+return that reports both. A line that **sends no flag takes the item's default**
+rather than `false`, so a caller that predates the toggle is not silently charged
+tax on top of a price that already had it. And **the customer's invoice prints
+the rate before tax** whichever way it was typed — a tax invoice's rate column
+sits beside a taxable value and has to be the same kind of figure, or the
+recipient's evidence for an input tax credit is a row that does not multiply out.
+There is deliberately no document-level switch and no category default: one bill
+routinely carries a printed-price part and labour quoted before tax. See
+[inclusive-pricing.md](docs/inclusive-pricing.md).
+
 **A sale is corrected on stricter terms than a purchase**, and the posting engine
 is where that is enforced, never the form. A purchase arrives at its own stated
 cost; a sale issues at whatever the weighted average was on the day, and that
@@ -351,6 +413,22 @@ host either, which is what `body > *:not(#invoice-print)` was until it printed t
 customer's page blank. The print block also redefines `--color-border` on the
 sheet: the screen token is a hairline a printer drops, and the document came out
 of the preview with no rule on it anywhere.
+
+**There is exactly one sheet in the shell, and a screen that shows it borrows
+it.** A posted sale lands on `#invoice-preview` — the customer's copy, level 2
+over the emptied form, with Print and Share — and that drawer renders no invoice
+markup: `pages/sales.js` moves the one `[data-invoice-document]` node out of
+`#invoice-print` and hands it back on Print, on close, and on `beforeprint` (plus
+the `matchMedia('print')` change, which is what Safari has instead of those
+events). Never mount a second copy of the partial in the shell. The print rule
+keeps whichever child of `body` *contains* the document, so a second one under
+`<main>` makes `<main>` worth keeping and every print after that carries the whole
+application around the invoice — with nothing on screen saying so. Both hosts are
+**direct children of `<body>`** for the same reason the sheet always was, and the
+preview additionally because the shell caches a module's root detached: declared
+inside a module it would take the document off the page when that module closed.
+The next module to hand a customer a document borrows this drawer; it does not
+build a second one.
 
 Its payload comes from `InvoiceDocumentService`, which builds the customer's
 document from **its own list of fields**. `TransactionResource` carries the cost
@@ -589,6 +667,71 @@ Convert one module at a time, then flip its `enabled` flag. Do not add a page
 route, do not reintroduce a sidebar, and do not regress what already conforms.
 The counter at `/bills/new` is the one remaining page shell; it now drives the
 shared document engine, and it goes away when Bills is converted.
+
+**Signing in is a passkey first and a password second, and the asymmetry is
+deliberate.** A passkey — fingerprint, face or screen lock — is checked by
+[PasskeyService.php](app/Services/Auth/PasskeyService.php), which does the two
+WebAuthn ceremonies and nothing else. Everything about *starting a session*
+stays in `AuthService::startSession()`, which both ways in call: a second way in
+that skipped it would leave a suspended employee, or a workshop whose account
+was closed, still posting entries with the key they enrolled while they worked
+there. Add a third way in by calling it, never by copying it (§4.4).
+
+Three things in it are load-bearing and each is wrong in a way that looks right.
+The **origin** is the phishing resistance — the browser signs the origin it is
+actually on, and `config('webauthn.origins')` is what refuses a look-alike
+domain — so that list is exact and never a pattern. The assertion is verified
+with a **null user handle**, which is the strict reading and not the lazy one:
+null means "nobody was identified before this began", so the library *requires*
+the device's own handle and compares it, where passing one would be comparing
+the stored record with itself and calling it a check. And `recordFor()`
+**re-applies the live `sign_count`** onto the deserialized credential, because
+the serialized blob's counter is frozen at zero from enrolment — without it the
+clone check compares every assertion against zero, passes all of them, and
+nothing anywhere looks broken.
+
+**A long session is something a passkey earns.** `refresh_tokens.trusted` buys
+90 days instead of 7, and only a passkey sets it: it is bound to one device,
+re-verified at every use and revocable per device, where a password is a secret
+that can be watched or written inside a cupboard door. So there is **no "keep me
+signed in" box** — a box lets somebody trade the whole safety margin for one
+fewer tap on the screen least likely to be read carefully. Rotation **inherits**
+the flag rather than re-deciding it, or every trusted session would quietly
+revert at its first refresh and sign people out a week later with nothing to say
+why.
+
+Enrolment is behind `auth.jwt` and signing in is not, and that split is the
+design: a device registered from the sign-in screen would be a way in that
+anybody who reached that screen could grant themselves. Every refusal answers
+`PASSKEY_REJECTED` with one message for every cause, for the reason the password
+path answers one way for an unknown email and a wrong password. The password is
+**not** being removed — it is the first sign-in on a new device and the recovery
+when every passkey is gone, and there is deliberately no second recovery path,
+because every one of those is a way in for somebody else too. See
+[passkeys.md](docs/passkeys.md).
+
+**The public site is not the application, and §1 does not reach it.** `/`, `/hi`
+and `/services/{slug}` are the shop's own site — outside the sign-in, outside the
+module shell, its own stylesheet and its own page module. Those routes are the
+"public pages" §1.5 allows, and they are ordinary server-rendered pages on
+purpose: a marketing page that needs JavaScript to show its content is a
+marketing page a search engine cannot read.
+
+Two things in it are decisions rather than markup, and both are enforced by
+`tests/Feature/Site`. **A figure nobody has confirmed is not printed** —
+`config/shop.php` carries a `verified` flag beside each one and
+`Site::stats()` drops the unverified along with its label, because the page this
+replaced invented "32+ years" and three testimonials, and a workshop caught
+inventing its own numbers has nothing left to be believed about. The same gate
+withholds the e-mail address, the makes on the counter and the reviews section.
+And **the two languages are one site**: facts live in `config/shop.php`, words in
+`lang/{en,hi}/site.php` key for key, and a key present in one and missing from
+the other fails the build rather than rendering `site.faq.title` into a heading.
+
+The language is in the **path** — `/` and `/hi` — never a cookie, so each has a
+real URL to be shared on WhatsApp and indexed under. Templates read
+`App\Support\Site` and never `config()` or `__()` directly. See
+[public-site.md](docs/public-site.md).
 
 **Sales is Purchase mirrored, and the asymmetry is the whole of it.** A purchase
 arrives at a cost it states; a sale issues at a weighted average that is on no

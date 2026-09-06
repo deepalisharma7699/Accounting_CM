@@ -34,6 +34,7 @@ use Illuminate\Support\Carbon;
  * @property string $name
  * @property string $email
  * @property string $password Bcrypt/Argon2 hash — never the plain value.
+ * @property string|null $passkey_handle Opaque id this person's devices know them by.
  * @property UserStatus $status
  * @property int|null $custom_role_id
  * @property int $failed_login_attempts
@@ -43,7 +44,13 @@ use Illuminate\Support\Carbon;
  * @property Tenant|null $tenant
  */
 #[Fillable(['tenant_id', 'name', 'email', 'password', 'status', 'custom_role_id'])]
-#[Hidden(['password', 'remember_token'])]
+/*
+| `passkey_handle` is hidden with the secrets, though it is not one. It is an
+| opaque id written to hardware this application does not control, and the only
+| thing that reads it is the sign-in path. Nothing a client renders has a use
+| for it, and a value with no reader is one more thing to correlate accounts by.
+*/
+#[Hidden(['password', 'remember_token', 'passkey_handle'])]
 class User extends Authenticatable
 {
     /** @use HasFactory<UserFactory> */
