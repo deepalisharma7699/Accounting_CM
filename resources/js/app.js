@@ -3,7 +3,7 @@ import { mountPasskeyManager } from './components/passkey-manager';
 import passkeys from './passkeys';
 import { applyPermissionGates, setGrants, setWorkspace } from './permissions';
 import { initShell } from './shell';
-import { $, $$, initModals, showModal, toast } from './ui';
+import { $, $$, initModals, showModal } from './ui';
 
 /* -------------------------------------------------------------------------
  | Chrome
@@ -377,23 +377,18 @@ function initRegister(form) {
  | ---------------------------------------------------------------------- */
 
 /*
-| The one page shell that still has code of its own.
+| There is no per-page registry any more, and there is nothing left for one to
+| hold.
 |
-| Every module used to have one. They are cards on the dashboard now, opened in
-| the mounted shell — so the lazy-import registry that used to live here moved to
-| shell.js, which is what consumes it.
+| Every module used to be a page with its own entry point. They are cards on the
+| dashboard now, opened in the mounted shell — so the lazy-import table moved to
+| shell.js, which is what consumes it. The counter at /bills/new was the last
+| page with code of its own, and C4 retired it along with the route: a workshop
+| bill is raised from the job it came off.
 |
-| `dashboard` is absent, and that is the point: home is the module grid and
-| nothing else, so it is rendered entirely by Blade and hydrates nothing. The
-| module that used to paint its figures went with the sections it filled.
-|
-| `bill-counter` is the counter at /bills/new, still a page: a modal cannot host
-| a search-first item picker, a running total, a keyboard flow and a confirmation
-| step without becoming a scroll trap.
+| `dashboard` hydrates nothing of its own either. Home is the module grid and
+| nothing else, rendered entirely by Blade.
 */
-const SHELLS = {
-    'bill-counter': () => import('./pages/bill-counter'),
-};
 
 async function initAuthenticatedPage() {
     // A full page load starts with no token in memory, so the HttpOnly refresh
@@ -417,22 +412,8 @@ async function initAuthenticatedPage() {
     initChrome();
     initModals();
 
-    const page = document.body.dataset.page;
-
-    // The level-0/level-1 swap. Only the dashboard carries the two views it
-    // moves between; the counter is a page and has neither.
-    if (page === 'dashboard') initShell();
-
-    const load = SHELLS[page];
-
-    if (!load) return;
-
-    try {
-        const module = await load();
-        await module.default();
-    } catch (error) {
-        toast(error.message ?? 'Something went wrong loading this page.', 'error');
-    }
+    // The level-0/level-1 swap, and the only authenticated document there is.
+    if (document.body.dataset.page === 'dashboard') initShell();
 }
 
 /* -------------------------------------------------------------------------

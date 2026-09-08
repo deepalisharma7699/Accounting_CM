@@ -214,6 +214,9 @@ function needsVariant(item) {
     };
 }
 
+/** One id per mounted picker — see the note beside `uid` below. */
+let mountCount = 0;
+
 /**
  * Mount the search box.
  *
@@ -242,17 +245,28 @@ export function mountItemPicker(host, {
     // A thunk where the host can change direction under a mounted picker.
     const say = (value) => (typeof value === 'function' ? value() : value);
 
+    /*
+    | One id per mounted picker, because more than one can be on the page at
+    | once. The Jobs card mounts two — the part adder on the job card and the
+    | bill document's line picker — and both are attached whenever the drawer is
+    | opened from the create surface. Fixed ids there meant a `<label for>`
+    | pointing at the other picker's box and an `aria-controls` naming the other
+    | picker's list. Same fix, same reason, as `party-picker.js` (M16).
+    */
+    const uid = `item-${++mountCount}`;
+
     host.innerHTML = `
         <div class="relative" data-item-picker>
-            <label class="field-label" for="item-search">Add an item or a service</label>
+            <label class="field-label" for="${uid}-search">Add an item or a service</label>
 
-            <input id="item-search" type="text" class="field-input" autocomplete="off"
-                   role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="item-results"
+            <input id="${uid}-search" type="text" class="field-input" autocomplete="off"
+                   role="combobox" aria-expanded="false" aria-autocomplete="list"
+                   aria-controls="${uid}-results"
                    placeholder="Start typing — bearing, winding wire, labour…" data-item-input>
 
             <p class="mt-1.5 text-xs text-muted-foreground" data-item-hint>${esc(say(hint))}</p>
 
-            <ul id="item-results" role="listbox"
+            <ul id="${uid}-results" role="listbox"
                 class="surface absolute z-30 mt-1 hidden max-h-80 w-full overflow-y-auto p-1 shadow-raised"
                 data-item-results></ul>
         </div>`;

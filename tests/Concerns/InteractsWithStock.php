@@ -65,14 +65,16 @@ trait InteractsWithStock
         string $category = 'part',
         ?string $reorderLevel = null,
         ?string $sellPrice = null,
+        ?string $minStock = null,
     ): ItemVariant {
-        return $this->actingForTenant($tenant, function () use ($category, $reorderLevel, $sellPrice) {
+        return $this->actingForTenant($tenant, function () use ($category, $reorderLevel, $sellPrice, $minStock) {
             $item = Item::factory()->ofCategory($category)->create();
 
             $variant = ItemVariant::factory()->for($item)->create([
                 'label' => $item->name,
                 'reorder_level' => $reorderLevel,
                 'sell_price' => $sellPrice,
+                'min_stock' => $minStock,
             ]);
 
             return $variant->setRelation('item', $item);

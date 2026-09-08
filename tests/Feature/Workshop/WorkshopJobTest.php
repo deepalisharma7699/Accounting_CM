@@ -526,6 +526,154 @@ class WorkshopJobTest extends TestCase
         $this->assertSame(2, $this->show($job['id'])['billed']['count']);
     }
 
+    /* ---------------------------------------------------------------------
+     | What the counter changed on the way out
+     |
+     | `items` is an override, and sending it costs the pairing between a part
+     | and the line it became — so `bill()` marks nothing when it is present.
+     | That branch had no coverage at all until C4, and the Jobs card is the
+     | first screen that can reach either half of it: it omits `items` while the
+     | lines are the ones the job produced, and sends them when a rate was
+     | argued down at the counter.
+     |-------------------------------------------------------------------- */
+
+    #[Test]
+    public function a_bill_whose_lines_were_replaced_posts_and_leaves_the_parts_on_the_card(): void
+    {
+        $this->buyBearings('10', '300.00');
+
+        $job = $this->bookIn();
+        $this->advance($job['id'], WorkshopJobStatus::InProgress)->assertOk();
+        $this->addPart($job['id'], [
+            'variant_id' => $this->bearing->id, 'quantity' => '2', 'unit_price' => '450.00',
+        ])->assertCreated();
+
+        // The customer argued the rate down while the motor was on the counter.
+        $response = $this->bill($job['id'], [
+            'items' => [[
+                'variant_id' => $this->bearing->id, 'quantity' => '2', 'unit_price' => '400.00',
+            ]],
+        ])->assertCreated();
+
+        $bill = $response->json('data');
+
+        // The invoice is real, at the agreed rate, and stamped with the job.
+        $this->assertSame('800.00', $response->json('meta.tax.taxable'));
+        $this->assertSame(
+            (int) $job['id'],
+            (int) Transaction::withoutGlobalScopes()->find($bill['id'])->workshop_job_id,
+        );
+
+        // The stock moved, because the invoice posted.
+        $this->assertSame('8.000', $this->stockPositionOf($this->tenant, $this->bearing)['quantity']);
+
+        /*
+        | And the parts stayed on the card, deliberately. Line three of the
+        | operator's list is no longer part three of the job, so nothing is
+        | paired — which is the safe way to be wrong: somebody sees the bearings
+        | again rather than them vanishing off the job silently.
+        */
+        $reread = $this->show($job['id']);
+
+        $this->assertSame(1, $reread['billed']['count']);
+        $this->assertTrue(collect($reread['parts'])->every(fn (array $part) => ! $part['is_billed']));
+    }
+
+    #[Test]
+    public function a_workshop_bill_takes_a_discount_on_the_whole_repair(): void
+    {
+        $this->buyBearings('20', '300.00');
+
+        $plain = $this->billableJobWithTwoBearings();
+        $discounted = $this->billableJobWithTwoBearings();
+
+        $before = $this->bill($plain)->assertCreated()->json('meta.tax.taxable');
+        $after = $this->bill($discounted, ['bill_discount' => '100.00'])
+            ->assertCreated()
+            ->json('meta.tax.taxable');
+
+        // Apportioned across the lines *before* tax, so the tax falls with it.
+        // Until C4 this endpoint named no such key and the figure was dropped on
+        // the floor, which meant the two totals came back identical.
+        $this->assertSame('900.00', $before);
+        $this->assertSame('800.00', $after);
+    }
+
+    #[Test]
+    public function a_line_quoted_with_the_tax_already_in_it_is_billed_that_way(): void
+    {
+        $this->buyBearings('10', '300.00');
+
+        $this->actingForTenant($this->tenant, fn () => $this->bearing->item->update(['gst_rate' => '18.00']));
+
+        $job = $this->bookIn();
+        $this->advance($job['id'], WorkshopJobStatus::InProgress)->assertOk();
+        $this->addPart($job['id'], [
+            'variant_id' => $this->bearing->id, 'quantity' => '1', 'unit_price' => '118.00',
+        ])->assertCreated();
+
+        $taxable = $this->bill($job['id'], [
+            'items' => [[
+                'variant_id' => $this->bearing->id,
+                'quantity' => '1',
+                'unit_price' => '118.00',
+                'price_includes_tax' => true,
+            ]],
+        ])->assertCreated()->json('meta.tax.taxable');
+
+        // The tax is what is left over, never a second multiplication — a
+        // customer handing over a hundred and eighteen for a hundred-and-
+        // eighteen price is the whole point of the mode.
+        $this->assertSame('100.00', $taxable);
+    }
+
+    #[Test]
+    public function a_workshop_bill_records_who_did_the_work(): void
+    {
+        $this->buyBearings('10', '300.00');
+
+        [$fitter, $ramesh] = $this->actingForTenant($this->tenant, function () {
+            $designation = \App\Models\StaffDesignation::create([
+                'name' => 'Fitter',
+                'track_on_sales' => true,
+            ]);
+
+            return [$designation, \App\Models\Employee::create([
+                'name' => 'Ramesh',
+                'designation_id' => $designation->id,
+                'salary_basis' => 'monthly',
+                'pay_rate' => '18000.00',
+                'joined_on' => '2026-01-01',
+            ])];
+        });
+
+        $bill = $this->bill($this->billableJobWithTwoBearings(), [
+            'staff' => [['designation_id' => $fitter->id, 'employee_id' => $ramesh->id]],
+        ])->assertCreated()->json('data');
+
+        /*
+        | A rewind is the canonical case for attribution — "Ramesh fitted it,
+        | Sunil wound it" is a sentence about a job. It reached this endpoint
+        | from the shared bill document and was dropped, silently, because
+        | nothing here named the key.
+        */
+        $this->assertSame('Ramesh', $bill['staff'][0]['employee']);
+        $this->assertSame('Fitter', $bill['staff'][0]['designation']);
+    }
+
+    /** A job in progress with two bearings on it, ready to bill. */
+    private function billableJobWithTwoBearings(): int
+    {
+        $job = $this->bookIn();
+
+        $this->advance($job['id'], WorkshopJobStatus::InProgress)->assertOk();
+        $this->addPart($job['id'], [
+            'variant_id' => $this->bearing->id, 'quantity' => '2', 'unit_price' => '450.00',
+        ])->assertCreated();
+
+        return (int) $job['id'];
+    }
+
     /**
      * The brief's scenario 10.
      */

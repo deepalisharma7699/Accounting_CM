@@ -171,24 +171,26 @@ class ItemController extends Controller
     /**
      * POST /api/v1/items
      *
-     * The universal create form's endpoint: one submission, one product, and the
-     * first thing on the shelf under it.
+     * The universal create form's endpoint: one submission, one product, and
+     * every thing on the shelf under it.
      *
-     * Both halves in one request because "add a Crompton 5 HP motor" is one act,
-     * and making somebody do it in two is how a catalogue fills up with families
-     * that have no variants under them and therefore cannot be sold, priced or
-     * counted. The two-step path is still there for adding a second size to a
-     * product that already exists — see {@see storeVariant()}.
+     * All of it in one request because "add a Crompton 5 HP motor in three
+     * ratings" is one act, and making somebody do it in four is how a catalogue
+     * fills up with families that have no variants under them and therefore
+     * cannot be sold, priced or counted. The two-step path is still there for
+     * adding a size to a product that already exists — see
+     * {@see storeVariant()}.
      *
-     * Opening stock, where the form carried one, is posted as an ordinary stock
-     * adjustment through the same engine the stock screen uses. That needs
-     * WRITE:TRANSACTIONS, which cataloguing does not imply, so a clerk who may
-     * add a bearing but not write to the ledger still gets the bearing — and is
-     * told plainly that the quantity was not recorded.
+     * Opening stock, where the form carried any, is posted as an ordinary stock
+     * adjustment through the same engine the stock screen uses — one document
+     * carrying a line per variant. That needs WRITE:TRANSACTIONS, which
+     * cataloguing does not imply, so a clerk who may add a bearing but not write
+     * to the ledger still gets the bearing — and is told plainly how many
+     * quantities were not recorded.
      */
     public function store(StoreItemRequest $request): JsonResponse
     {
-        $result = $this->items->createWithVariant(
+        $result = $this->items->createWithVariants(
             $request->universalPayload(),
             $request->user(),
             $this->mayPostTransactions($request),
@@ -197,13 +199,68 @@ class ItemController extends Controller
         return ApiResponse::created(
             new ItemResource($result['item']->load(['variants', 'category'])),
             'Product created.',
-            $result['opening_skipped_reason'] === null
-                ? []
-                : ['warnings' => [[
-                    'code' => 'OPENING_STOCK_SKIPPED',
-                    'message' => $result['opening_skipped_reason'],
-                ]]],
+            $this->createWarnings($result),
         );
+    }
+
+    /**
+     * What the save could not do, and what it did that somebody should look at.
+     *
+     * Both kinds travel together in one `warnings` array rather than the first
+     * one winning: a clerk who added three ratings, typed the same one twice and
+     * holds no TRANSACTIONS grant has two separate things to be told, and a
+     * screen that reports one of them silently keeps the other.
+     *
+     * @param  array{opening_skipped_reason: string|null, duplicates: array<int, array<int, array{position: int, variant: \App\Models\ItemVariant}>>}  $result
+     * @return array<string, mixed>
+     */
+    private function createWarnings(array $result): array
+    {
+        $warnings = [];
+
+        if ($result['opening_skipped_reason'] !== null) {
+            $warnings[] = [
+                'code' => 'OPENING_STOCK_SKIPPED',
+                'message' => $result['opening_skipped_reason'],
+            ];
+        }
+
+        foreach ($result['duplicates'] as $group) {
+            $positions = array_column($group, 'position');
+
+            $warnings[] = [
+                'code' => 'ITEM_VARIANT_DUPLICATE',
+                'message' => sprintf(
+                    'Variants %s are described the same way — %s. Two brands at one rating are legitimately '.
+                    'two rows; the same thing entered twice splits one stock balance in half.',
+                    $this->joined(array_map(static fn (int $position): string => (string) $position, $positions)),
+                    $group[0]['variant']->displayLabel(),
+                ),
+                'positions' => $positions,
+                'variant_ids' => array_map(
+                    static fn (array $entry): int => (int) $entry['variant']->id,
+                    $group,
+                ),
+            ];
+        }
+
+        return $warnings === [] ? [] : ['warnings' => $warnings];
+    }
+
+    /**
+     * "2 and 4", "2, 4 and 5" — the last separator is a word, as it is spoken.
+     *
+     * @param  array<int, string>  $parts
+     */
+    private function joined(array $parts): string
+    {
+        if (count($parts) < 2) {
+            return implode('', $parts);
+        }
+
+        $last = array_pop($parts);
+
+        return implode(', ', $parts).' and '.$last;
     }
 
     /**

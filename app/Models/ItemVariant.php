@@ -23,6 +23,10 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  *
  * **No quantity and no cost column here.** `qty_on_hand` and `avg_cost` are sums
  * over `stock_movement`, which is the whole reason that table exists.
+ * `purchase_price` is not the exception it looks like: it is what the workshop
+ * *expects* to pay, written down beside what it charges, and nothing in the books
+ * reads it. What stock was actually bought at is the weighted average of the
+ * movements, and only that.
  *
  * @property int $id
  * @property int $tenant_id
@@ -32,6 +36,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property string|null $label
  * @property array<string, string>|null $attributes
  * @property string|null $sell_price
+ * @property string|null $purchase_price
  * @property string|null $markup_percent
  * @property string|null $reorder_level
  * @property string|null $min_stock
@@ -40,7 +45,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 #[Fillable([
     'tenant_id', 'item_id', 'sku', 'barcode', 'label', 'attributes',
-    'sell_price', 'markup_percent', 'reorder_level', 'min_stock', 'is_draft', 'is_active',
+    'sell_price', 'purchase_price', 'markup_percent', 'reorder_level', 'min_stock',
+    'is_draft', 'is_active',
 ])]
 class ItemVariant extends Model
 {
@@ -62,7 +68,7 @@ class ItemVariant extends Model
     public function auditAttributes(): array
     {
         return [
-            'sku', 'barcode', 'label', 'attributes', 'sell_price',
+            'sku', 'barcode', 'label', 'attributes', 'sell_price', 'purchase_price',
             'markup_percent', 'reorder_level', 'min_stock', 'is_draft', 'is_active',
         ];
     }
@@ -91,6 +97,7 @@ class ItemVariant extends Model
         return [
             'attributes' => 'array',
             'sell_price' => 'decimal:2',
+            'purchase_price' => 'decimal:2',
             'markup_percent' => 'decimal:2',
             'reorder_level' => 'decimal:3',
             'min_stock' => 'decimal:3',

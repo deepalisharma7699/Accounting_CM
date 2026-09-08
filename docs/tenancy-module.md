@@ -1,15 +1,24 @@
 # Multi-Tenancy Module
 
-> **The isolation is live; both of its screens are switched off.** Tenant
-> scoping is enforced on every query in the application and nothing about that is
-> waiting. What has no card is **Workshops** (the platform's list — provisioning,
-> suspend, reactivate) and **Settings** (a workshop's own record). The second is
-> the one that bites: sign-up takes an *optional* GSTIN, so a workshop that
-> signed up without one cannot add it, and none of them can correct a name, an
-> address, a financial year, a timezone or `books_start_date`. With Opening
-> balances also off, a real workshop cannot go live. See
-> [hidden-modules.md](hidden-modules.md), which also lists three settings the API
-> accepts and the form has never offered.
+> **The isolation is live. Settings is on; Workshops is not.** Tenant scoping is
+> enforced on every query in the application and nothing about that is waiting.
+>
+> **Settings** — a workshop's own record — was converted in C1. It is the one
+> module in the product with a **single record**, so it declares only
+> `data-ws-list` and mounts `canCreate: false`: the workspace lands straight on
+> the form and paints no switch control. Do not add a single-surface mode to
+> `resources/js/workspace.js` for the next one that looks like this.
+>
+> Converting it also *finished* it. `UpdateWorkspaceRequest` had always accepted
+> `payment_due_days`, `allow_negative_stock` and `round_off_invoices`, and no
+> screen offered any of them; all three are on the form now, each saying beside
+> the control what it changes. A caller holding `READ:WORKSPACE` and not
+> `UPDATE:WORKSPACE` gets the fields disabled and **no save control at all** —
+> absent rather than blanked, because a disabled Save asks somebody to work out
+> for themselves why it will not press.
+>
+> **Workshops** (the platform's list — provisioning, suspend, reactivate) is
+> still off, scheduled as C7. See [hidden-modules.md](hidden-modules.md).
 
 Every workshop's books are isolated from every other workshop's. This module is
 the boundary that makes that true, and Step 1 of the Phase 1 build sequence —

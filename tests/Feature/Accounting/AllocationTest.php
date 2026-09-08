@@ -303,6 +303,140 @@ class AllocationTest extends TestCase
     }
 
     /* ---------------------------------------------------------------------
+     | The screen that answers it — C3
+     |
+     | `open-bills` had no caller anywhere in the front end until the
+     | Transactions module was converted, and no test either. Both halves of what
+     | that picker is drawn from are asserted here, because they are wrong in a
+     | way that looks right if only one is: `due` is net of *every* allocation
+     | including this settlement's own.
+     |-------------------------------------------------------------------- */
+
+    #[Test]
+    public function open_bills_lists_what_a_receipt_could_still_be_pointed_at(): void
+    {
+        $customer = $this->party(PartyRole::Customer);
+
+        $older = $this->sellTo($customer, '10000.00', now()->subDays(20)->toDateString());
+        $newer = $this->sellTo($customer, '10000.00');
+
+        // Taken on account, naming nothing — so it lands on the older one first
+        // and leaves ₹6,800 of it owing.
+        $receipt = $this->collect($customer, '5000.00');
+
+        $payload = $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/transactions/'.$receipt['data']['id'].'/open-bills')
+            ->assertOk()
+            ->json();
+
+        $rows = collect($payload['data'])->keyBy('id');
+
+        $this->assertSame(['id', 'doc_no', 'date', 'total', 'due'], array_keys($payload['data'][0]));
+        $this->assertSame('11800.00', $rows[$older->id]['total']);
+        $this->assertSame('6800.00', $rows[$older->id]['due']);
+        $this->assertSame('11800.00', $rows[$newer->id]['due']);
+
+        // Every rupee of it is spoken for, so there is nothing left on account.
+        $this->assertSame('0.00', $payload['meta']['unallocated']);
+    }
+
+    /**
+     * A bill this receipt has already paid off in full is not open any more, so
+     * it is absent from `data` — and the picker still has to offer it, because it
+     * is precisely the row somebody re-pointing a cheque wants to change.
+     *
+     * That is what the `bills` meta is for, and drawing the panel from `data`
+     * alone would silently drop it.
+     */
+    #[Test]
+    public function open_bills_carries_what_the_receipt_is_already_pointed_at(): void
+    {
+        $customer = $this->party(PartyRole::Customer);
+
+        $settled = $this->sellTo($customer, '10000.00', now()->subDays(20)->toDateString());
+        $open = $this->sellTo($customer, '10000.00');
+
+        // ₹11,800 exactly: the older invoice is discharged outright.
+        $receipt = $this->collect($customer, '11800.00');
+
+        $payload = $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/transactions/'.$receipt['data']['id'].'/open-bills')
+            ->assertOk()
+            ->json();
+
+        // Gone from the worklist, because nothing is owing on it.
+        $this->assertSame([$open->id], array_column($payload['data'], 'id'));
+
+        // And present in the meta, with what this receipt is holding against it.
+        $this->assertSame(
+            [['id' => $settled->id, 'doc_no' => $settled->doc_no, 'date' => $settled->date->toDateString(), 'amount' => '11800.00']],
+            $payload['meta']['bills'],
+        );
+
+        $this->assertSame('0.00', $payload['meta']['unallocated']);
+    }
+
+    /**
+     * The money is on their account, and the picker says so with an empty list
+     * rather than by failing.
+     */
+    #[Test]
+    public function a_receipt_against_nothing_open_reports_the_whole_of_it_unapplied(): void
+    {
+        $customer = $this->party(PartyRole::Customer);
+
+        $receipt = $this->collect($customer, '5000.00');
+
+        $payload = $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/transactions/'.$receipt['data']['id'].'/open-bills')
+            ->assertOk()
+            ->json();
+
+        $this->assertSame([], $payload['data']);
+        $this->assertSame([], $payload['meta']['bills']);
+        $this->assertSame('5000.00', $payload['meta']['unallocated']);
+    }
+
+    /**
+     * A payment is pointed at purchase bills, not at invoices — the mirror of
+     * the receipt, and the assertion that the direction is read from the
+     * settlement rather than assumed.
+     */
+    #[Test]
+    public function open_bills_for_a_payment_lists_the_workshops_own_purchases(): void
+    {
+        $vendor = $this->party(PartyRole::Vendor);
+
+        $bill = $this->withHeaders($this->authHeader($this->owner))
+            ->postJson('/api/v1/transactions/purchase', [
+                'date' => now()->toDateString(),
+                'post' => true,
+                'party_id' => $vendor->id,
+                'items' => [['variant_id' => $this->motor->id, 'quantity' => '2', 'unit_price' => '5000.00']],
+            ])
+            ->assertCreated()
+            ->json('data');
+
+        $payment = $this->withHeaders($this->authHeader($this->owner))
+            ->postJson('/api/v1/transactions/payment', [
+                'date' => now()->toDateString(),
+                'post' => true,
+                'party_id' => $vendor->id,
+                'payments' => [['mode' => 'cash', 'amount' => '5000.00']],
+            ])
+            ->assertCreated()
+            ->json('data');
+
+        $payload = $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/transactions/'.$payment['id'].'/open-bills')
+            ->assertOk()
+            ->json();
+
+        $this->assertSame([$bill['id']], array_column($payload['data'], 'id'));
+        $this->assertSame('6800.00', $payload['data'][0]['due']);
+    }
+
+    /* ---------------------------------------------------------------------
      | The refusals
      |-------------------------------------------------------------------- */
 

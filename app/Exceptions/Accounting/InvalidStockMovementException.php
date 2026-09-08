@@ -155,6 +155,52 @@ class InvalidStockMovementException extends ApiException
     }
 
     /**
+     * Opening stock that would arrive on the shelf worth nothing.
+     *
+     * The sibling of {@see valuelessAdjustment()} above, raised one layer
+     * earlier — and for the one case where that refusal is unreadable. A
+     * brand-new variant has no movements, so
+     * {@see \App\Services\Inventory\StockLedgerService::unitCostFor()} has
+     * nothing to fall back to and answers zero. Every line of the adjustment is
+     * then worthless, the voucher empties, and the whole create rolls back —
+     * leaving somebody who was adding a bearing reading "none of these
+     * adjustments changes what the stock is worth" about a field called
+     * `adjustments` that their form does not have.
+     *
+     * So it is caught while the quantity is still called opening stock, and the
+     * message names the box on the screen. `fields` rather than the `field` its
+     * siblings carry, because a map of field to messages is the shape the client
+     * paints onto an input — see `showFormErrors()` in resources/js/ui.js.
+     *
+     * @param  bool  $aFigureWasGiven  Whether a cost was stated and was zero,
+     *                                 rather than not stated at all. The fix
+     *                                 differs, so the message does.
+     */
+    public static function openingStockNeedsACost(string $variant, bool $aFigureWasGiven): self
+    {
+        $message = $aFigureWasGiven
+            ? sprintf(
+                'Opening stock cannot be worth nothing. %s would arrive on the shelf valued at zero, and the '.
+                'first sale of it would report the whole price as profit. Give it a cost per unit — or leave '.
+                'the opening quantity blank and record the count from Stock once you know what it was worth.',
+                $variant,
+            )
+            : sprintf(
+                'Say what a unit of %s cost. Opening stock has to arrive at a value: with none it lands on the '.
+                'shelf worth zero, and the first sale of it reports the whole price as profit. The buying '.
+                'price on this form will do.',
+                $variant,
+            );
+
+        return new self(
+            message: $message,
+            status: 422,
+            errorCode: 'OPENING_STOCK_NEEDS_A_COST',
+            details: ['fields' => ['opening_cost' => [$message]], 'variant' => $variant],
+        );
+    }
+
+    /**
      * An archived variant is one the workshop has stopped dealing in. Its
      * history stays readable; nothing new moves through it.
      */

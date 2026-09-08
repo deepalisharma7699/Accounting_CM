@@ -1,13 +1,19 @@
 # Opening Balances
 
-> **Card status: switched off**, and this is the module whose absence is worst in
-> combination. With Opening balances and Settings both off, **a real workshop
-> cannot go live**: its existing debtors, creditors, stock and cash have no way
-> in, so every figure the product reports starts from zero on the day the
-> software is first opened. The module itself is complete and tested and waits
-> only on the §2A conversion. When it is converted, keep the preview-then-post
-> discipline exactly as it is — it is the safety property, not a courtesy. See
-> [hidden-modules.md](hidden-modules.md).
+> **Card status: on** — converted in C1, with Settings, because either alone
+> left go-live blocked. The module opens on the **declaration** (§2A.1) and every
+> import ever run sits behind "Show list", with the count on the Show control.
+>
+> The *position* — the owner's stake, the go-live date and the trial balance —
+> travels with the **form**, not the list: it is what somebody about to declare
+> their whole financial history reads before committing, and what they want to
+> see the instant they have. `GET /opening-balances` answers with the position
+> and the receipts together, so the list costs no second request.
+>
+> **The preview-then-post discipline is unchanged**, and must stay that way. The
+> post button is disabled until the preview has run against the text *currently*
+> in the box, so an edit made after a preview cannot be committed on the strength
+> of the preview it invalidated. That is the safety property, not a courtesy.
 
 Getting a running workshop's existing position into the books — M11.
 

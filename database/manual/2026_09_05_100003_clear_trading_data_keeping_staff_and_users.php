@@ -26,6 +26,26 @@ use Illuminate\Support\Facades\DB;
  * pretends to. Take a database dump before running it. It is written to be run
  * exactly once, on a server whose test data is finished with.
  *
+ * ## It is not in the migration path, and that is deliberate
+ *
+ * This file lives in `database/manual/`, which `php artisan migrate` does not
+ * scan. It sat in `database/migrations/` until 7 September 2026, and the reason
+ * it was moved is the one case nobody plans for: restoring a dump taken before
+ * it ran and then migrating — which is exactly what a recovery is — would empty
+ * the books a second time, at the moment least able to absorb it. The same
+ * applies to any server that catches up on migrations after trading has begun.
+ *
+ * Running it is therefore two deliberate acts, and the second is the guard
+ * below:
+ *
+ *     ALLOW_CLEAR_TRADING_DATA=yes php artisan migrate --path=database/manual
+ *
+ * on PowerShell:
+ *
+ *     $env:ALLOW_CLEAR_TRADING_DATA='yes'; php artisan migrate --path=database/manual
+ *
+ * See `database/manual/README.md`.
+ *
  * ## Three decisions in here are load-bearing
  *
  * **Payroll and advances survive as transactions**, not merely as `employees`
@@ -103,8 +123,21 @@ return new class extends Migration
         AuditResource::SaleAttribution->value,
     ];
 
+    /**
+     * The answer this has to be given before it will do anything.
+     *
+     * Two locks rather than one. The file is outside `database/migrations`, so
+     * an ordinary `migrate` cannot reach it at all — and if somebody moves it
+     * back, or points `--path` at this directory without meaning to, the guard
+     * still refuses. An act that deletes a workshop's trading history and has no
+     * `down()` should have to be asked for twice.
+     */
+    private const CONFIRMATION = 'ALLOW_CLEAR_TRADING_DATA';
+
     public function up(): void
     {
+        $this->refuseUnlessAskedFor();
+
         DB::transaction(function (): void {
             $this->detachSelfReferences();
             $this->deleteTradingDocuments();
@@ -219,6 +252,37 @@ return new class extends Migration
      * `migrate` would run this again over whatever real trading data the
      * workshop had entered since.
      */
+    /**
+     * Read from the process environment rather than through `env()`.
+     *
+     * With a cached config Laravel does not load `.env` at all, and `env()`
+     * would then answer null for a variable the operator had genuinely set —
+     * a guard that silently refuses a deliberate run is a guard people work
+     * around. `getenv()` sees what the shell actually exported, which is what
+     * the documented one-line invocation sets.
+     */
+    private function refuseUnlessAskedFor(): void
+    {
+        $answer = getenv(self::CONFIRMATION);
+
+        if ($answer === false) {
+            $answer = $_ENV[self::CONFIRMATION] ?? $_SERVER[self::CONFIRMATION] ?? '';
+        }
+
+        if (in_array(strtolower(trim((string) $answer)), ['1', 'true', 'yes', 'on'], true)) {
+            return;
+        }
+
+        throw new RuntimeException(
+            'Refusing to run: this empties the trading side of the books — every counterparty, '
+            .'every product, every position on the shelf and every document that moved either — '
+            .'and it has no down(). Take a database dump first, then ask for it explicitly: '
+            .'ALLOW_CLEAR_TRADING_DATA=yes php artisan migrate --path=database/manual '
+            .'(PowerShell: $env:ALLOW_CLEAR_TRADING_DATA=\'yes\'; php artisan migrate --path=database/manual). '
+            .'See database/manual/README.md.'
+        );
+    }
+
     public function down(): void
     {
         throw new RuntimeException(

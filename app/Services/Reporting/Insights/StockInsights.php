@@ -321,13 +321,19 @@ class StockInsights
      |-------------------------------------------------------------------- */
 
     /**
-     * What is at or below its reorder level, worst first.
+     * What needs buying, worst first.
      *
      * Built from the rows `StockLedgerService::report()` already returned for the
-     * position tiles, rather than from a second query: the status on each row is
-     * the same `StockPosition::isLow()` the Stock module colours its badges with,
-     * so the two screens cannot come to different conclusions about the same
-     * variant.
+     * position tiles, rather than from a second query: the statuses on each row
+     * are the same `StockPosition::isLow()` and `isBelowMinimum()` the Stock
+     * module colours its badges with, so the two screens cannot come to
+     * different conclusions about the same variant.
+     *
+     * A variant under its **floor** belongs here whether or not it is also under
+     * its reorder level, and that is not the same set: a workshop that wrote a
+     * minimum and no trigger has a part it said never to run down, and until
+     * `min_stock` was read by anything it could sit there breached with no screen
+     * in the product saying so.
      *
      * @param  array<int, array{variant: ItemVariant, position: \App\Services\Inventory\StockPosition}>  $rows
      * @return array<int, array<string, mixed>>
@@ -343,7 +349,11 @@ class StockInsights
             // that is right — nobody has said what low means for it. An empty
             // one still belongs here, because a part that is gone is stopping a
             // job whether or not anybody wrote a level down.
-            if (! $position->isLow() && ! $position->isNegative() && ! $position->isEmpty()) {
+            if (! $position->isLow()
+                && ! $position->isBelowMinimum()
+                && ! $position->isNegative()
+                && ! $position->isEmpty()
+            ) {
                 continue;
             }
 
@@ -352,8 +362,21 @@ class StockInsights
             $status = match (true) {
                 $position->isNegative() => 'negative',
                 $position->isEmpty() => 'out',
+                $position->isBelowMinimum() => 'below_minimum',
                 default => 'low',
             };
+
+            /*
+            | Short by how much, measured against the reorder level where there is
+            | one and the floor otherwise.
+            |
+            | Both are levels somebody set, and a row that says "below minimum"
+            | with a dash where the number goes is not a worklist entry — it is a
+            | badge. Where both are set the reorder level is the one to buy up to,
+            | because it is the larger of the two in every workshop that means
+            | what the two columns mean.
+            */
+            $level = $position->reorderLevel ?? $position->minStock;
 
             $needed[] = [
                 'variant_id' => (int) $variant->id,
@@ -363,25 +386,28 @@ class StockInsights
                 'sku' => $variant->sku,
                 'quantity' => $position->quantity->amount(),
                 'reorder_level' => $position->reorderLevel?->amount(),
+                'min_stock' => $position->minStock?->amount(),
                 'unit_cost' => $position->averageCost()->amount(),
                 'status' => $status,
                 // Not a purchase order, and deliberately not called one: this is
                 // the shortfall against the level somebody set, and turning it
                 // into a document would be a second writer to the purchase flow.
-                'shortfall' => $position->reorderLevel === null
+                'shortfall' => $level === null
                     ? null
-                    : $position->reorderLevel->minus($position->quantity)->amount(),
+                    : $level->minus($position->quantity)->amount(),
             ];
         }
 
         usort($needed, static function (array $a, array $b) {
-            // Negative and out before merely low: a part that is gone is
-            // stopping a job today, where one running down is a decision for
-            // this week.
+            // Negative and out first: a part that is gone is stopping a job
+            // today. Then the floor, then merely low — which is the difference
+            // between the two levels, stated as an order rather than a colour: a
+            // purchase to make today above a purchase to plan for this week.
             $rank = static fn (array $row) => match ($row['status']) {
                 'negative' => 0,
                 'out' => 1,
-                default => 2,
+                'below_minimum' => 2,
+                default => 3,
             };
 
             return $rank($a) <=> $rank($b) ?: strcmp((string) $a['item'], (string) $b['item']);

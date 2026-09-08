@@ -3,14 +3,16 @@
 *The engine. The screens that drive it are [purchase-module.md](purchase-module.md)
 and [sales-module.md](sales-module.md).*
 
-> **M10's expense half has no screen.** Sales and Purchase are converted and on;
-> the **Bills** card, which is where an expense is written, is switched off, and
-> `POST /transactions/expense` has exactly one caller in the front end — that
-> module's `pages/bills.js`. So rent, electricity and the rest cannot be recorded
-> today, and the P&L reports a margin against overheads of nil. When Bills is
-> converted it becomes the expense module and **its list is not rebuilt**: Sales,
-> Purchase and Insights' Day Book already draw it (§5.1). See
-> [hidden-modules.md](hidden-modules.md).
+> **M10's expense half is on** — converted in C2, and the card says
+> **Expenses**. `POST /transactions/expense` still has exactly one caller in the
+> front end and it is that module's `pages/bills.js`, which is the whole reason
+> the card exists: rent, electricity and the rest have nowhere else to be
+> written, and without them the P&L reports a margin against overheads of nil.
+>
+> **Its list was not rebuilt**, and must not be. The old Bills screen listed
+> sales, purchases, expenses and both kinds of note; Sales, Purchase and
+> Insights' Day Book already draw every part of that (§5.1). What is behind
+> "Show list" there is `types[]=expense` and nothing else.
 
 Sales, purchases and running costs — M9 and M10.
 

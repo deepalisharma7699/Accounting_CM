@@ -547,6 +547,61 @@ class InsightTest extends TestCase
         $this->assertTrue($panel->json('data.dead.rows.0.never_issued'));
     }
 
+    /**
+     * A part under its floor is on the buy list, and above the merely low.
+     *
+     * The panel is built from the rows `StockLedgerService::report()` already
+     * returned, so it inherits `StockPosition`'s verdicts rather than forming
+     * its own — which is what keeps this list and the Stock module's badges
+     * agreeing about one shelf.
+     *
+     * The row that would have been missed entirely is the one with a floor and
+     * no reorder level: `isLow()` is false for it, and until the floor was read
+     * by anything it was a part somebody had said never to run down, running
+     * down, on no list in the product.
+     *
+     * `shortfall` is therefore measured against whichever level the variant
+     * carries. A worklist entry reading "below minimum" with a dash where the
+     * number goes is a badge, not a worklist entry.
+     */
+    #[Test]
+    public function a_part_under_its_floor_is_on_the_buy_list_above_the_merely_low(): void
+    {
+        // Ordered at 20, panicked at 5 — and sitting at 4.
+        $bearing = $this->variantFor($this->tenant, 'part', reorderLevel: '20', minStock: '5');
+        $this->receiveStock($this->tenant, $bearing, '4', '100.00');
+
+        // A floor and no trigger above it. Two of five.
+        $capacitor = $this->variantFor($this->tenant, 'part', minStock: '5');
+        $this->receiveStock($this->tenant, $capacitor, '2', '60.00');
+
+        // Running down, and nothing more than that.
+        $brush = $this->variantFor($this->tenant, 'part', reorderLevel: '20');
+        $this->receiveStock($this->tenant, $brush, '18', '40.00');
+
+        $rows = collect($this->insight('stock')->assertOk()->json('data.reorder'))
+            ->keyBy('variant_id');
+
+        $this->assertCount(3, $rows);
+
+        $this->assertSame('below_minimum', $rows[$bearing->id]['status']);
+        $this->assertSame('below_minimum', $rows[$capacitor->id]['status']);
+        $this->assertSame('low', $rows[$brush->id]['status']);
+
+        // Short by, against the level each one actually carries: 20 - 4 for the
+        // one with a trigger, and 5 - 2 for the one with only a floor.
+        $this->assertSame('16.000', $rows[$bearing->id]['shortfall']);
+        $this->assertSame('3.000', $rows[$capacitor->id]['shortfall']);
+        $this->assertNull($rows[$capacitor->id]['reorder_level']);
+        $this->assertSame('5.000', $rows[$capacitor->id]['min_stock']);
+
+        // Worst first, and under the floor is worse than merely low: a purchase
+        // to make today above a purchase to plan for this week.
+        $order = collect($this->insight('stock')->json('data.reorder'))->pluck('variant_id')->all();
+
+        $this->assertSame($brush->id, end($order));
+    }
+
     #[Test]
     public function a_write_off_is_surfaced_because_the_profit_and_loss_cannot_show_it(): void
     {

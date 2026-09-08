@@ -103,17 +103,27 @@ function applyType() {
 
     /*
     | The category's rate, copied in and said out loud — the same treatment the
-    | Items form gives it. An item quick-added from a bill picker used to be
-    | created at 0% GST whatever its category charged, and the first sign of it
-    | was a purchase line taxed at nothing.
+    | Items form gives it, in the same three-way order: what the user typed, else
+    | the category's own rate, else the prefill the markup lands on. An item
+    | quick-added from a bill picker used to be created at 0% GST whatever its
+    | category charged, and the first sign of it was a purchase line taxed at
+    | nothing.
     */
     const gst = $('#quick-gst');
 
-    if (!gst.value.trim() && type.default_gst_rate !== null) gst.value = type.default_gst_rate;
+    if (gst.dataset.userSet !== '1' && type.default_gst_rate !== null) {
+        gst.value = type.default_gst_rate;
+    }
 
-    $('#quick-gst-hint').textContent = type.default_gst_rate === null
-        ? `${type.label} has no default rate — enter one, or 0 if this is exempt.`
-        : `${type.default_gst_rate}% from ${type.label}. Change it if this item differs.`;
+    if (gst.dataset.userSet === '1') {
+        $('#quick-gst-hint').textContent = 'A percentage — 18, not 0.18.';
+    } else if (type.default_gst_rate === null) {
+        $('#quick-gst-hint').textContent = `${type.label} states no rate of its own — `
+            + `${gst.defaultValue}% is filled in. Change it if this item differs, or 0 if it is exempt.`;
+    } else {
+        $('#quick-gst-hint').textContent = `${type.default_gst_rate}% from ${type.label}. `
+            + 'Change it if this item differs.';
+    }
 
     const checkbox = $('#quick-stock');
 
@@ -218,6 +228,10 @@ export async function openQuickItem({ item = null, context = null, onCreated = (
 
     clearFormErrors(form);
     form.reset();
+
+    // reset() puts the markup's prefilled rate back; this puts back the fact
+    // that nobody has typed over it yet, so the category picked next still wins.
+    delete $('#quick-gst').dataset.userSet;
 
     state.context = context;
     state.itemId = item?.id ?? null;
@@ -357,6 +371,12 @@ export function initQuickItem() {
 
     $('#quick-item-form').addEventListener('submit', submit);
     $('#quick-type').addEventListener('change', applyType);
+
+    // Typing in the rate box settles it, whatever category is chosen after —
+    // see applyType().
+    $('#quick-gst').addEventListener('input', (event) => {
+        event.target.dataset.userSet = '1';
+    });
 
     // Its own close handler rather than data-modal-close: cancelling may still
     // have left a new family in the catalogue.

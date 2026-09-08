@@ -399,12 +399,12 @@ export function stockPanel(data) {
                     ${cell(esc(row.label ?? row.sku ?? '—'), 'text-muted-foreground')}
                     ${cell(stockStateBadge(row.status))}
                     ${num(esc(row.quantity))}
-                    ${num(row.reorder_level === null ? dash : esc(row.reorder_level))}
+                    ${num(levelCell(row))}
                     ${num(row.shortfall === null ? dash : esc(row.shortfall))}
                 </tr>`),
-            'Nothing is at or below its reorder level.',
+            'Nothing is out, running low or under its floor.',
         ), {
-            note: 'Gone and negative first — a part that is out stops a job today.',
+            note: 'Gone and negative first, then under the floor — a part that is out stops a job today.',
         })
 
         + card('Money sitting still', table(
@@ -441,8 +441,33 @@ export function stockPanel(data) {
 const STOCK_STATE = {
     negative: ['bg-rose-50 text-rose-700', 'Negative'],
     out: ['bg-slate-100 text-slate-600', 'Out of stock'],
+    // Above "Low" on the list and above it in the palette: the workshop wrote a
+    // floor and the shelf is under it.
+    below_minimum: ['bg-orange-50 text-orange-700', 'Below minimum'],
     low: ['bg-amber-50 text-amber-700', 'Low'],
 };
+
+/**
+ * The level this row is short of, which is not always the reorder level.
+ *
+ * A variant can carry a floor and no trigger, and `shortfall` beside this cell
+ * is measured against whichever of the two the server found — so printing only
+ * the reorder level would leave a row saying "below minimum, short by 3" with a
+ * dash where the 3 is measured from. Both are shown where both are set.
+ */
+function levelCell(row) {
+    const reorder = row.reorder_level === null || row.reorder_level === undefined
+        ? null
+        : esc(row.reorder_level);
+
+    const floor = row.min_stock === null || row.min_stock === undefined
+        ? null
+        : `<span class="block text-[11px] text-muted-foreground">min ${esc(row.min_stock)}</span>`;
+
+    if (reorder === null && floor === null) return dash;
+
+    return `${reorder ?? dash}${floor ?? ''}`;
+}
 
 function stockStateBadge(status) {
     const [classes, label] = STOCK_STATE[status] ?? STOCK_STATE.low;
@@ -654,7 +679,7 @@ export function peoplePanel(data) {
         })
 
         + card('Person by person', table(
-            [['Name'], ['Designation'], ['Payslips', 'text-right'], ['Cost', 'text-right'], ['Jobs billed', 'text-right'], ['Work billed', 'text-right']],
+            [['Name'], ['Designation'], ['Payslips', 'text-right'], ['Cost', 'text-right'], ['Invoices', 'text-right'], ['Those invoices', 'text-right'], ['Trades']],
             (data.people ?? []).map((row) => `
                 <tr class="border-b border-border/60 ${row.is_active ? '' : 'opacity-60'}">
                     ${cell(`<span class="font-medium">${esc(row.name)}</span>${row.is_active ? '' : ' <span class="badge bg-muted text-secondary-foreground">left</span>'}`)}
@@ -663,23 +688,73 @@ export function peoplePanel(data) {
                     ${num(money(row.cost))}
                     ${num(row.work_jobs || dash)}
                     ${num(Number(row.work_value) === 0 ? dash : money(row.work_value))}
+                    ${cell(trades(row.work_trades), 'text-muted-foreground')}
                 </tr>`),
             'Nobody is on the payroll yet.',
         ), {
-            note: 'Cost and work are side by side and never divided into one another — see the caption below.',
+            note: creditedNote(data.work),
         })
 
         + `<p class="px-1 pb-2 text-[0.75rem] text-muted-foreground">
-                Work billed is what a person was <em>credited with</em> on an invoice, and it is not an input to
-                pay. An invoice names at most one person per trade, many of the workshop's people never appear on
-                a document at all, and nothing here records hours. A winder with no invoices against them is
-                usually the person doing the stripping — which is why these two columns sit beside each other
-                rather than being turned into a ratio.
+                <strong class="font-semibold">Invoices</strong> counts documents, not names on them: a fitter who
+                also wound the motor is one job, and <strong class="font-semibold">Trades</strong> is where the
+                second bench is said. An invoice naming two people appears whole in both their rows — neither did
+                a stated share of it and nothing here records one — so these figures are read across a row, never
+                added down a column. The workshop's own total is in the caption above.
+           </p>
+           <p class="px-1 pb-2 text-[0.75rem] text-muted-foreground">
+                None of it is an input to pay. Many of the workshop's people never appear on a document at all,
+                nothing here records hours, and a winder with no invoices against them is usually the person doing
+                the stripping — which is why cost and work sit beside each other rather than being divided into
+                one another.
            </p>`
 
         + card('Attendance', attendanceBars(attendance), {
             note: 'An unmarked day is left unmarked. What silence is worth depends on how somebody is paid, and that is decided once, in the payroll calculator.',
         });
+}
+
+/**
+ * "Fitting 8 · Winding 3" — the benches one person covered.
+ *
+ * This column is what the old job count was accidentally saying. It counted a
+ * row per trade, so a fitter who also wound the motor scored two against one
+ * invoice; the count is now the invoice and this is the rest of the answer,
+ * which is the part an owner was actually reading it for.
+ *
+ * The trade is the *slot that was filled*, not a copy of the person's job
+ * title, so this legitimately differs from the Designation column beside it — a
+ * helper who wound a motor on a busy Friday is credited under Winder.
+ */
+function trades(rows) {
+    if (!rows?.length) return dash;
+
+    return rows
+        .map((row) => `${esc(row.designation)}&nbsp;${esc(String(row.jobs))}`)
+        .join(' <span class="text-border">·</span> ');
+}
+
+/**
+ * What the per-person column does *not* add up to, said once above it.
+ *
+ * Two facts, and neither is decoration. **The workshop's own total** is the
+ * figure somebody would otherwise arrive at by summing the column, which
+ * over-counts every invoice that names two people. **How many invoices carry a
+ * name at all** separates the two readings of a light-looking table — a quiet
+ * bench, or pickers nobody filled in — which are indistinguishable from the
+ * table itself and have opposite answers.
+ */
+function creditedNote(work) {
+    if (!work || !work.invoices) {
+        return 'Nothing has been invoiced in this period.';
+    }
+
+    if (!work.credited_invoices) {
+        return `None of the ${work.invoices} invoices in this period names anybody.`;
+    }
+
+    return `${work.credited_invoices} of ${work.invoices} invoices name somebody`
+        + ` (${work.share_of_invoices}%), worth ${formatMoney(work.credited_value)} in all.`;
 }
 
 function attendanceBars(attendance) {

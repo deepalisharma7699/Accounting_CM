@@ -1,13 +1,16 @@
 # Workshop Jobs
 
-> **Card status: switched off — and this is the largest domain nobody can
-> reach.** The module is complete: the list, the job card, the pipeline, parts,
-> the estimate and its approval, `Generate bill`, and 25 feature tests including
-> the §34 walkthrough end to end. It waits only on the §2A conversion. The
-> counter at `/bills/new` can *bill* an existing job but cannot create one, and
-> nothing in the UI links to the counter either, so today a workshop has no way
-> to record the work it actually does. It is the first module that should be
-> converted. See [hidden-modules.md](hidden-modules.md).
+> **Card status: on since C4.** The bench is a §2A module: "Receive a motor" is
+> the create form, the list is behind "Show list", and a job opens in a drawer
+> carrying the pipeline, the parts, the estimate and **Generate bill** — which
+> mounts the shared bill document on the create surface and posts `{job}/bill`.
+> Converting it also finished three things the API had accepted and no screen
+> ever sent: correcting a job card, deleting a job, and the half of a workshop
+> bill — the inclusive-tax flag, a bill discount, and **who did the work** —
+> that `BillJobRequest` had been dropping. It retired the counter at
+> `/bills/new` with it, which was the last page shell in the application. The
+> step's full record is Part E of
+> [implementation-roadmap.md](implementation-roadmap.md).
 
 The motor on the bench — M19, and the brief's §16 to §18.
 

@@ -524,7 +524,7 @@ class JobService
      * The payload `POST /transactions/sale` accepts, built from the job.
      *
      * Public because the counter screen reads it: "Generate bill" lands on
-     * `/bills/new` pre-filled with exactly this, so the operator can change a
+     * the Jobs card's bill pane pre-filled with exactly this, so the operator can change a
      * price or add a line before committing — and what they are looking at is the
      * same structure {@see bill()} would post, not a rendering of it.
      *
@@ -610,10 +610,21 @@ class JobService
         $partIds = $payload['part_ids'];
         unset($payload['part_ids']);
 
-        // The operator's own changes win. They are standing in front of the
-        // customer and the job card is a week old.
+        /*
+        | The operator's own changes win. They are standing in front of the
+        | customer and the job card is a week old.
+        |
+        | The list is everything the shared bill document can carry, because the
+        | Jobs card raises this invoice through that document and a key missing
+        | from here is a control on screen that does nothing: a bill discount
+        | typed and ignored, or - until C4 - the fitter and the winder dropped on
+        | the one document where naming them matters most. `party_id` is
+        | deliberately absent, and stays absent: whose motor this is was settled
+        | when the job was opened.
+        */
         $payload = array_merge($payload, array_intersect_key($overrides, array_flip([
             'date', 'notes', 'items', 'payments', 'client_ref',
+            'bill_discount', 'bill_discount_percent', 'staff',
         ])));
 
         // Where the lines were replaced wholesale the pairing no longer holds —

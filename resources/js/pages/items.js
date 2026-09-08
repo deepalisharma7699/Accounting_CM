@@ -1,9 +1,10 @@
 import auth from '../auth-client';
 import { formatQuantity } from '../components/badge';
 import {
-    averageCostOf, positionStatus, rollUpPositions, stockStatusBadge,
+    averageCostOf, positionStatus, rollUpPositions, statusOfRow, stockStatusBadge,
 } from '../components/stock-position';
 import { can } from '../permissions';
+import { initStockAdjust, openStockAdjust } from '../components/stock-adjust';
 import {
     $, $$, clearFormErrors, confirmAction, debounce, esc, formatDate, formatMoney,
     hideModal, setSubmitting, showFormErrors, showModal, tableMessage, toast,
@@ -107,6 +108,27 @@ const state = {
     meta: null,          // categories, their field schemas, and the units
     openItem: null,      // the item whose drawer is open
     drawerTab: 'overview',
+
+    /*
+    | Whether a family's archived variants are being shown.
+    |
+    | Module-level rather than per surface, because the drawer's Variants tab and
+    | the item form's picker are the same list drawn by the same renderer and are
+    | never on screen together — two flags would be one preference the user had to
+    | set twice, and they would disagree.
+    */
+    showArchivedVariants: false,
+
+    /*
+    | The product the form is editing, or null while it is writing a new one.
+    |
+    | Not the same thing as `openItem`: the drawer is one way in, and the row
+    | menu's Edit is another that never opens one. Held rather than read back off
+    | the form, because the variant half needs the *record* — how many things are
+    | on the shelf under it, which of them a block stands for, and what its
+    | position is — and a hidden input holds an id.
+    */
+    formItem: null,
 };
 
 /* -------------------------------------------------------------------------
@@ -233,8 +255,20 @@ function paintBrandSelect(select, brands, held = null) {
     select.value = keepId ?? '';
 }
 
+/**
+ * The review queue's headline — items *and* the variants under them.
+ *
+ * `/items/meta` has always published both counts and this banner read only the
+ * first, so a workshop whose import left forty unchecked ratings under checked
+ * products was told there was nothing to review. A queue that cannot see half
+ * its work is worse than no queue: it says the job is done.
+ */
 function renderDraftBanner() {
-    const count = state.meta?.draft_counts?.items ?? 0;
+    const counts = state.meta?.draft_counts ?? {};
+    const items = counts.items ?? 0;
+    const variants = counts.variants ?? 0;
+    const count = items + variants;
+
     const banner = $list('#draft-banner');
 
     // Hidden when there is nothing in the queue rather than shown reading "0":
@@ -243,8 +277,15 @@ function renderDraftBanner() {
     banner.classList.toggle('flex', count > 0);
 
     if (count > 0) {
+        // Both named separately, because they are checked in different places:
+        // an item from its row, a variant from the drawer's Variants tab.
+        const parts = [
+            items ? `${items} item${items === 1 ? '' : 's'}` : '',
+            variants ? `${variants} variant${variants === 1 ? '' : 's'}` : '',
+        ].filter(Boolean);
+
         $list('#draft-banner-title').textContent =
-            `${count} item${count === 1 ? '' : 's'} need${count === 1 ? 's' : ''} reviewing`;
+            `${parts.join(' and ')} need${count === 1 ? 's' : ''} reviewing`;
     }
 }
 
@@ -428,6 +469,21 @@ function variantCount(item) {
     return item.variant_count ?? 0;
 }
 
+/**
+ * Whether this family has anything waiting to be checked.
+ *
+ * The family itself or any rating under it. Both are `is_draft`, both are
+ * cleared the same way, and both are the queue's business — an item somebody has
+ * confirmed whose variants nobody has looked at is exactly the row that would
+ * otherwise disappear from the queue while still being unchecked.
+ *
+ * Falls back to the item's own flag where the row does not carry its variants,
+ * which is what the server's count already includes.
+ */
+function needsReview(item) {
+    return Boolean(item.is_draft) || (item.variants ?? []).some((variant) => variant.is_draft);
+}
+
 const SORTERS = {
     name: (item) => item.name?.toLowerCase() ?? '',
     type: (item) => item.category_label?.toLowerCase() ?? '',
@@ -455,7 +511,7 @@ function visibleRows() {
         if (state.categoryId && String(item.category_id ?? '') !== String(state.categoryId)) return false;
         if (state.isStock !== '' && item.is_stock !== (state.isStock === '1')) return false;
         if (state.isActive !== '' && item.is_active !== (state.isActive === '1')) return false;
-        if (state.onlyDrafts && !item.is_draft) return false;
+        if (state.onlyDrafts && !needsReview(item)) return false;
 
         return matchesPill(item);
     });
@@ -528,7 +584,7 @@ function renderRow(item) {
     const variants = variantCount(item);
 
     const flags = [
-        item.is_draft ? '<span class="badge bg-amber-100 text-amber-800">Needs review</span>' : '',
+        needsReview(item) ? '<span class="badge bg-amber-100 text-amber-800">Needs review</span>' : '',
         item.is_active ? '' : '<span class="badge bg-muted text-muted-foreground">Archived</span>',
     ].filter(Boolean).join(' ');
 
@@ -737,8 +793,11 @@ const iconArrowDown = svg('<path d="m19 12-7 7-7-7"/>', 11);
 const iconEye = svg('<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>', 13);
 const iconPencil = svg('<path d="M21.17 6.83a2.83 2.83 0 0 0-4-4L3.5 16.5 2 22l5.5-1.5z"/><path d="m15 5 4 4"/>', 13);
 const iconLayers = svg('<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m6.08 10.37-3.5 1.6a1 1 0 0 0 0 1.81l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9a1 1 0 0 0 0-1.83l-3.5-1.59"/>', 13);
+const iconPlus = svg('<path d="M12 5v14"/><path d="M5 12h14"/>', 15);
 const iconArchive = svg('<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>', 13);
 const iconRestore = svg('<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M12 8v4l3 2"/>', 13);
+const iconCount = svg('<rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/>', 13);
+const iconChecked = svg('<path d="M21.8 10A10 10 0 1 1 17 3.34"/><path d="m9 11 3 3L22 4"/>', 13);
 const iconTrash = svg('<path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>', 13);
 
 /* -------------------------------------------------------------------------
@@ -771,6 +830,12 @@ function openMenu(button, itemId) {
     ];
 
     if (can('UPDATE', 'ITEMS')) {
+        // Above Edit while it is waiting: the row is in the review queue, and
+        // clearing it is what the person who opened this menu came for.
+        if (item.is_draft) {
+            entries.push({ label: 'Mark as checked', icon: iconChecked, action: 'checked' });
+        }
+
         entries.push({ label: 'Edit item', icon: iconPencil, action: 'edit' });
         entries.push(item.is_active
             ? { label: 'Archive item', icon: iconArchive, action: 'archive' }
@@ -870,15 +935,39 @@ function renderDrawerAlert(item, status) {
             + 'movement that took it below zero.';
     } else if (status === 'out' && item.tracks_stock) {
         message = 'Nothing on the shelf.';
+    } else if (status === 'below_minimum') {
+        // Said as the floor rather than as a colour: this is the workshop's own
+        // figure, and the sentence is what makes the badge worth reading.
+        message = `${roll.below} variant${roll.below === 1 ? ' is' : 's are'} below the minimum `
+            + 'this workshop set for them.';
     } else if (status === 'low') {
         message = `${roll.low} variant${roll.low === 1 ? ' is' : 's are'} at or below the reorder level.`;
     } else if (item.is_draft) {
         message = 'Auto-created from an import or a capture and not yet checked.';
+    } else if (needsReview(item)) {
+        // The family has been confirmed and something under it has not. Says
+        // where to go, because the badge on the row is the same either way.
+        const pending = (item.variants ?? []).filter((variant) => variant.is_draft).length;
+
+        message = `${pending} variant${pending === 1 ? '' : 's'} auto-created and not yet checked — `
+            + 'open the Variants tab to look through them.';
     }
 
     alert.classList.toggle('hidden', message === '');
     alert.classList.toggle('flex', message !== '');
     $('#drawer-alert-text').textContent = message;
+
+    // The family's own flag only. A drawer whose *variants* are waiting is told
+    // to go to the Variants tab and sign them off one at a time, which is the
+    // whole point of them being separate flags.
+    //
+    // The grant is checked here too, because this control's visibility is already
+    // conditional and `data-requires-permission` decides the same `hidden` class
+    // — two writers, and whichever ran last would win.
+    $('#drawer-clear-draft').classList.toggle(
+        'hidden',
+        !(item.is_draft && can('UPDATE', 'ITEMS'))
+    );
 }
 
 function renderDrawerBody() {
@@ -924,6 +1013,7 @@ function drawerOverview(item) {
                 ${roll && roll.variants > 0 ? `
                     <p class="text-[11.5px] text-muted-foreground">
                         Across ${roll.variants} variant${roll.variants === 1 ? '' : 's'}${
+                            roll.below > 0 ? ` · ${roll.below} below minimum` : ''}${
                             roll.low > 0 ? ` · ${roll.low} at or below reorder level` : ''}${
                             roll.negative > 0 ? ` · ${roll.negative} negative` : ''}
                     </p>` : ''}
@@ -971,77 +1061,216 @@ function drawerOverview(item) {
 }
 
 /**
+ * One variant's own position, from M8 rather than from anything on this screen.
+ *
+ * Null where the caller holds no READ:STOCK, which is not the same as zero — the
+ * distinction the whole module is built around. Callers show nothing rather than
+ * a figure: an empty cell reads as "none on the shelf" where it means "not yours
+ * to see".
+ */
+function positionFor(itemId, variantId) {
+    if (!state.canStock || itemId === null || itemId === undefined) return null;
+
+    return (state.stock.get(itemId)?.positions ?? [])
+        .find((row) => String(row.variant_id) === String(variantId)) ?? null;
+}
+
+/** One variant's position as a sentence, for the block that edits it. */
+function describePosition(position, item) {
+    // Painted with textContent rather than into markup, so nothing here is
+    // escaped — escaping it would print the entities.
+    const unit = item?.base_uom_symbol ? ` ${item.base_uom_symbol}` : '';
+
+    const held = position.is_negative
+        ? `${formatQuantity(position.quantity)}${unit} — more has been issued than was ever received`
+        : `${formatQuantity(position.quantity)}${unit} on the shelf`;
+
+    return position.average_cost === null
+        ? held
+        : `${held}, worth ${money(position.value)} at ${money(position.average_cost)} average`;
+}
+
+/**
+ * The quantity's own colour, on the ladder the badge beside it uses.
+ *
+ * A map rather than a chain of ternaries because it was a chain of ternaries,
+ * and a fourth state would have made it unreadable.
+ */
+const QUANTITY_TONE = {
+    negative: 'text-rose-500',
+    out: 'text-rose-500',
+    below_minimum: 'text-orange-600',
+    low: 'text-amber-600',
+    in_stock: 'text-foreground',
+};
+
+/**
+ * What the workshop said about this variant's shelf, under the figure.
+ *
+ * Both levels where both are set, because they answer different questions and
+ * the floor is the one that turned the row orange. "No reorder level" stays the
+ * wording where neither is set: it is the commoner absence, and naming both
+ * would be a sentence about two things a workshop has not done.
+ */
+function describeLevels(position) {
+    const parts = [];
+
+    if (position.reorder_level !== null && position.reorder_level !== undefined) {
+        parts.push(`reorder at ${formatQuantity(position.reorder_level)}`);
+    }
+
+    if (position.min_stock !== null && position.min_stock !== undefined) {
+        parts.push(`never below ${formatQuantity(position.min_stock)}`);
+    }
+
+    return parts.length === 0 ? 'no reorder level' : esc(parts.join(' · '));
+}
+
+/**
+ * The variants of one family as rows, with whatever controls the caller puts on
+ * the right.
+ *
+ * Two screens ask this — the drawer's Variants tab and the edit form's picker —
+ * and both show the same four facts: what it is, its code, its price, and what
+ * is on the shelf. One renderer, because two would answer "what is under this
+ * product" in two ways, and the pair would drift on the first column either of
+ * them gained (§4.4).
+ *
+ * Archived ratings are **hidden by default and counted out loud**. A workshop
+ * that has dealt in a part for ten years has archived more of them than it still
+ * stocks, and a list where the live ones are three rows in twenty is a list
+ * nobody reads. What is never done is hiding them silently: the footer states
+ * the number, so the panel cannot claim a family has less under it than it does.
+ *
+ * @param {object} item                       The family.
+ * @param {(variant: object) => string} actionsFor  The controls for one row.
+ */
+function variantRows(item, actionsFor) {
+    const all = item.variants ?? [];
+    const archived = all.filter((variant) => !variant.is_active);
+    const shown = state.showArchivedVariants ? all : all.filter((variant) => variant.is_active);
+
+    const rows = shown.map((variant) => {
+        const position = positionFor(item.id, variant.id);
+
+        const quantity = position
+            ? `
+                <div class="text-right">
+                    <p class="text-[13px] font-bold ${
+                        QUANTITY_TONE[statusOfRow(position)] ?? 'text-foreground'}">
+                        ${formatQuantity(position.quantity)}
+                        <span class="text-[11px] font-medium text-muted-foreground">${esc(item.base_uom_symbol)}</span>
+                    </p>
+                    <p class="text-[11.5px] text-muted-foreground">
+                        ${describeLevels(position)}
+                    </p>
+                </div>`
+            : '';
+
+        return `
+            <div class="flex items-center gap-3 rounded-[12px] border border-border px-4 py-3
+                        ${variant.is_active ? '' : 'opacity-60'}">
+                <div class="min-w-0 flex-1">
+                    <p class="flex flex-wrap items-center gap-2 text-[13.5px] font-semibold text-secondary-foreground">
+                        ${esc(variant.display_label)}
+                        ${variant.is_draft ? '<span class="badge bg-amber-100 text-amber-800">Needs review</span>' : ''}
+                        ${variant.is_active ? '' : '<span class="badge bg-muted text-muted-foreground">Archived</span>'}
+                    </p>
+                    <p class="mt-0.5 text-xs text-muted-foreground">
+                        ${variant.sku ? `<span class="font-mono">${esc(variant.sku)}</span> · ` : ''}
+                        ${variant.sell_price === null ? 'no price' : money(variant.sell_price)}
+                    </p>
+                </div>
+                ${quantity}
+                <div class="flex shrink-0 gap-1">${actionsFor(variant)}</div>
+            </div>`;
+    }).join('');
+
+    // Nothing put away, nothing to say about it.
+    if (!archived.length) return rows;
+
+    const toggle = `
+        <button type="button" class="btn btn-ghost btn-sm text-muted-foreground" data-toggle-archived>
+            ${state.showArchivedVariants
+                ? `Hide the ${archived.length} archived`
+                : `Show ${archived.length} archived`}
+        </button>`;
+
+    if (shown.length) return `${rows}${toggle}`;
+
+    // Every one of them is archived. Without this the panel would be blank with
+    // a button under it, which reads as a family that has nothing on the shelf
+    // rather than one whose shelf was cleared.
+    return `
+        <p class="rounded-[12px] border border-dashed border-border px-4 py-5 text-center
+                  text-[0.8125rem] text-muted-foreground">
+            Everything under this product has been archived.
+        </p>
+        ${toggle}`;
+}
+
+/**
  * The variants of one family, each with its own position.
  *
  * This is where the roll-up on the row is broken back down, and it is the reason
  * the row can afford to be a summary: "12 in stock" is only useful if one click
  * says which twelve.
+ *
+ * The pencil opens the **item form** on that variant rather than an editor of
+ * its own. There used to be a second one here, and the two had already drifted:
+ * this dialog could set a target markup the create form could not, and the
+ * create form could set a barcode, a purchase price and a minimum this dialog
+ * dropped on the floor (§5.1).
  */
 function drawerVariants(item) {
     const variants = item.variants ?? [];
     const mayUpdate = can('UPDATE', 'ITEMS');
     const mayDelete = can('DELETE', 'ITEMS');
+    const mayCount = state.canStock && can('WRITE', 'TRANSACTIONS') && item.can_hold_stock !== false;
+
 
     if (!variants.length) {
+        /*
+        | Which of the two it is, and this branch was dead until now.
+        |
+        | It asked `item.type === 'service'`, and there has been no `type` on an
+        | item since the catalogue's vocabulary became rows an admin edits — so
+        | every product with nothing under it, labour included, was told to add
+        | the ratings it buys and sells. `can_hold_stock` is the category's own
+        | answer, which is the question that was meant.
+        */
         return `
             <p class="py-8 text-center text-sm text-muted-foreground">
-                No variants yet. ${item.type === 'service'
-                    ? 'A service usually needs just one — add it so bills can reference it.'
+                No variants yet. ${item.can_hold_stock === false
+                    ? 'Something that is produced when it is sold usually needs just one — add it so bills can reference it.'
                     : 'Add the ratings you actually buy and sell.'}
             </p>`;
     }
 
-    const positions = new Map(
-        (state.stock.get(item.id)?.positions ?? []).map((row) => [String(row.variant_id), row])
-    );
-
     return `
         <div class="space-y-2">
-            ${variants.map((variant) => {
-                const position = positions.get(String(variant.id));
-
-                const actions = [
-                    mayUpdate ? `<button type="button" class="btn btn-ghost btn-icon" data-edit-variant="${variant.id}"
-                                         title="Edit variant" aria-label="Edit variant">${iconPencil}</button>` : '',
-                    mayDelete ? `<button type="button" class="btn btn-ghost btn-icon" data-delete-variant="${variant.id}"
-                                         title="Delete variant" aria-label="Delete variant">${iconTrash}</button>` : '',
-                ].filter(Boolean).join('');
-
-                const quantity = state.canStock && position
-                    ? `
-                        <div class="text-right">
-                            <p class="text-[13px] font-bold ${
-                                position.is_negative || !position.has_stock ? 'text-rose-500'
-                                    : position.is_low ? 'text-amber-600' : 'text-foreground'}">
-                                ${formatQuantity(position.quantity)}
-                                <span class="text-[11px] font-medium text-muted-foreground">${esc(item.base_uom_symbol)}</span>
-                            </p>
-                            <p class="text-[11.5px] text-muted-foreground">
-                                ${position.reorder_level !== null && position.reorder_level !== undefined
-                                    ? `reorder at ${formatQuantity(position.reorder_level)}`
-                                    : 'no reorder level'}
-                            </p>
-                        </div>`
-                    : '';
-
-                return `
-                    <div class="flex items-center gap-3 rounded-[12px] border border-border px-4 py-3
-                                ${variant.is_active ? '' : 'opacity-60'}">
-                        <div class="min-w-0 flex-1">
-                            <p class="flex flex-wrap items-center gap-2 text-[13.5px] font-semibold text-secondary-foreground">
-                                ${esc(variant.display_label)}
-                                ${variant.is_draft ? '<span class="badge bg-amber-100 text-amber-800">Needs review</span>' : ''}
-                                ${variant.is_active ? '' : '<span class="badge bg-muted text-muted-foreground">Archived</span>'}
-                            </p>
-                            <p class="mt-0.5 text-xs text-muted-foreground">
-                                ${variant.sku ? `<span class="font-mono">${esc(variant.sku)}</span> · ` : ''}
-                                ${variant.sell_price === null ? 'no price' : money(variant.sell_price)}
-                            </p>
-                        </div>
-                        ${quantity}
-                        <div class="flex shrink-0 gap-1">${actions}</div>
-                    </div>`;
-            }).join('')}
+            ${variantRows(item, (variant) => [
+                /*
+                | It takes nothing away, so it does not confirm (§3.5): it is
+                | somebody saying they looked, and the way back is the row's own
+                | pencil. First in the group because while a rating is unchecked
+                | it is the only thing on the row worth doing.
+                */
+                mayUpdate && variant.is_draft ? `<button type="button" class="btn btn-ghost btn-icon text-amber-600"
+                                     data-clear-variant-draft="${variant.id}"
+                                     title="Mark as checked" aria-label="Mark as checked">${iconChecked}</button>` : '',
+                mayCount && variant.is_active ? `<button type="button" class="btn btn-ghost btn-icon" data-set-stock="${variant.id}"
+                                     title="Set what is on the shelf" aria-label="Set what is on the shelf">${iconCount}</button>` : '',
+                mayUpdate ? `<button type="button" class="btn btn-ghost btn-icon" data-edit-variant="${variant.id}"
+                                     title="Edit variant" aria-label="Edit variant">${iconPencil}</button>` : '',
+                mayUpdate ? `<button type="button" class="btn btn-ghost btn-icon" data-toggle-variant="${variant.id}"
+                                     data-variant-active="${variant.is_active}"
+                                     title="${variant.is_active ? 'Archive variant' : 'Restore variant'}"
+                                     aria-label="${variant.is_active ? 'Archive variant' : 'Restore variant'}">${
+                                         variant.is_active ? iconArchive : iconRestore}</button>` : '',
+                mayDelete ? `<button type="button" class="btn btn-ghost btn-icon" data-delete-variant="${variant.id}"
+                                     title="Delete variant" aria-label="Delete variant">${iconTrash}</button>` : '',
+            ].filter(Boolean).join(''))}
         </div>`;
 }
 
@@ -1227,11 +1456,11 @@ function applyTypeToForm({ editing }) {
     const form = itemForm;
     const category = typeMeta($('#item-type', form).value);
 
-    const section = $('#item-attributes-section', form);
-    const host = $('#item-attributes', form);
-
     if (!category) {
-        if (section) section.classList.add('hidden');
+        // Which still repaints the blocks: with no category chosen there is no
+        // question set, and a specification section left up from the last one
+        // asks for fields this product will never be validated against.
+        reindexVariants();
 
         return;
     }
@@ -1241,22 +1470,38 @@ function applyTypeToForm({ editing }) {
     if (!editing) {
         $('#item-uom', form).value = category.default_uom;
 
-        // The category's defaults are *copied* onto the product, never
-        // referenced — correcting a category's rate next March must not restate
-        // what every product already charges. So they are filled in only where
-        // the user has not typed something of their own.
+        /*
+        | The category's defaults are *copied* onto the product, never
+        | referenced — correcting a category's rate next March must not restate
+        | what every product already charges.
+        |
+        | Which of three figures the box ends on is decided here, and the order
+        | matters: the rate the user typed, else the category's own, else the
+        | prefill the markup lands on. The test is `userSet` rather than an empty
+        | box because the box is no longer empty to start with — reading
+        | emptiness would leave a 12% category quietly charging the prefilled 18.
+        */
         const gst = $('#item-gst', form);
-        if (!gst.value.trim() && category.default_gst_rate !== null) gst.value = category.default_gst_rate;
 
-        // Which of the two it is, said on the form: a rate that arrived from the
-        // category is a value somebody can tab past, so it has to be visible
-        // that it arrived rather than that it was typed.
+        if (gst.dataset.userSet !== '1' && category.default_gst_rate !== null) {
+            gst.value = category.default_gst_rate;
+        }
+
+        // Where the figure in the box came from, said on the form: all three are
+        // a value somebody can tab straight past, so which one it is has to be
+        // visible rather than inferred.
         const hint = $('#item-gst-hint', form);
 
         if (hint) {
-            hint.textContent = category.default_gst_rate === null
-                ? `${category.label ?? 'This category'} has no default rate — enter one, or 0 if this is exempt.`
-                : `${category.default_gst_rate}% from ${category.label ?? 'the category'}. Change it if this product differs.`;
+            if (gst.dataset.userSet === '1') {
+                hint.textContent = 'A percentage — 18, not 0.18.';
+            } else if (category.default_gst_rate === null) {
+                hint.textContent = `${category.label ?? 'This category'} states no rate of its own — `
+                    + `${gst.defaultValue}% is filled in. Change it if this product differs, or 0 if it is exempt.`;
+            } else {
+                hint.textContent = `${category.default_gst_rate}% from ${category.label ?? 'the category'}. `
+                    + 'Change it if this product differs.';
+            }
         }
 
         const hsn = $('#item-hsn', form);
@@ -1279,23 +1524,20 @@ function applyTypeToForm({ editing }) {
     const stockSection = $('#item-stock-section', form);
     if (stockSection) stockSection.classList.toggle('hidden', !canHoldStock);
 
-    applyStockFieldsState();
-    paintUnitSuffix();
-
     $('#item-type-hint', form).textContent = editing
         ? 'Fixed once the product exists: changing it would reinterpret everything recorded against it.'
         : (category.description || `Asks for ${describeAttributes(category)}.`);
 
-    // The specification section: whatever this category asks for.
-    const schema = category.attributes ?? {};
-    const keys = Object.keys(schema);
+    // What this category asks for, said once above the blocks that ask it.
+    const keys = Object.keys(category.attributes ?? {});
+    const forLabel = $('#item-variants-for', form);
 
-    if (section) section.classList.toggle('hidden', keys.length === 0);
-
-    const forLabel = $('#item-attributes-for', form);
     if (forLabel) forLabel.textContent = keys.length ? `— what a ${category.label.toLowerCase()} is described by` : '';
 
-    if (host) renderAttributeFields(host, schema, editing ? undefined : defaultsFor(schema));
+    // Every block repainted: the fields this category asks for, the unit its
+    // quantity is counted in, and whether its stock boxes apply at all. On an
+    // edit there are no blocks, and this does nothing.
+    reindexVariants();
 }
 
 /**
@@ -1315,22 +1557,29 @@ function defaultsFor(schema) {
 }
 
 /**
- * Grey the opening-stock boxes out when the product is not being stocked.
+ * Grey every block's stock boxes out when the product is not being stocked, and
+ * remove them for a category that can hold none.
  *
- * Left visible rather than removed: the checkbox above them is what explains
- * why they are inert, and a box that vanishes reads as a bug.
+ * Two different answers to two different questions. "Keep stock of this" is off
+ * for a part bought to order, which is a choice — so the boxes stay visible and
+ * inert, because the checkbox above them is what explains why, and a box that
+ * vanishes reads as a bug. A category that holds no stock at all is not a
+ * choice: an opening quantity of labour would be inventing an asset, and
+ * offering the box teaches somebody it is possible.
  */
 function applyStockFieldsState() {
     const form = itemForm;
-    const on = $('#item-stock', form)?.checked;
-    const fields = $('#item-stock-fields', form);
+    const category = typeMeta($('#item-type', form).value);
+    const canHoldStock = category ? category.can_hold_stock !== false : true;
+    const on = Boolean($('#item-stock', form)?.checked) && canHoldStock;
 
-    if (!fields) return;
+    $$('[data-variant-stock]', form).forEach((fields) => {
+        fields.classList.toggle('hidden', !canHoldStock);
+        fields.classList.toggle('opacity-50', !on);
 
-    fields.classList.toggle('opacity-50', !on);
-
-    $$('input', fields).forEach((input) => {
-        input.disabled = !on;
+        $$('input', fields).forEach((input) => {
+            input.disabled = !on;
+        });
     });
 }
 
@@ -1353,18 +1602,312 @@ function describeAttributes(category) {
         : 'no specification fields yet';
 }
 
+/* -------------------------------------------------------------------------
+ | The variant half
+ |
+ | Two panes over one set of fields, and which is up depends on how many things
+ | are on the shelf under this product:
+ |
+ |   create          the repeater — a block per variant, all submitted together
+ |   edit, one       that variant's block, straight away: for the overwhelming
+ |                   majority of products the family and the thing on the shelf
+ |                   are one record in the user's head, and splitting them over a
+ |                   dialog, a drawer, a tab and a second dialog was five clicks
+ |                   to correct a SKU
+ |   edit, several   the list — no single set of boxes could mean any one of them
+ |                   — and a pencil opens the block for the one picked
+ |
+ | The block is the *only* variant editor in this module. The drawer's pencil
+ | opens this form on that variant rather than a dialog of its own: two editors
+ | over one record is the drift §5.1 exists to prevent, and the pair here had
+ | already reached it — the dialog could set a target markup the create form
+ | could not, and the create form could set a barcode, a purchase price and a
+ | minimum the dialog dropped on the floor.
+ |
+ | The position is *stamped on* rather than rendered, so the template in the
+ | markup carries no index and a removal is a walk over four data hooks. Every
+ | `name`, `id`, `for` and `data-error-for` inside a block is written by
+ | {@link indexVariantBlock} and nowhere else — which is what gives a 422 about
+ | `variants.2.sell_price` a box to land in rather than a banner above five
+ | identical blocks.
+ | ---------------------------------------------------------------------- */
+
+/** Every block on the form, in the order they will be submitted. */
+const variantBlocks = () => $$('[data-variant-block]', itemForm);
+
+/** True while the form is correcting a product rather than writing a new one. */
+const editingItem = () => state.formItem !== null;
+
+/**
+ * One block's value, by the API key its input is declared under.
+ *
+ * Three answers, not two. A box somebody emptied is **null** — clearing a price
+ * is a real edit, and the only way to say so. A box the form is not asking about
+ * is **undefined**, which `JSON.stringify` drops, so the key never reaches the
+ * server and `StoreVariantRequest::payload()` leaves that column exactly as it
+ * was.
+ *
+ * Which is the difference between the two disabled cases. Unticking "Keep stock
+ * of this" after typing an opening quantity must not send the quantity: the
+ * server cannot see a greyed box, and it would answer with a warning about stock
+ * that was never going to be recorded. But the reorder level and the minimum are
+ * greyed by the same switch, and sending *those* as null would quietly wipe two
+ * figures somebody set while the product was still being stocked.
+ */
+const variantValue = (block, field) => {
+    const input = $(`[data-variant-field="${field}"]`, block);
+
+    if (!input || input.disabled) return undefined;
+
+    return input.value.trim() || null;
+};
+
+function indexVariantBlock(block, index) {
+    const key = (field) => (field ? `variants.${index}.${field}` : `variants.${index}`);
+
+    $('[data-variant-number]', block).textContent = String(index + 1);
+
+    $$('[data-variant-field]', block).forEach((input) => {
+        input.id = `item-variant-${index}-${input.dataset.variantField}`;
+        input.name = key(input.dataset.variantField);
+    });
+
+    $$('[data-variant-label]', block).forEach((label) => {
+        label.setAttribute('for', `item-variant-${index}-${label.dataset.variantLabel}`);
+    });
+
+    // `data-variant-error` with no value is the block's own footer, which is
+    // where a refusal that named no field of its own lands — see
+    // ApiException::underField().
+    $$('[data-variant-error]', block).forEach((slot) => {
+        slot.setAttribute('data-error-for', key(slot.dataset.variantError));
+    });
+}
+
+/**
+ * Draw the specification this category asks for, into one block.
+ *
+ * Values already typed survive the repaint, and that matters more than it looks:
+ * "Configure fields" is opened *from* this form, halfway through filling it in,
+ * and the schema comes back changed — with three blocks up, wiping them costs
+ * three specifications rather than one. A key the new category does not have is
+ * dropped for free, because the render walks the schema and not the values.
+ *
+ * What sits underneath those typed values is the difference between the two
+ * panes. A new variant falls back to the schema's own defaults. One that already
+ * exists falls back to **its stored bag** and never to a default: a category's
+ * defaults arriving on an edit would refill a field somebody had deliberately
+ * left empty, and `normaliseAttributes()` re-validates the whole set on the way
+ * back — so a motor that lost its HP here is either saved without it or refused
+ * with nothing on screen saying why.
+ */
+function paintVariantSpecification(block, index) {
+    const schema = typeMeta($('#item-type', itemForm).value)?.attributes ?? {};
+    const host = $('[data-variant-attributes]', block);
+    const held = block.variantRecord ? (block.variantRecord.attributes ?? {}) : defaultsFor(schema);
+
+    $('[data-variant-attributes-section]', block)
+        .classList.toggle('hidden', Object.keys(schema).length === 0);
+
+    renderAttributeFields(
+        host,
+        schema,
+        { ...held, ...collectAttributes(host) },
+        `attr-v${index}`,
+    );
+}
+
+/**
+ * What one block shows, which depends on whether it stands for something that
+ * already exists.
+ *
+ * Opening stock is create-only: it is a stock adjustment that posted on the day
+ * the shelf was counted, and there is no second one to be had by retyping the
+ * figure here — correcting it is a count, from the screen that counts. A name
+ * and a target markup are the other way round: a variant is named where its
+ * specification has failed to say what it is, and a markup suggests a price
+ * against an average that nothing has moved yet.
+ */
+function paintVariantBlockMode(block) {
+    const variant = block.variantRecord;
+
+    $$('[data-opening-field]', block).forEach((node) => node.classList.toggle('hidden', editingItem()));
+    $$('[data-variant-edit-only]', block).forEach((node) => node.classList.toggle('hidden', !variant));
+
+    $('[data-variant-generic]', block).classList.toggle('hidden', Boolean(variant));
+    $('[data-variant-name]', block).classList.toggle('hidden', !variant);
+
+    if (variant) $('[data-variant-name]', block).textContent = variant.display_label;
+
+    const slot = $('[data-variant-position]', block);
+    const position = variant ? positionFor(state.formItem?.id, variant.id) : null;
+
+    slot.classList.toggle('hidden', position === null);
+
+    if (position) slot.textContent = describePosition(position, state.formItem);
+}
+
+/**
+ * Re-stamp every block with its position, and repaint what depends on it.
+ *
+ * After any add or removal, because the position is what the server counts its
+ * error keys in: leave the third block named `variants.2` once the first has
+ * gone and its 422 paints into the block above it. The attribute inputs are
+ * repainted for the same reason — their ids carry the index too.
+ */
+function reindexVariants() {
+    const blocks = variantBlocks();
+
+    blocks.forEach((block, index) => {
+        indexVariantBlock(block, index);
+        paintVariantSpecification(block, index);
+        paintVariantBlockMode(block);
+
+        // A product needs at least one thing on the shelf under it — it cannot
+        // otherwise be sold, priced or counted — so the only block keeps no
+        // remove control. Nor does an edit, which shows one block by definition.
+        $('[data-remove-variant]', block).classList.toggle('hidden', blocks.length < 2);
+    });
+
+    applyStockFieldsState();
+    paintUnitSuffix();
+}
+
+/**
+ * Add a block, optionally bound to a variant that already exists.
+ *
+ * The bound record is held **on the node**, because the node is the thing that
+ * gets cloned in and removed — a map keyed by index beside it would be a second
+ * place the binding is decided, and it would be wrong from the first removal.
+ */
+function addVariantBlock({ variant = null, focus = false } = {}) {
+    const block = $('#item-variant-template', itemForm).content.firstElementChild.cloneNode(true);
+
+    block.variantRecord = variant;
+    block.dataset.variantId = variant ? String(variant.id) : '';
+
+    if (variant) {
+        const fill = (field, value) => {
+            $(`[data-variant-field="${field}"]`, block).value = value ?? '';
+        };
+
+        fill('sku', variant.sku);
+        fill('barcode', variant.barcode);
+        fill('label', variant.label);
+        fill('purchase_price', variant.purchase_price);
+        fill('sell_price', variant.sell_price);
+        fill('markup_percent', variant.markup_percent);
+        fill('reorder_level', variant.reorder_level);
+        fill('min_stock', variant.min_stock);
+    }
+
+    $('#item-variants', itemForm).append(block);
+    reindexVariants();
+
+    if (focus) $('[data-variant-field="sku"]', block).focus();
+}
+
+/**
+ * Show one of the variant half's two panes.
+ *
+ * The blocks are **emptied and rebuilt** rather than hidden, on the way into
+ * either pane. Whatever is in `#item-variants` is what gets submitted, and a
+ * hidden block still holding the previous variant's SKU is the kind of thing
+ * that is eventually saved onto this one.
+ */
+function showVariantPane(pane, { variant = null } = {}) {
+    const form = itemForm;
+    const item = state.formItem;
+    const count = (item?.variants ?? []).length;
+
+    $('#item-variants', form).innerHTML = '';
+    $('#item-variant-list', form).classList.toggle('hidden', pane !== 'list');
+
+    // The repeater's own control, and it belongs to the create: on an edit each
+    // variant is one request against one endpoint, where a create submits them
+    // together as `variants[]`.
+    $('#item-add-variant', form).classList.toggle('hidden', editingItem());
+
+    /*
+    | Somewhere to go back to only where the list means something.
+    |
+    | Never on a create — there is nothing behind the repeater — and not while a
+    | product's only variant is the one open, because the picker behind it would
+    | hold that same row and nothing else. Adding a *second* to such a product
+    | does get the control: the one that already exists is then worth going back
+    | to.
+    */
+    const sole = count === 1 && variant !== null;
+
+    $('#item-variant-back', form).classList.toggle('hidden', pane !== 'block' || !editingItem() || sole);
+
+    if (pane === 'list') {
+        renderVariantList(item);
+
+        return;
+    }
+
+    addVariantBlock({ variant, focus: editingItem() && variant === null });
+}
+
+/**
+ * The variants of this product, as a picker.
+ *
+ * The same facts the drawer's Variants tab shows, through the same row renderer
+ * (§4.4) — what differs is the control on the right, which here opens the block
+ * below rather than a surface of its own.
+ */
+function renderVariantList(item) {
+    const variants = item?.variants ?? [];
+    const host = $('#item-variant-list', itemForm);
+
+    const add = can('WRITE', 'ITEMS')
+        ? `<button type="button" class="btn btn-secondary btn-sm" data-add-variant>
+               ${iconPlus} Add a variant
+           </button>`
+        : '';
+
+    if (!variants.length) {
+        host.innerHTML = `
+            <div class="rounded-[12px] border border-dashed border-border px-4 py-6 text-center">
+                <p class="text-[0.8125rem] text-muted-foreground">
+                    Nothing on the shelf under this product yet — it cannot be sold, priced or counted
+                    until there is.
+                </p>
+                <div class="mt-3">${add}</div>
+            </div>`;
+
+        return;
+    }
+
+    host.innerHTML = `
+        ${variantRows(item, (variant) => `
+            <button type="button" class="btn btn-ghost btn-icon" data-open-variant="${variant.id}"
+                    title="Edit variant" aria-label="Edit ${esc(variant.display_label)}">${iconPencil}</button>`)}
+        <div class="pt-1">${add}</div>`;
+}
+
 /**
  * Fill the item form in, and put it where it belongs.
  *
  * One form, two homes (§4.4): writing a new item is the module's level-1 landing
  * surface, and editing one is a dialog over the list you found it in. The fields
  * are identical, so they are declared once and the node is moved.
+ *
+ * @param {object|null} item     The product to edit, or null to write a new one.
+ * @param {object} options
+ * @param {object|null|undefined} options.variant
+ *        Which variant's block to open on. `undefined` — the usual case — lets
+ *        the count decide; an object opens that one, for the drawer's pencil;
+ *        `null` opens a blank block, for "add a variant".
  */
-async function openItemForm(item = null) {
+async function openItemForm(item = null, { variant } = {}) {
     await loadMeta();
 
     const form = itemForm;
     const editing = item !== null;
+
+    state.formItem = item;
 
     adoptForm(
         form,
@@ -1392,7 +1935,16 @@ async function openItemForm(item = null) {
         editing ? { id: item.brand_id ?? '', label: item.brand } : { id: '', label: null },
     );
     $('#item-hsn', form).value = editing ? (item.hsn_sac ?? '') : '';
-    $('#item-gst', form).value = editing ? item.gst_rate : '';
+    /*
+    | The rate this form lands on: the product's own when editing, the markup's
+    | prefill otherwise. `userSet` is cleared alongside it, so the category
+    | chosen next still replaces an untouched prefill — see applyTypeToForm().
+    */
+    const gstField = $('#item-gst', form);
+
+    gstField.value = editing ? item.gst_rate : gstField.defaultValue;
+    delete gstField.dataset.userSet;
+
     $('#item-price-incl', form).checked = editing ? item.price_includes_tax === true : false;
     $('#item-type', form).value = editing
         ? String(item.category_id ?? '')
@@ -1402,26 +1954,39 @@ async function openItemForm(item = null) {
     $('#item-description', form).value = editing ? (item.description ?? '') : '';
 
     /*
-    | The variant half of the form, and why it disappears on an edit.
+    | Opening stock is the whole of what an edit withholds.
     |
-    | Creating is one act — the product and the first thing on the shelf — so the
-    | form carries both. Editing is not: a product has many variants by then, and
-    | a single set of SKU/price boxes could only mean one of them. Those are
-    | edited from the drawer, against the variant they belong to.
+    | It is a stock adjustment that posted on the day the shelf was counted, and
+    | there is no second one to be had by retyping the figure here: correcting it
+    | is a count, from the screen that counts. Everything else about a variant —
+    | the specification, both prices, the reorder level, the floor, the barcode —
+    | is an ordinary edit, and until now none of it could be reached from this
+    | form at all.
     */
-    const variantOnly = $$('[data-variant-half]', form);
-    variantOnly.forEach((node) => node.classList.toggle('hidden', editing));
+    $('#item-opening-date-field', form).classList.toggle('hidden', editing);
 
     if (!editing) {
-        $('#item-sku', form).value = '';
-        $('#item-barcode', form).value = '';
-        $('#item-sell-price', form).value = '';
-        $('#item-purchase-price', form).value = '';
-        $('#item-opening-stock', form).value = '';
-        $('#item-opening-cost', form).value = '';
-        $('#item-reorder', form).value = '';
-        $('#item-min-stock', form).value = '';
+        // Today, and set here rather than in the markup: the module's fragment
+        // is fetched once and its root is then cached detached, so a value
+        // rendered by Blade would still read the opening day of the session at
+        // midnight. §2A.8 brings the form back through here after every save.
+        $('#item-opening-date', form).value = new Date().toISOString().slice(0, 10);
     }
+
+    paintVariantHeading();
+
+    /*
+    | Which pane. The count decides, unless the caller already knows.
+    |
+    | Every block is rebuilt from the template each time, on an edit as well as a
+    | create: a half-typed third rating left attached to another product's edit
+    | form is the kind of thing that is eventually submitted.
+    */
+    const variants = editing ? (item.variants ?? []) : [];
+
+    if (!editing || variant !== undefined) showVariantPane('block', { variant: variant ?? null });
+    else if (variants.length === 1) showVariantPane('block', { variant: variants[0] });
+    else showVariantPane('list');
 
     // Both are fixed once the product exists, and disabled rather than hidden so
     // the record still reads completely.
@@ -1438,6 +2003,30 @@ async function openItemForm(item = null) {
 
     await workspace?.showForm();
     $('#item-name', form).focus();
+}
+
+/**
+ * What the variant half is called, which is a different question on each side.
+ *
+ * Three answers, because a product with one variant is not a small case of a
+ * product with several: the family and the thing on the shelf are one record in
+ * the user's head, and calling that half "Variants" is what taught people to go
+ * looking for a second screen to correct a SKU on.
+ */
+function paintVariantHeading() {
+    const form = itemForm;
+    const count = (state.formItem?.variants ?? []).length;
+
+    const [title, hint] = !editingItem()
+        ? ['Variants', 'The actual things you buy and sell. One is normal; add a block per rating or size.']
+        : count === 1
+            ? ['What it is on the shelf', 'The thing this product actually is. Priced, counted and reordered here.']
+            : count === 0
+                ? ['Variants', 'Nothing is on the shelf under this product yet.']
+                : ['Variants', 'Each is priced and counted on its own. Open one to correct it.'];
+
+    $('#item-variants-title', form).textContent = title;
+    $('#item-variants-hint', form).textContent = hint;
 }
 
 async function submitItem() {
@@ -1509,60 +2098,91 @@ async function submitItem() {
     };
 
     /*
-    | Sent only on create.
+    | The category and the unit are sent only on create.
     |
-    | The category and the unit are fixed afterwards, and the server ignores them
-    | on a PATCH — sending them anyway would suggest they had been applied. The
-    | variant half is create-only for the reason openItemForm() explains: on an
-    | edit there are many variants and one set of boxes could only mean one.
+    | Both are fixed afterwards and the server ignores them on a PATCH — sending
+    | them anyway would suggest they had been applied.
     */
     if (!id) {
         body.category_id = Number($('#item-type', form).value);
         body.base_uom = $('#item-uom', form).value;
 
-        // This form always creates the first thing on the shelf as well as the
-        // product — it collected the specification, the SKU and the price on the
-        // same screen. Said outright rather than inferred, so an API client
-        // adding a family alone is not given a blank variant it never asked for.
-        body.with_variant = true;
+        // One date for the whole submission: every quantity below posts on a
+        // single stock adjustment, and a document has one date.
+        body.opening_date = value('#item-opening-date');
 
-        body.attributes = collectAttributes($('#item-attributes', form));
+        /*
+        | Every block, in the order they are on screen.
+        |
+        | The longhand always, even for the single block this form opens on. The
+        | server takes the flat one-variant shorthand too, but the index in
+        | `variants.2.sku` is what a refusal comes back named after — and a form
+        | that sent one shape sometimes and the other the rest of the time would
+        | have to paint its errors two ways.
+        */
+        body.variants = variantBlocks().map((block) => variantPayload(block, { creating: true }));
 
-        body.sku = value('#item-sku');
-        body.barcode = value('#item-barcode');
-        body.sell_price = value('#item-sell-price');
-        body.purchase_price = value('#item-purchase-price');
-        body.reorder_level = value('#item-reorder');
-        body.min_stock = value('#item-min-stock');
-        body.opening_stock = value('#item-opening-stock');
-        body.opening_cost = value('#item-opening-cost');
+        /*
+        | Stock cannot arrive on the shelf worth nothing.
+        |
+        | Valued at zero it never reaches the Inventory account, and the first
+        | sale of it reports the whole price as profit. The server refuses it —
+        | `ItemService::openingCostFor()` — and this asks the same question
+        | before the round trip. Never *instead* of it: the importer and the
+        | capture agent reach that service without passing a form at all, which
+        | is why the rule lives there and a copy of it lives here (§6.1).
+        |
+        | The first block that cannot be valued, because that is the one the
+        | server stops at too. Only where the product is actually being stocked:
+        | where it is not, the server saves the product and skips the quantities
+        | with a warning rather than refusing — and the same is true for somebody
+        | without the grant to write transactions, so refusing either here would
+        | block a save the server would have accepted.
+        */
+        const unvalued = body.variants.findIndex((variant) => Number(variant.opening_stock ?? 0) > 0
+            && !(Number(variant.opening_cost ?? variant.purchase_price ?? 0) > 0));
+
+        if (body.is_stock && unvalued !== -1 && can('WRITE', 'TRANSACTIONS')) {
+            showFormErrors(form, {
+                fields: {
+                    [`variants.${unvalued}.opening_cost`]: [
+                        'Say what a unit cost. Stock cannot arrive worth nothing — the buying price above will do.',
+                    ],
+                },
+                message: 'Opening stock has to arrive at a value.',
+            });
+
+            return;
+        }
     }
 
     setSubmitting(form, true);
 
     try {
-        const saved = id
-            ? await auth.call(`/items/${id}`, { method: 'PATCH', body })
-            : await auth.call('/items', { method: 'POST', body });
-
         if (id) {
-            hideModal('#item-modal');
-            toast('Product updated.');
-            await refresh({ keepPage: true });
+            await saveItemEdit(id, body);
 
             return;
         }
 
+        const saved = await auth.call('/items', { method: 'POST', body });
+
         /*
         | The server may have saved the product and declined the opening stock —
-        | recording a quantity is a TRANSACTIONS grant and cataloguing is not.
-        | Surfaced rather than swallowed: somebody who typed "5" needs to know
-        | the 5 was not recorded.
+        | recording a quantity is a TRANSACTIONS grant and cataloguing is not —
+        | and it may separately have noticed two blocks describing the same
+        | thing. Surfaced rather than swallowed: somebody who typed "5" needs to
+        | know the 5 was not recorded.
+        |
+        | All of them, not the first. One warning quietly replacing another is
+        | how the second is never seen, and these two arrive together in exactly
+        | the case where both matter.
         */
-        const warning = saved?.meta?.warnings?.[0];
+        const warnings = saved?.meta?.warnings ?? [];
+        const created = saved?.data?.variants?.length ?? 1;
 
-        if (warning) toast(warning.message, 'warning');
-        else toast('Product created.');
+        if (warnings.length) warnings.forEach((warning) => toast(warning.message, 'warning'));
+        else toast(created > 1 ? `Product created, with ${created} variants.` : 'Product created.');
 
         /*
         | §2A.8 — a save stays on the form.
@@ -1596,6 +2216,137 @@ async function submitItem() {
     }
 }
 
+/**
+ * One block, under the keys the endpoint it is bound for names its fields by.
+ *
+ * Almost the same set either way, and deliberately so: `variants[]` on a create
+ * is the longhand of the shape the variant endpoints take, which is what lets
+ * one block serve both. Two keys differ, and neither is an accident. A create
+ * calls the variant's own name **`variant_label`**, because `label` sitting
+ * beside `name` in a product payload would read as the product's. And the
+ * opening pair exists only on a create, because opening stock is a document that
+ * posts once — an edit corrects it with a count, from the screen that counts.
+ */
+function variantPayload(block, { creating = false } = {}) {
+    const field = (name) => variantValue(block, name);
+
+    const payload = {
+        sku: field('sku'),
+        barcode: field('barcode'),
+        attributes: collectAttributes($('[data-variant-attributes]', block)),
+        sell_price: field('sell_price'),
+        purchase_price: field('purchase_price'),
+        markup_percent: field('markup_percent'),
+        reorder_level: field('reorder_level'),
+        min_stock: field('min_stock'),
+    };
+
+    return creating
+        ? {
+            ...payload,
+            variant_label: field('label'),
+            opening_stock: field('opening_stock'),
+            opening_cost: field('opening_cost'),
+        }
+        : { ...payload, label: field('label') };
+}
+
+/**
+ * Save an edit: the product, then the variant open under it.
+ *
+ * **Two requests, deliberately.** `PATCH /items/{id}` and
+ * `PATCH /items/{id}/variants/{vid}` are the endpoints the catalogue already
+ * has, and a combined one would be a second write path into it — a second place
+ * a SKU is checked for uniqueness, a second place an attribute bag is validated
+ * (§4.4). They run one after the other under a single busy state, so the form
+ * behaves as the one save it looks like.
+ *
+ * The product goes **first**, because the second call may be a POST: a product
+ * that had no variants gets its first one from here, and a create that ran ahead
+ * of a refusal above it would be created twice on the retry. Nothing after the
+ * product call can be retried into a duplicate.
+ *
+ * Which leaves the one state this has to say out loud — the product saved and
+ * the variant did not, which is what a SKU somebody else already used looks
+ * like. The dialog stays open, the refusal paints on the box it is about, and a
+ * toast says the first half went through: otherwise Cancel looks like it cancels
+ * both.
+ */
+async function saveItemEdit(id, body) {
+    const block = variantBlocks()[0];
+
+    await auth.call(`/items/${id}`, { method: 'PATCH', body });
+
+    if (block) {
+        try {
+            await saveVariantBlock(id, block);
+        } catch (error) {
+            toast('The product details were saved. The variant was not.', 'warning');
+
+            throw underBlock(error);
+        }
+    }
+
+    hideModal('#item-modal');
+    toast('Product updated.');
+
+    await refresh({ keepPage: true });
+
+    // The drawer this was opened from is still behind the dialog, showing the
+    // values that have just changed.
+    if (state.openItem) renderDrawerBody();
+}
+
+/**
+ * Re-key a variant refusal onto the block it is about — the client's half of
+ * `ApiException::underField()`.
+ *
+ * The variant endpoints answer about a variant and know nothing about a product
+ * form above them, so a 422 comes back naming `sku`. The block labels its boxes
+ * `variants.0.sku`, because it is the same block the create form repeats and
+ * there is one set of hooks indexed the one way. Left alone where there are no
+ * fields: a conflict, or a network that did not answer, belongs on the banner,
+ * and an edit has exactly one block on screen for it to be about.
+ */
+function underBlock(error) {
+    if (error?.fields) {
+        error.fields = Object.fromEntries(
+            Object.entries(error.fields).map(([field, messages]) => [`variants.0.${field}`, messages]),
+        );
+    }
+
+    return error;
+}
+
+/**
+ * Write one block back to the variant it stands for, or create the first one.
+ *
+ * The PATCH sends every field a variant has bar its flags, and
+ * `StoreVariantRequest::payload()` touches nothing the caller did not name — so
+ * this is a full write of what the form shows rather than a diff, and clearing a
+ * box really does clear the column.
+ */
+async function saveVariantBlock(itemId, block) {
+    const variantId = block.dataset.variantId;
+    const body = variantPayload(block);
+
+    const response = await auth.call(
+        variantId ? `/items/${itemId}/variants/${variantId}` : `/items/${itemId}/variants`,
+        { method: variantId ? 'PATCH' : 'POST', body },
+    );
+
+    // Bound now, so a later failure cannot make a retry create a second one.
+    if (!variantId && response?.data?.id) {
+        block.dataset.variantId = String(response.data.id);
+        block.variantRecord = response.data;
+    }
+
+    // A second variant at the same specification is saved and reported, not
+    // refused: two brands at one rating is a real arrangement, but the far
+    // commoner cause is the same thing entered twice.
+    (response?.meta?.warnings ?? []).forEach((warning) => toast(warning.message, 'warning'));
+}
+
 /* -------------------------------------------------------------------------
  | Variants
  | ---------------------------------------------------------------------- */
@@ -1610,11 +2361,15 @@ async function submitItem() {
  * category is therefore a change to rows in `item_attributes` and to nothing in
  * this file, which is the module's whole acceptance criterion.
  *
- * @param {HTMLElement} host   Where to draw them — the create form or the variant dialog.
+ * @param {HTMLElement} host   Where to draw them — a variant block or the variant dialog.
  * @param {object} schema      The category's resolved question set, keyed by field.
  * @param {object} values      Current values, keyed by field.
+ * @param {string} prefix      What to build the input ids from. The create form
+ *                             draws this set once per variant block, so a fixed
+ *                             `attr-hp` would be an id repeated down the page and
+ *                             a `<label for>` pointing into somebody else's block.
  */
-function renderAttributeFields(host, schema = {}, values = {}) {
+function renderAttributeFields(host, schema = {}, values = {}, prefix = 'attr') {
     const keys = Object.keys(schema);
 
     if (!keys.length) {
@@ -1640,11 +2395,11 @@ function renderAttributeFields(host, schema = {}, values = {}) {
 
         return `
             <div>
-                <label class="field-label" for="attr-${esc(key)}">
+                <label class="field-label" for="${esc(prefix)}-${esc(key)}">
                     ${esc(field.label)}${suffix}
                     ${field.required ? '' : '<span class="font-normal text-muted-foreground">(optional)</span>'}
                 </label>
-                ${attributeInput(key, field, value)}
+                ${attributeInput(key, field, value, prefix)}
                 ${help}
             </div>`;
     }).join('');
@@ -1657,8 +2412,8 @@ function renderAttributeFields(host, schema = {}, values = {}) {
  * — the set of inputs this function knows how to draw — which is exactly why they
  * stayed an enum on the server while the categories and units became tables.
  */
-function attributeInput(key, field, value) {
-    const id = `attr-${esc(key)}`;
+function attributeInput(key, field, value, prefix = 'attr') {
+    const id = `${esc(prefix)}-${esc(key)}`;
     const common = `id="${id}" class="field-input" data-attribute="${esc(key)}"`;
 
     switch (field.type) {
@@ -1718,81 +2473,126 @@ function collectAttributes(host) {
     return bag;
 }
 
-async function openVariantForm(variant = null) {
+/**
+ * Correct what is on the shelf under one variant — the shared dialog, level 3
+ * over the drawer.
+ *
+ * Everything about the act itself is `components/stock-adjust.js`, which is also
+ * the Stock screen's "Record a count": this hands it the variant, what the books
+ * currently say, and what to do afterwards. It types a count and the component
+ * subtracts, which is why the position goes in as well as the id.
+ *
+ * There is deliberately no "edit quantity" here and nowhere else either. What
+ * gets posted is a stock adjustment through the posting engine and the stock
+ * ledger, exactly as it would be from Stock (§4.3).
+ */
+function openStockCount(variantId) {
     const item = state.openItem;
     if (!item) return;
 
-    const form = $('#variant-form');
+    const variant = (item.variants ?? []).find((row) => String(row.id) === String(variantId));
+    if (!variant) return;
 
-    clearFormErrors(form);
-    form.reset();
+    const position = positionFor(item.id, variant.id);
 
-    const editing = variant !== null;
+    openStockAdjust({
+        mode: 'variant',
+        variant: { id: variant.id, label: `${item.name} · ${variant.display_label}` },
+        unit: item.base_uom_symbol ?? '',
 
-    $('#variant-modal-title').textContent = editing
-        ? `Edit ${variant.display_label}`
-        : `New variant of ${item.name}`;
+        /*
+        | No position row at all is a variant nothing has ever moved for, which
+        | is a genuine zero rather than an unknown — the ledger has no other way
+        | to say "none". `average_cost` is null in that case too, and the dialog
+        | says so rather than letting found stock come on at nothing.
+        */
+        current: position?.quantity ?? 0,
+        averageCost: position?.average_cost ?? null,
 
-    form.elements.id.value = editing ? variant.id : '';
-    form.elements.item_id.value = item.id;
+        /*
+        | The whole module, not just this variant's row. The adjustment posts to
+        | another module's endpoint, so the family's rolled-up position, the four
+        | tiles above the table and the row's own status are all a count out of
+        | date until the catalogue and the stock map are refetched together.
+        */
+        onPosted: async () => {
+            await refresh({ keepPage: true });
 
-    $('#variant-sku').value = editing ? (variant.sku ?? '') : '';
-    $('#variant-label').value = editing ? (variant.label ?? '') : '';
-    $('#variant-price').value = editing ? (variant.sell_price ?? '') : '';
-    $('#variant-markup').value = editing ? (variant.markup_percent ?? '') : '';
-    $('#variant-reorder').value = editing ? (variant.reorder_level ?? '') : '';
-
-    $('#variant-reorder-unit').textContent = item.base_uom_symbol;
-    // A reorder level is meaningless for something that is never held.
-    $('#variant-reorder-field').classList.toggle('hidden', !item.tracks_stock);
-
-    renderAttributeFields(
-        $('#variant-attributes'),
-        typeMeta(String(item.category_id ?? ''))?.attributes ?? {},
-        editing ? (variant.attributes ?? {}) : {},
-    );
-
-    showModal('#variant-modal');
+            if (state.openItem) await openDrawer(state.openItem.id, { tab: 'variants' });
+        },
+    });
 }
 
-async function submitVariant() {
-    const form = $('#variant-form');
-    const id = form.elements.id.value;
-    const itemId = form.elements.item_id.value;
+/**
+ * Take a variant off the shelf, or put it back.
+ *
+ * A status change rather than an edit, so it happens where the row is rather
+ * than inside the form that corrects it: everything already recorded against the
+ * variant stays exactly as it is, and only what a picker offers changes. The
+ * same treatment the family above it gets from the row menu (§7.4).
+ */
+async function setVariantActive(variantId, isActive) {
+    const item = state.openItem;
+    if (!item) return;
 
-    clearFormErrors(form);
+    const confirmed = isActive || await confirmAction({
+        title: 'Archive this variant',
+        body: 'It stops being offered when somebody picks an item, and everything already recorded '
+            + 'against it — every bill, every movement — stays exactly as it is. '
+            + 'You can restore it at any time.',
+        confirmLabel: 'Archive variant',
+    });
 
-    const body = {
-        attributes: collectAttributes($('#variant-attributes')),
-        sku: $('#variant-sku').value.trim() || null,
-        label: $('#variant-label').value.trim() || null,
-        sell_price: $('#variant-price').value.trim() || null,
-        markup_percent: $('#variant-markup').value.trim() || null,
-        reorder_level: $('#variant-reorder').value.trim() || null,
-    };
-
-    setSubmitting(form, true);
+    if (!confirmed) return;
 
     try {
-        const response = id
-            ? await auth.call(`/items/${itemId}/variants/${id}`, { method: 'PATCH', body })
-            : await auth.call(`/items/${itemId}/variants`, { method: 'POST', body });
+        await auth.call(`/items/${item.id}/variants/${variantId}`, {
+            method: 'PATCH',
+            body: { is_active: isActive },
+        });
 
-        hideModal('#variant-modal');
-        toast(id ? 'Variant updated.' : 'Variant added.');
-
-        // A second variant at the same specification is saved and reported, not
-        // refused: two brands at one rating is a real arrangement, but the far
-        // commoner cause is the same thing entered twice.
-        const warning = response.meta?.warnings?.[0];
-        if (warning) toast(warning.message, 'info');
+        toast(isActive ? 'Variant restored.' : 'Variant archived.');
 
         await refresh({ keepPage: true });
-        await openDrawer(itemId, { tab: 'variants' });
+        await openDrawer(item.id, { tab: 'variants' });
     } catch (error) {
-        showFormErrors(form, error);
-    } finally {
-        setSubmitting(form, false);
+        toast(error.message, 'error');
+    }
+}
+
+/**
+ * Sign off one rating that was created for the workshop rather than by it.
+ *
+ * `is_draft` is set by M11's importer and M15's capture agent and means nobody
+ * has looked at this yet. Clearing it is somebody saying they have — so there is
+ * **no confirmation** (§3.5 asks for one where something is taken away, and this
+ * takes nothing away) and no way to set the flag back on from here. Putting a
+ * rating back into the queue is not a thing anybody wants; correcting it is, and
+ * that is the pencil beside this control.
+ *
+ * One variant at a time, deliberately. A "confirm all" over a family is one
+ * click that says a whole import was checked, which is the one claim this flag
+ * exists to stop somebody making by accident.
+ */
+async function setVariantDraft(variantId) {
+    const item = state.openItem;
+    if (!item) return;
+
+    try {
+        await auth.call(`/items/${item.id}/variants/${variantId}`, {
+            method: 'PATCH',
+            body: { is_draft: false },
+        });
+
+        toast('Marked as checked.');
+
+        // The whole module: the queue's count is served by `/items/meta`, the
+        // badge on the row behind the drawer is drawn from the family's variants,
+        // and both are a review out of date until the catalogue comes back.
+        await refresh({ keepPage: true });
+        await openDrawer(item.id, { tab: 'variants' });
+    } catch (error) {
+        toast(error.message, 'error');
     }
 }
 
@@ -1838,6 +2638,35 @@ async function setActive(id, isActive) {
         await auth.call(`/items/${id}`, { method: 'PATCH', body: { is_active: isActive } });
         toast(isActive ? 'Item restored.' : 'Item archived.');
         await refresh({ keepPage: true });
+    } catch (error) {
+        toast(error.message, 'error');
+    }
+}
+
+/**
+ * The same sign-off for the family itself.
+ *
+ * Shipped with the variant control rather than after it, because the banner
+ * counts both and a queue that can only be emptied of half its work never
+ * reaches zero — which is the state that makes people stop opening it.
+ */
+async function setItemDraft(id) {
+    // Whether the drawer is actually on screen, not whether `state.openItem` is
+    // set: that is never cleared on close, so it still names the last product
+    // looked at — and asking it instead would re-open the drawer over the list
+    // for anybody who signed a row off after viewing it.
+    const inDrawer = !$('#item-drawer').classList.contains('hidden')
+        && String(state.openItem?.id) === String(id);
+
+    try {
+        await auth.call(`/items/${id}`, { method: 'PATCH', body: { is_draft: false } });
+        toast('Marked as checked.');
+        await refresh({ keepPage: true });
+
+        // The alert above the tabs is painted when the drawer opens, and leaving
+        // it reading "not yet checked" straight after somebody checked it is
+        // worse than not offering the control there at all.
+        if (inDrawer) await openDrawer(id, { tab: state.drawerTab });
     } catch (error) {
         toast(error.message, 'error');
     }
@@ -2021,6 +2850,7 @@ export default async function initItems() {
     | anyway.
     */
     initCatalogueMaster();
+    initStockAdjust();
 
     const openMaster = (options = {}) => openCatalogueMaster({
         ...options,
@@ -2037,6 +2867,12 @@ export default async function initItems() {
 
             applyTypeToForm({ editing: Boolean(itemForm.elements.id.value) });
         },
+    });
+
+    // Typing in the rate box settles it: from here on this product charges what
+    // the user said, whatever category they land on next (applyTypeToForm()).
+    $('#item-gst', itemForm)?.addEventListener('input', (event) => {
+        event.target.dataset.userSet = '1';
     });
 
     $('#manage-catalogue')?.addEventListener('click', () => openMaster());
@@ -2226,13 +3062,37 @@ export default async function initItems() {
 
     $('#drawer-body').addEventListener('click', (event) => {
         const edit = event.target.closest('[data-edit-variant]');
+        const count = event.target.closest('[data-set-stock]');
+        const checked = event.target.closest('[data-clear-variant-draft]');
+        const archive = event.target.closest('[data-toggle-variant]');
         const remove = event.target.closest('[data-delete-variant]');
+        const archived = event.target.closest('[data-toggle-archived]');
+
+        // A preference, not a write: repainted here rather than refetched,
+        // because every row it shows or hides is already loaded.
+        if (archived) {
+            state.showArchivedVariants = !state.showArchivedVariants;
+            renderDrawerBody();
+
+            return;
+        }
 
         if (edit) {
             const variant = (state.openItem?.variants ?? [])
                 .find((row) => String(row.id) === edit.dataset.editVariant);
 
-            if (variant) openVariantForm(variant);
+            // The item form, opened on that variant — level 3 over the drawer,
+            // which is where a single record's fields belong. There is no second
+            // editor to open any more; see drawerVariants().
+            if (variant) openItemForm(state.openItem, { variant });
+        }
+
+        if (count) openStockCount(count.dataset.setStock);
+
+        if (checked) setVariantDraft(checked.dataset.clearVariantDraft);
+
+        if (archive) {
+            setVariantActive(archive.dataset.toggleVariant, archive.dataset.variantActive !== 'true');
         }
 
         if (remove) deleteVariant(remove.dataset.deleteVariant);
@@ -2242,7 +3102,15 @@ export default async function initItems() {
         if (state.openItem) openItemForm(state.openItem);
     });
 
-    $('#drawer-add-variant').addEventListener('click', () => openVariantForm());
+    $('#drawer-clear-draft').addEventListener('click', () => {
+        if (state.openItem) setItemDraft(state.openItem.id);
+    });
+
+    // `variant: null` rather than nothing at all: a blank block, where leaving it
+    // out would let the count decide and land on the variant that already exists.
+    $('#drawer-add-variant').addEventListener('click', () => {
+        if (state.openItem) openItemForm(state.openItem, { variant: null });
+    });
 
     /* Forms ------------------------------------------------------------ */
 
@@ -2253,10 +3121,74 @@ export default async function initItems() {
 
     $('#item-type', itemForm).addEventListener('change', () => applyTypeToForm({ editing: false }));
 
-    $('#variant-form').addEventListener('submit', (event) => {
-        event.preventDefault();
-        submitVariant();
+    // Every block's stock boxes follow the family's own choice. Bound here
+    // rather than only repainted when the category changes, which is what left
+    // them live after somebody unticked "Keep stock of this".
+    $('#item-stock', itemForm).addEventListener('change', applyStockFieldsState);
+
+    $('#item-add-variant', itemForm).addEventListener('click', () => addVariantBlock({ focus: true }));
+
+    /*
+    | Delegated, because the blocks are cloned in and out.
+    |
+    | Refused below one block here as well as hidden there: a product with
+    | nothing on the shelf under it cannot be sold, priced or counted, and the
+    | hidden control is the presentation of that rule rather than the rule.
+    */
+    $('#item-variants', itemForm).addEventListener('click', (event) => {
+        const remove = event.target.closest('[data-remove-variant]');
+
+        if (!remove || variantBlocks().length < 2) return;
+
+        remove.closest('[data-variant-block]').remove();
+        reindexVariants();
     });
+
+    /*
+    | "Clear" rebuilds the form rather than resetting its fields.
+    |
+    | A native reset empties the boxes and leaves behind however many variant
+    | blocks were on screen, each still holding the attribute inputs of whatever
+    | category was chosen — and it would not put today's date back either.
+    */
+    $('#item-form-clear', itemForm).addEventListener('click', () => openItemForm());
+
+    /*
+    | The picker, and the two ways out of it. Delegated: its rows are drawn per
+    | product, and scoped to the form because the form is detached from the
+    | document whenever the workspace is showing its list (§2A.2).
+    */
+    $('#item-variant-list', itemForm).addEventListener('click', (event) => {
+        const open = event.target.closest('[data-open-variant]');
+        const add = event.target.closest('[data-add-variant]');
+        const archived = event.target.closest('[data-toggle-archived]');
+
+        if (archived) {
+            state.showArchivedVariants = !state.showArchivedVariants;
+            renderVariantList(state.formItem);
+
+            return;
+        }
+
+        if (open) {
+            const variant = (state.formItem?.variants ?? [])
+                .find((row) => String(row.id) === open.dataset.openVariant);
+
+            if (variant) showVariantPane('block', { variant });
+        }
+
+        if (add) showVariantPane('block', { variant: null });
+    });
+
+    /*
+    | Back to the picker, discarding whatever was typed into the block.
+    |
+    | No confirmation, and that is the judgement rather than an omission: the
+    | product half above is untouched, and what is lost is one variant's
+    | half-typed correction, which is on screen the whole time. A dialog here
+    | would be asked on every glance at another variant.
+    */
+    $('#item-variant-back', itemForm).addEventListener('click', () => showVariantPane('list'));
 
     /*
     | One listener for every "click away to dismiss": the row menus and both
@@ -2335,6 +3267,7 @@ function runAction(action, id) {
     if (action === 'open') openDrawer(id);
     if (action === 'variants') openDrawer(id, { tab: 'variants' });
     if (action === 'edit') openItemForm(item);
+    if (action === 'checked') setItemDraft(id);
     if (action === 'archive') setActive(id, false);
     if (action === 'restore') setActive(id, true);
     if (action === 'delete') destroy(id);

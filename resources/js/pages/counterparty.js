@@ -4,6 +4,7 @@ import {
 } from '../components/party-position';
 import { initQuickParty, openQuickParty, quickPartyForm } from '../components/quick-party';
 import { can } from '../permissions';
+import { openModule } from '../shell';
 import {
     $, $$, confirmAction, debounce, esc, formatDate, formatMoney,
     hideModal, isZeroAmount, showModal, tableMessage, toast,
@@ -127,7 +128,7 @@ export const CUSTOMER = {
     sinceLabel: 'Customer since',
     dateLabel: 'Last sale',
     createLabel: 'Create sale',
-    createHref: '/bills/new?kind=sale',
+    createModule: 'sales',
 };
 
 export const VENDOR = {
@@ -174,7 +175,7 @@ export const VENDOR = {
     sinceLabel: 'Vendor since',
     dateLabel: 'Last purchase',
     createLabel: 'Create purchase bill',
-    createHref: '/bills/new?kind=purchase',
+    createModule: 'purchase',
 };
 
 /* -------------------------------------------------------------------------
@@ -1453,7 +1454,13 @@ export function initCounterpartyPage(config) {
     function runAction(action, id) {
         if (action === 'open') openDrawer(id);
         if (action === 'statement') openLedger(id);
-        if (action === 'create') window.location.assign(`${state.config.createHref}&party=${id}`);
+        /*
+        | Into the other module, in the mounted shell — never a document load
+        | (§1.1). It used to be `window.location.assign('/bills/new?party=…')`,
+        | which was the counter and a real navigation; C4 retired that page, and
+        | Sales and Purchase read `?party=` for exactly this.
+        */
+        if (action === 'create') openModule(state.config.createModule, { search: `party=${id}` });
         if (action === 'edit') openForm(findParty(id));
         if (action === 'archive') setActive(id, false);
         if (action === 'restore') setActive(id, true);

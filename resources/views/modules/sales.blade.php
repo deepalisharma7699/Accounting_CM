@@ -8,7 +8,7 @@
     per document kind lands straight on the right form.
 
     The form is not written here. It is `partials/bill-document.blade.php`, the
-    same document the counter at /bills/new and the Purchase module raise, and it
+    same document the Purchase and Jobs modules raise, and it
     must never be copied: the fields, the error slots and the `data-` hooks are a
     contract with `components/bill-document.js`, and a second copy is a second
     place for that contract to go stale.
@@ -35,7 +35,7 @@
             Correcting an invoice that is already in the books.
 
             Here rather than in the shared partial, for the same reason it is in
-            purchase.blade.php: the counter at /bills/new raises new documents
+            purchase.blade.php: the Jobs card raises new documents
             and has nothing to correct. The partial stays exactly the document
             all three screens share.
 

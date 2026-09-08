@@ -14,10 +14,12 @@ use App\Http\Requests\WorkshopJob\UpdateJobStatusRequest;
 use App\Http\Resources\TransactionResource;
 use App\Http\Resources\WorkshopJobResource;
 use App\Services\Accounting\BillService;
+use App\Services\Staff\WorkAttributionService;
 use App\Services\Workshop\JobService;
 use App\Support\ApiResponse;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Workshop jobs — M19, and the brief's §16 to §18.
@@ -40,6 +42,7 @@ class WorkshopJobController extends Controller
     public function __construct(
         private readonly JobService $jobs,
         private readonly BillService $bills,
+        private readonly WorkAttributionService $attribution,
     ) {}
 
     /* ---------------------------------------------------------------------
@@ -278,7 +281,33 @@ class WorkshopJobController extends Controller
      */
     public function bill(BillJobRequest $request, int $job): JsonResponse
     {
-        $bill = $this->jobs->bill($job, $request->overrides(), $request->user());
+        $overrides = $request->overrides();
+
+        /*
+        | The invoice and who did the work commit together, or neither does -
+        | the same wrapper `TransactionController::store()` puts round a counter
+        | sale, and for the same reason: a 422 from the attribution after the
+        | bill had already committed would leave the operator looking at an
+        | error beside a posted invoice with no way to tell that it went
+        | through. JobService::bill() opens its own transaction, which becomes a
+        | savepoint inside this one.
+        |
+        | Only on a document this attempt actually wrote. A retry after a
+        | timeout is answered with the first attempt's invoice (M17), and
+        | syncing then would overwrite a correction somebody had already made
+        | with whatever stale names the retrying tab was still holding.
+        */
+        $bill = DB::transaction(function () use ($job, $overrides, $request) {
+            $bill = $this->jobs->bill($job, $overrides, $request->user());
+
+            if ($bill->wasRecentlyCreated && ($overrides['staff'] ?? []) !== []) {
+                $this->attribution->sync($bill, $overrides['staff']);
+            }
+
+            return $bill;
+        });
+
+        $this->attribution->attachTo([$bill]);
 
         $meta = array_filter([
             'tax' => $this->bills->taxSummaryFor($bill),

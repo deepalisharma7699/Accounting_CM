@@ -125,8 +125,13 @@
                             Usual GST rate <span class="font-normal text-muted-foreground">(optional)</span>
                         </label>
                         <div class="relative">
-                            <input id="category-gst" name="default_gst_rate" type="text" inputmode="decimal"
-                                   class="field-input pr-8 text-right font-mono" placeholder="18">
+                            {{-- Prefilled rather than suggested in placeholder
+                                 grey, for the reason modules/items.blade.php
+                                 records. Clear it for a category that cannot
+                                 state a rate for its products — null here is
+                                 what makes the product form insist on one. --}}
+                            <input id="category-gst" name="default_gst_rate" type="text" inputmode="decimal" value="18"
+                                   class="field-input pr-8 text-right font-mono" placeholder="Rate in %">
                             <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground">%</span>
                         </div>
                         <p class="field-error hidden" data-error-for="default_gst_rate"></p>

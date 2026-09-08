@@ -102,6 +102,7 @@ class StockLedgerService
             Quantity::of($row['quantity']),
             Money::of($row['value']),
             Quantity::ofNullable($variant->reorder_level),
+            Quantity::ofNullable($variant->min_stock),
         );
     }
 
@@ -128,10 +129,11 @@ class StockLedgerService
             $id = (int) $variant->id;
             $row = $rows->get($id);
             $reorder = Quantity::ofNullable($variant->reorder_level);
+            $floor = Quantity::ofNullable($variant->min_stock);
 
             $positions[$id] = $row === null
-                ? StockPosition::empty($id, $reorder)
-                : StockPosition::of($id, Quantity::of($row['quantity']), Money::of($row['value']), $reorder);
+                ? StockPosition::empty($id, $reorder, $floor)
+                : StockPosition::of($id, Quantity::of($row['quantity']), Money::of($row['value']), $reorder, $floor);
         }
 
         return $positions;
@@ -455,6 +457,7 @@ class StockLedgerService
     {
         $page = $this->movements->forVariant((int) $variant->id, $filters, $perPage);
         $reorder = Quantity::ofNullable($variant->reorder_level);
+        $floor = Quantity::ofNullable($variant->min_stock);
 
         $first = $page->items()[0] ?? null;
 
@@ -469,7 +472,7 @@ class StockLedgerService
         $runningQty = Quantity::of($before['quantity']);
         $runningValue = Money::of($before['value']);
 
-        $opening = StockPosition::of((int) $variant->id, $runningQty, $runningValue, $reorder);
+        $opening = StockPosition::of((int) $variant->id, $runningQty, $runningValue, $reorder, $floor);
 
         $rows = [];
 
@@ -477,7 +480,7 @@ class StockLedgerService
             $runningQty = $runningQty->plus($movement->quantityValue());
             $runningValue = $runningValue->plus($movement->valueMoney());
 
-            $after = StockPosition::of((int) $variant->id, $runningQty, $runningValue, $reorder);
+            $after = StockPosition::of((int) $variant->id, $runningQty, $runningValue, $reorder, $floor);
 
             $rows[] = [
                 'movement' => $movement,
@@ -489,7 +492,7 @@ class StockLedgerService
             'movements' => $page,
             'rows' => $rows,
             'opening' => $opening,
-            'closing' => StockPosition::of((int) $variant->id, $runningQty, $runningValue, $reorder),
+            'closing' => StockPosition::of((int) $variant->id, $runningQty, $runningValue, $reorder, $floor),
         ];
     }
 
@@ -579,6 +582,7 @@ class StockLedgerService
     {
         return match ($status) {
             'low' => $position->isLow(),
+            'below_minimum' => $position->isBelowMinimum(),
             'negative' => $position->isNegative(),
             'out' => $position->isEmpty(),
             'in_stock' => $position->hasStock(),

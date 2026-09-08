@@ -954,6 +954,11 @@ function payslipHistory(payslips) {
  * the bearings, because the document does not separate the labour from the
  * parts. Showing both is what stops either being taken for a measure of effort.
  *
+ * Both count an invoice **once**, whatever the person did on it. `staff` holds
+ * a row per trade, so a fitter who also wound the motor was two rows on one
+ * document and scored two jobs and twice the value — which is also why this
+ * figure used to disagree with the number of rows listed beneath it.
+ *
  * ## Why this is not next to the pay
  *
  * Because it is not an input to it. Payroll computes from a rate and an

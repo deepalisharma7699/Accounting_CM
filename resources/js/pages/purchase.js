@@ -5,6 +5,7 @@ import { mountBillRevision } from '../components/bill-revision';
 import { mountPaymentRows } from '../components/payment-rows';
 import { describeShortfalls } from '../components/stock-position';
 import { can } from '../permissions';
+import { clearModuleParams, moduleParams } from '../shell';
 import {
     $, $$, confirmAction, debounce, esc, formatDate, formatMoney,
     hideModal, showFormErrors, showModal, tableMessage, toast,
@@ -1094,4 +1095,30 @@ export default async function initPurchase() {
         // §2A.8 — back on the form, the supplier is where the next bill starts.
         onShowForm: () => doc.party().focus(),
     });
+
+    applyDeepLink(moduleParams());
+
+    // Reopening an already-mounted module cannot run this function again, so a
+    // second deep link is announced on the root instead.
+    root.addEventListener('module:params', (event) => applyDeepLink(event.detail));
+}
+
+/**
+ * `#purchase?party=12` — "create a purchase bill" from the Vendors card.
+ *
+ * The intent comes from the shell rather than from `location.search`, because a
+ * module's URL is a fragment of the dashboard's now, and this used to be a real
+ * navigation to the counter at /bills/new before C4 retired it. It is spent once
+ * acted on: surviving a refresh or a Back would put a counterparty back on a
+ * document somebody had cleared.
+ */
+function applyDeepLink(params) {
+    const party = params.get('party');
+
+    if (!party) return;
+
+    workspace?.showForm();
+    doc.party().load(party);
+
+    clearModuleParams();
 }

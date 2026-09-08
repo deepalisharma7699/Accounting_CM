@@ -165,6 +165,17 @@ and movement.
 and payment calculations, validation rules and shared UI behaviour each live in
 exactly one place.
 
+4.5 **A migration that deletes business data does not live in
+`database/migrations`.** Schema changes run by themselves, on every deployment
+and on every fresh database, and that is the point of them. A one-time data
+operation that empties tables must not inherit that: the case nobody plans for is
+restoring a dump taken before it ran and then migrating — which is exactly what a
+recovery is — and it would run a second time, at the moment least able to absorb
+it. Put it in `database/manual/`, which `migrate` does not scan, give it a guard
+that refuses unless it has been asked for explicitly, and document the invocation
+beside it. `database/manual/README.md` is the worked example, and the go-live
+cleanup that prompted the rule sat in the automatic path for two days.
+
 ## 5. Reuse
 
 5.1 Search the project before creating any component, API, service, controller,
@@ -314,6 +325,36 @@ into a family's, and
 that is decided — the roll-up, average cost as total value over total quantity,
 worst-wins status, and the badge. Add a third reader, not a third copy (§4.4).
 
+**A variant carries two levels, and the ladder is one list.** `reorder_level` is
+when to order and `min_stock` is when to stop what you are doing and go and get
+some — a shop orders at 20 and panics at 5. At or below the trigger is `is_low`;
+**strictly** under the floor is `is_below_minimum`; both are the server's
+verdicts and a row carries both, never one status a screen has to unpick. Worst
+wins, in one order — `negative → out → below_minimum → low → in_stock` — decided
+in that same file for a family (`positionStatus`) and for a single row
+(`statusOfRow`). Never rank them inline at a caller: it had been done at two, and
+both put `low` ahead of `out`, so a variant sitting at nought reported *Low
+stock* underneath a family row that said *Out of stock* about the same shelf.
+
+**Changing a position is one form, and opening stock is an input rather than a
+column.** Nothing writes a quantity directly — not the Items screen, not Stock,
+not the create form — and
+[components/stock-adjust.js](resources/js/components/stock-adjust.js) with
+[partials/stock-adjust.blade.php](resources/views/partials/stock-adjust.blade.php)
+is the whole of asking a person to change one. Stock mounts it in `count` mode
+and types the difference; Items mounts it in `variant` mode against one variant
+and types **what is on the shelf**, and the component subtracts the position to
+get the difference. Both post `POST /transactions/stock-adjustment` like any
+other document. A host supplies a mode, what the books currently say, and what to
+do afterwards; it must never fork the file.
+
+The two directions are the reason it is one component. "Two fewer than the books
+say" and "two on the shelf" are different figures that post different documents,
+and the conversion between them is arithmetic on a quantity — done in integer
+thousandths, because `12.3 - 4.1` is not `8.2` in a float and `decimal:0,3`
+refuses what comes out. Two copies would be two places the sign, `post: true` and
+the `client_ref` are decided, and the sign is the whole meaning of the document.
+
 **The catalogue's vocabulary is data, not code.** There is no `ItemType` enum and
 no `UnitOfMeasure` enum. What kinds of product exist, what each one records, whose
 each thing is, and how any of it is counted are rows in `item_categories`,
@@ -336,9 +377,9 @@ stock and the Inventory account together, silently, if it is ever wrong) and
 [partials/bill-document.blade.php](resources/views/partials/bill-document.blade.php)
 are the whole of writing a bill — lines, the server-priced total, the
 confirmation, the payment split, the autosaved draft and the post. Purchase,
-Sales and the counter at `/bills/new` all mount it, and Bills will make four. A
-host supplies a direction, a draft key and what to do after a post; it must
-never fork the file. The direction decides the endpoint, the party's role, and
+Sales and Jobs all mount it, and it is the only way a bill gets written. A host
+supplies a direction, a draft key and what to do after a post; it must never fork
+the file. The direction decides the endpoint, the party's role, and
 whether a line's rate is prefilled — **never on a purchase**, because stock
 arrives at the line's taxable value and that arrival is what recomputes the
 weighted average. There is no average column to correct afterwards.
@@ -637,12 +678,13 @@ There is **no charting library**, and columns are HTML rather than SVG because a
 SVG `viewBox` scales its text and renders microscopic labels on a phone. See
 [insights-module.md](docs/insights-module.md).
 
-**What is left — ten modules, all of them built.** **Items**, **Stock**,
+**What is left — two modules, both of them built.** **Items**, **Stock**,
 **Purchase**, **Sales**, **Vendors**, **Customers**, **Users**, **Roles**,
-**Staff** and **Insights** have been converted and are on. The other ten —
-**Bills**, **Jobs**, **Transactions** (`journal`), **Accounting** (`accounts`),
-**Ledger**, **Uploads**, **Workshops** (`tenants`), **Settings** (`workspace`),
-**Opening balances** and **History** (`audit`) — are `'enabled' => false`.
+**Staff**, **Insights**, **Settings** (`workspace`), **Opening balances**
+(`opening`), **Expenses** (`bills`), **Transactions** (`journal`), **Jobs**,
+**Accounting** (`accounts`) and **History** (`audit`) have been converted and are
+on. The other two — **Uploads** and **Workshops** (`tenants`) — are
+`'enabled' => false`.
 
 Be clear about what that means, because it is the most misread fact in this
 repository: **none of them is unfinished work.** Each has a complete backend, a
@@ -651,10 +693,10 @@ and feature tests. They are off for one reason only — they still open on a lis
 with a modal create instead of the §2A flow. **Their APIs answer normally**; it
 is the card and the fragment route that are shut, so this is a reachability gap
 in the UI and never a security boundary. What that costs a workshop today — no
-expense entry, no standalone receipt or payment, no job card, no opening
-balances, no audit trail, no workshop settings — is set out module by module in
+photographed bill to keep, no way to provision a workshop, no audit trail — is
+set out module by module in
 [hidden-modules.md](docs/hidden-modules.md). **Read it before converting one**:
-several of them have had part of their job taken over by a card that is already
+some of them have had part of their job taken over by a card that is already
 on, and converting the whole of the old screen would rebuild what Sales,
 Purchase and Insights already do (§5.1).
 
@@ -665,8 +707,248 @@ which asserts the route as well as the markup.
 
 Convert one module at a time, then flip its `enabled` flag. Do not add a page
 route, do not reintroduce a sidebar, and do not regress what already conforms.
-The counter at `/bills/new` is the one remaining page shell; it now drives the
-shared document engine, and it goes away when Bills is converted.
+
+**The card grid is settled, and the conversion is scheduled.** It is not a
+staging post and there is no second navigation coming: every remaining module
+lands on it. The order was **go-live first**, because with Settings and Opening
+balances both off a real workshop could not start using this product at all, and
+with Bills off its P&L has no overheads:
+
+```
+C1  Settings + Opening balances ✅ C5  Accounting + Ledger, merged  ✅
+C2  Bills → expenses only       ✅ C6  Uploads                      ←
+C3  Transactions                ✅ C7  Workshops   (History ✅)
+C4  Jobs                        ✅ C8  One workshop-day test
+```
+
+Each step's shape, its *do not rebuild* list and its checklist are Part E of
+[implementation-roadmap.md](docs/implementation-roadmap.md), which is now the one
+plan for the product — `modified-flow-plan.md` is a historical record and
+`hidden-modules.md` is the standing account of what is unreachable.
+
+The **order** the rest of it runs in is
+[execution-plan.md](docs/execution-plan.md): C6, then C7 — Workshops alone, now
+that History has gone on — then C8 moved up to sit immediately after it, then
+seven open points (P1–P7) — the party statement
+that no screen calls, the invoice delivery Jobs cannot borrow until it is
+extracted out of `pages/sales.js`, the advance receipt, the parked-draft
+worklist, five endpoints nothing reaches, and password reset with invitation and
+mail. **M15, the AI capture agent, is parked** as of 7 September 2026 and is
+outside that plan; nothing in it waits on the agent. Four steps
+also *finished* something rather than only re-flowing it: C1 shipped the three
+workshop settings the API accepted and no screen offered, C3 shipped the screen
+for allocating a receipt after it was taken, C4 shipped a job's edit, its
+delete, and the half of its bill the endpoint had been throwing away, and C5
+shipped the only way a workshop can add an account to its own chart.
+
+**C3 is done, and it is the module that stopped parking work.** **Transactions**
+— key `journal` — is Receipt, Payment and the journal voucher, three §2A
+workspaces under one card on the **Staff** shape: one root each, mounted lazily
+on the first click of a tab, each workspace registering Escape under its own key
+while the module registers `journal`. It opens on Receipt, which is the one done
+most. The four tabs of transaction list it used to carry are **gone rather than
+moved** — Sales, Purchase, Expenses and the Day Book already draw all of them
+(§5.1).
+
+Receipt and Payment are **one implementation rendered twice**: one
+[partials/settlement-section.blade.php](resources/views/partials/settlement-section.blade.php)
+included with a `$direction`, and one factory in
+[pages/journal.js](resources/js/pages/journal.js) called twice, each call closing
+over its own state — `pages/counterparty.js`'s rule, for the reason that file
+records. The direction decides the endpoint, the party's role and the wording and
+nothing else, because the server does not either: `/transactions/receipt` and
+`/transactions/payment` are two routes over one `StoreSettlementRequest`.
+
+**Which invoice a cheque was for is answered after the fact, in the drawer, and
+nothing guesses it.** That closes M16: `GET /transactions/{id}/open-bills` and
+`POST /transactions/{id}/allocate` had been built and tested with no caller
+anywhere. The panel is drawn from **two lists merged**, and this is the part that
+is wrong in a way that looks right — `due` on an open bill is net of every
+allocation *including this settlement's own*, so a bill the receipt has already
+paid off in full is not open any more and is missing from the picker unless the
+allocations already on the settlement are merged in beside it. `openBills` now
+carries them in its meta. A row's ceiling is what is still owing plus what this
+settlement is holding against it, and an allocation **replaces** the whole set,
+so what is sent is every row with an amount on it and not only the ones touched.
+
+A receipt naming no bills is applied oldest first, which is right far more often
+than not and is still a decision — so the form **states what it did** in a line
+above the cleared fields, with a control that opens the drawer to change it.
+§2A.8 clears the form the instant it posts, and a toast is gone before somebody
+has read the amount.
+
+**No settlement and no journal voucher can be parked.** Money that has moved is
+a fact, not a work in progress — the judgement M22 already makes about a payroll
+run — and a parked receipt is a cash box that disagrees with the books for as
+long as nobody authorises it. A draft that predates the conversion is still
+openable and can be posted or discarded from the drawer; this module creates
+none, and neither does a workshop bill.
+
+That is narrower than it was first written down. This paragraph claimed there was
+no "save as draft" left anywhere in the product, and there is: the shared bill
+document still offers it, so **Sales and Purchase can still park a bill**.
+Insights' parked-draft worklist is therefore not yet a set that only shrinks.
+Removing the control from those two is a product decision nobody has taken;
+saying it had already happened was a documentation error.
+
+One refusal is deliberate and worth knowing before somebody "fixes" it: a
+settlement **cannot be left unallocated while the party has open bills**. An
+empty `allocations` array means "oldest first" to the server, not "allocate
+nothing", on the way in as well as afterwards — so the drawer refuses to send a
+cleared grid rather than silently doing the opposite of what it looks like.
+
+C3 also gave [components/party-picker.js](resources/js/components/party-picker.js)
+two things it had never needed. Its ids are **unique per mount**, because this is
+the first module with more than one picker attached at once — a tab swap hides a
+section rather than detaching it, and fixed ids meant a `<label for>` pointing
+into another section. And it takes **`role: null`** for the voucher's optional
+counterparty, which paints no position line and offers no "+ Add": `outstanding`
+has a receivable half and a payable half and nothing would say which to read, and
+quick-party never asks which role a record is — the module it was opened from
+decides, and a journal has not decided.
+
+**C2 is done, and what it deleted matters more than what it built.** The Bills
+module was the whole transaction list; it is now **Expenses** and nothing else,
+because Sales lists invoices and credit notes, Purchase lists bills and debit
+notes, and Insights' Day Book lists every posted document — a fourth copy would
+have been three screens answering one question (§5.1). The key stays `bills`,
+which is the module's address; only the label changed. Two smaller things it
+settled: a **listing does not load ledger entries**, so the expense account is a
+server-side `account_id` filter and never a column — reach for that pattern
+before widening a repository's eager loads; and the expense form now sends a
+**`client_ref`** minted per document and reused on every retry, which every write
+form in this application should, or a request that times out after the server has
+posted puts the same document in the books twice.
+
+**C1 is done, and two of its decisions bind what comes next.** A module with a
+**single record** — Settings is the only one so far — declares **only
+`data-ws-list`** and mounts `canCreate: false`, so the workspace lands on it and
+paints no switch control. Do not add a single-surface mode to
+[workspace.js](resources/js/workspace.js) for the next one. And a module whose
+**context belongs beside the create form** puts it there: Opening balances keeps
+the owner's stake, the go-live date and the trial balance on the *form*, because
+they are what somebody about to declare their whole financial history reads
+before they commit and what they want to see the instant they have. That is also
+why it subscribes to the bus with `onChange` rather than `refreshOn` — `refreshOn`
+refreshes a list when the list is next shown, and tiles on the form would stay
+wrong. `/workspace` announces `ledger` for the same reason: the financial year,
+the timezone and `books_start_date` define the period every statement is measured
+over, so saving that screen makes a held report wrong without a figure having
+moved.
+
+**C4 is done, and there is no page shell left.** **Jobs** is the bench — receive
+a motor, move it along, write parts onto it, quote, get the quotation approved,
+bill it — and it is the workshop's actual trade, which nobody could reach at all
+until now. The create form takes a motor in, the bench is behind "Show list", and
+a job opens in a drawer carrying the pipeline, the parts, the estimate and
+Generate bill.
+
+**The bill is a level-1 pane on the create surface, not a state of the drawer.**
+The shared document is a two-column form with a searched item picker, a line
+table, a payment split and a sticky totals panel, and §2.1 calls exactly that
+inside a dialog a scroll trap. So the form surface holds two panes — booking a
+motor in, and billing one — with one shown at a time, which is §2A.2's judgement
+applied one level down.
+
+**The lines are sent only when the operator changed them, and this is the part
+that is wrong in a way that looks right.** `POST {job}/bill` pairs each part with
+the invoice line it became **by position**, and that only holds while the lines
+are the ones `billPayloadFor()` produced — so `JobService::bill()` marks nothing
+at all when the payload carries an `items` key, which the shared document always
+builds. The counter did exactly that, which means **no bill ever raised in this
+product had marked a part as billed**: the same bearings were billable again the
+week after. `pages/jobs.js` fingerprints the lines when they load, as scaled
+integers rather than parsed floats, and omits `items` while they are untouched.
+Where a rate really was argued down the lines are sent, the invoice posts, and
+the parts stay on the job card — the service's deliberate safe way to be wrong,
+and the banner says so before anybody presses post.
+
+The endpoint also had to learn the rest of the document. `BillJobRequest` named
+six keys per line and nothing else, so a line's inclusive-of-tax flag, a
+percentage line discount, a discount on the whole repair and **who did the work**
+were all being dropped on the floor. The last is the one that matters: a rewind
+is the canonical case for M22's attribution, and it was guaranteed to be lost on
+exactly the document it belongs on. `WorkshopJobController::bill()` now syncs the
+attribution inside the same transaction as the posting, as
+`TransactionController::store()` does.
+
+Two more endpoints had no caller anywhere and now do: `PATCH` and `DELETE` on a
+job. Correcting the card is a *state* of the drawer with the create form adopted
+into it (`adoptForm()`, so the fields exist once); the customer and the received
+date are inline-only, because `UpdateJobRequest` accepts neither.
+
+**And the counter is gone.** `/bills/new` was the last page shell in the
+application, kept alive through C2 only because it was the one screen that could
+raise a workshop bill. The route, `resources/views/bills/new.blade.php` and
+`pages/bill-counter.js` are deleted, and the two links that pointed at it —
+"Create sale" on Customers, "Create purchase bill" on Vendors — open the Sales
+and Purchase cards in the mounted shell with `?party=`, which is a module swap
+and not a document load (§1.1).
+
+One thing the Jobs card deliberately does **not** do yet: hand the customer their
+invoice. `#invoice-preview` is Sales' drawer and about three hundred lines of
+`pages/sales.js`, and borrowing it — which the one-sheet rule above requires of
+the next module that hands a customer a document — means extracting that into a
+component first. A job bill states its number and total above the cleared form
+with a link back to the job; printing it is Sales' screen until then.
+
+**History went on ahead of C7, and it is the read-mostly rule at its strictest.**
+**History** — key `audit` — is one filtered list and nothing else: no create, no
+drawer, no detail modal, because an entry *is* its detail. It mounts with
+`canCreate: false` and declares only `data-ws-list`, so the workspace lands on the
+table and paints no switch control — and here that is not a permission decision
+somebody could widen later, because there is no POST, PATCH or DELETE anywhere in
+its API group and there cannot be. Entries arrive through model events and the
+model refuses an UPDATE and a DELETE.
+
+Two things the conversion changed, and the first is wrong in a way that looks
+right. The filter option lists are **rebuilt rather than appended to**: `refreshOn`
+brings the module back for another `loadMeta()` whenever something it is a copy of
+was written, and appending would offer every kind, action and person a second
+time — then a third. The current choice is put back afterwards, or a refresh would
+silently widen the filter somebody is reading through. And `refreshOn` names
+`items`, `parties`, `staff`, `ledger` and `transactions`, but **not `stock`**: a
+stock movement is a posted document's consequence, and a posted document has no
+entry on this trail at all.
+
+**C5 is done, and it is the only step that removed a key.** **Accounting** —
+key `accounts` — now carries what **Ledger** used to. They were one question at
+two zoom levels, and the old code said so itself: this drawer showed ten entries
+because "the full statement is the Ledger screen's job". Two cards would both
+have answered "what does this account stand at", with two period pickers and two
+trial-balance renderers between them (§5.1). So `ledger` is **gone from
+[config/modules.php](config/modules.php)** — do not put it back — and its
+redirect is registered by hand in [web.php](routes/web.php), because the loop
+there declares one per module the registry still names.
+
+It opens on the **account form**, which is the only way in the whole product to
+add an account to a chart: `POST /accounts` has exactly one caller and it is
+[pages/accounts.js](resources/js/pages/accounts.js). Behind "Show list" are
+**two views over one period picker** — the chart, grouped by type, and the trial
+balance with its reconciliation *stated* rather than left to be inferred from two
+columns. A row on either opens the same drawer, and the edit is a **state** of
+that drawer with the create form adopted into it, as Jobs does.
+
+Three of its decisions are load-bearing, and each is wrong in a way that looks
+right. **The search box and the archived select narrow the chart and are hidden
+on the trial balance**: a trial balance's totals come from the server over every
+account with movement, archived ones included, so filtering its rows in the
+browser stops the columns adding up to the figures beneath them. **The chart is
+fetched whole, with `is_active` deliberately unsent** — an archived account still
+owns its code, and asking only for the active ones let the form's next-free-code
+suggestion offer a number the server then refused, a 422 on a field the screen
+had filled in itself. And **the second grant removes rather than blanks**: the
+card is `READ:ACCOUNTS`, every figure on it is `READ:LEDGER`, and without the
+second the balance column, the period picker and the whole trial-balance view are
+taken out of the DOM — a column of dashes is a claim about the books, not about
+the reader.
+
+What it **deleted** matters as much: the Journal Entries tab, its drawer and its
+`READ:TRANSACTIONS` gating are gone rather than moved, because every row of that
+list is on Insights' Day Book. The per-row action menu went with it — a row opens
+the drawer and the drawer holds the actions, which is what every other converted
+module does (§7.4). See [accounting-module.md](docs/accounting-module.md) and
+[ledger-module.md](docs/ledger-module.md).
 
 **Signing in is a passkey first and a password second, and the asymmetry is
 deliberate.** A passkey — fingerprint, face or screen lock — is checked by
@@ -771,6 +1053,17 @@ and that is the whole safeguard. See
 It deliberately records **no line grain, no hours and no piece rate**: the moment
 a share of the bill lands in that table it is an input to somebody's pay, and pay
 is computed from a rate and an attendance sheet in one place.
+
+**A row in it is a trade, so anything counted off it counts documents, not
+rows.** Somebody who fitted a motor and wound it is two rows on one invoice, and
+the throughput figures counted the rows — which made a two-trade person read as
+twice as productive as somebody doing identical work and added the same invoice
+into their value twice. De-duplicate the rows, never the aggregate: a
+`sum(distinct total)` collapses two invoices that come to the same amount, which
+on a counter charging ₹500 for a service happens daily. And an invoice naming a
+fitter *and* a winder is whole in **both** their rows, so a per-person column is
+read across and never summed — the workshop's own total belongs beside it, which
+is what `/insights/people`'s `work` block is for.
 
 **Sales deliberately has no quotation, no delivery challan, no recurring invoice
 and no e-invoice.** A quotation and a challan each want their own numbering and

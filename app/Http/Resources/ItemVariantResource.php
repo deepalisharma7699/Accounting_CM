@@ -40,11 +40,18 @@ class ItemVariantResource extends JsonResource
             // Eloquent's own column bag — see ItemVariant::attributeBag().
             'attributes' => $this->attributeBag(),
 
-            // Decimal strings, and null where genuinely unpriced: a motor rewind
-            // is quoted per job, and a zero would say "free".
+            // Scanned at the counter, and sent exactly as it was stored: a
+            // barcode is not case-folded, because it has to keep matching the
+            // label it was read from.
             'barcode' => $this->barcode,
 
+            // Decimal strings, and null where genuinely unpriced: a motor rewind
+            // is quoted per job, and a zero would say "free".
             'sell_price' => $this->sell_price === null ? null : (string) $this->sell_price,
+            // What the workshop expects to pay, never what stock cost. The cost is
+            // M8's weighted average and is not on this payload at all — see the
+            // note above on why no quantity and no cost appear here.
+            'purchase_price' => $this->purchase_price === null ? null : (string) $this->purchase_price,
             'markup_percent' => $this->markup_percent === null ? null : (string) $this->markup_percent,
             'reorder_level' => $this->reorder_level === null ? null : (string) $this->reorder_level,
             // The hard floor, distinct from the reorder level above it: one is

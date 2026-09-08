@@ -73,9 +73,9 @@
                         <label for="quick-gst" class="field-label">GST rate</label>
                         <div class="relative">
                             {{-- See the note on the same field in modules/items.blade.php:
-                                 a greyed numeral in this box reads as a filled-in
-                                 value and saved 0%. --}}
-                            <input id="quick-gst" name="gst_rate" type="text" inputmode="decimal"
+                                 prefilled as a real value, because a greyed numeral
+                                 in this box reads as a filled-in one and saved 0%. --}}
+                            <input id="quick-gst" name="gst_rate" type="text" inputmode="decimal" value="18"
                                    class="field-input pr-8 text-right font-mono" placeholder="Rate in %">
                             <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground">%</span>
                         </div>

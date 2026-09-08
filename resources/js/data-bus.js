@@ -46,11 +46,12 @@
 /**
  * The kinds of fact a screen can hold a copy of.
  *
- * `ledger` and `staff` have no subscriber yet — the modules that would hold a
- * copy of those are either off (§ the hidden ten) or refresh their own sections
- * already. They are named here anyway, because the announcement is what has to
- * be right: a write that reports nothing is invisible, and the module that comes
- * to hold that data later only has to subscribe.
+ * `ledger` is held by Opening balances, whose position is a copy of the books
+ * and of the go-live date on the settings screen. `staff` has no subscriber yet
+ * — the module that would hold a copy of it refreshes its own sections already.
+ * It is named here anyway, because the announcement is what has to be right: a
+ * write that reports nothing is invisible, and the module that comes to hold
+ * that data later only has to subscribe.
  */
 const RESOURCES = ['stock', 'items', 'transactions', 'parties', 'ledger', 'staff'];
 
@@ -91,8 +92,14 @@ const WRITES = [
     */
     [/^\/transactions(\/|\?|$)/, ['transactions', 'stock', 'parties', 'ledger']],
 
-    // Parts issued to a job leave the shelf like anything else.
-    [/^\/workshop-jobs(\/|\?|$)/, ['transactions', 'stock']],
+    /*
+    | Parts issued to a job leave the shelf like anything else — and the same
+    | prefix raises the invoice for them. `{job}/bill` posts a sale through the
+    | ordinary engine, so it moves what the customer owes and the ledger with it;
+    | listing only the first two here meant a workshop bill left a held Customers
+    | list and a held statement a repair out of date.
+    */
+    [/^\/workshop-jobs(\/|\?|$)/, ['transactions', 'stock', 'parties', 'ledger']],
 
     // A new variant is a new row on the stock screen, at a position of zero.
     [/^\/items(\/|\?|$)/, ['items', 'stock']],
@@ -113,6 +120,15 @@ const WRITES = [
     [/^\/staff(\/|\?|$)/, ['staff', 'ledger']],
 
     [/^\/accounts(\/|\?|$)/, ['ledger']],
+
+    /*
+    | The workshop's own settings. It posts nothing, and it is listed anyway:
+    | the financial year and the timezone define the period every statement and
+    | every Insights panel is measured over, and `books_start_date` is the day
+    | the books begin — so saving this screen can make a held report wrong
+    | without a single figure having moved.
+    */
+    [/^\/workspace(\/|\?|$)/, ['ledger']],
 ];
 
 /**

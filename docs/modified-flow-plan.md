@@ -1,3 +1,30 @@
+> **Historical record — not a status document.**
+>
+> This plan shipped. What it built is M16–M23, and where each of those stands
+> now is in [implementation-roadmap.md](implementation-roadmap.md), which is the
+> one plan for the product and the only place a status is kept current. Do not
+> update the ticks below; update the roadmap.
+>
+> What is still worth reading here is **Part 1 — the eight decisions (D1–D8)**.
+> They are the reasoning behind workshop jobs being their own module, parts
+> moving stock at billing rather than at fitting, allocations having their own
+> table, returns being their own transaction types, negative stock being
+> refusable, and duplicate protection being a client-generated reference. Read
+> them before changing any of it.
+>
+> Two things in the text below are now wrong, and are left in place rather than
+> quietly edited because the reasoning around them is still useful:
+>
+> - **D8 — "the billing screen becomes a full page".** The application is now a
+>   single dashboard shell with no page routes for modules (CLAUDE.md §1). The
+>   counter at `/bills/new` was the last survivor of that decision and was
+>   retired by the roadmap's **C4**. The objection D8 was making — that a modal cannot
+>   host a search-first picker, a running total and a confirmation step — is
+>   answered by the level-1 workspace, not by a page.
+> - **This document's own "M22 · Verification".** Its numbering ran ahead of the
+>   product's: the roadmap's M22 is the Staff module. That verification step is
+>   now scheduled as **C8**.
+
 # Implementation Plan — "Modified Flow" (workshop POS redesign)
 
 Plan for `docs/modified flow.md`. Written after auditing the existing code, so it

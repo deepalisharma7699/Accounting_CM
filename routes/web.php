@@ -120,12 +120,15 @@ Route::get('/i/{token}', PublicInvoiceController::class)
     ->name('invoices.public');
 
 /*
-| The counter — M20, decision D8. Still a page of its own this pass: a modal
-| cannot host a search-first item picker, a running total, a keyboard flow and a
-| confirmation step without becoming a scroll trap. It becomes the Bills module's
-| level-1 create form in the follow-up, and this route goes with it.
+| The counter is gone, and with it the last page shell in the application.
+|
+| It existed for one reason after the Purchase and Sales modules took over its
+| ordinary work: it was the only screen that could raise a **workshop bill**.
+| C4 moved that path onto the Jobs card, where the invoice is raised from the
+| job it came off — so `/bills/new`, `resources/views/bills/new.blade.php` and
+| `pages/bill-counter.js` went together. Everything below is a redirect into the
+| mounted shell, which is now the whole of the authenticated application.
 */
-Route::view('/bills/new', 'bills.new')->name('bills.create');
 
 /*
 | Where every module used to live.
@@ -148,3 +151,13 @@ foreach (array_keys(Modules::declared()) as $module) {
 }
 
 Route::redirect('/parties', '/dashboard#customers')->name('parties.index');
+
+/*
+| Two screens that were merged into a card rather than converted onto one of
+| their own, so the loop above no longer declares them: `parties` became
+| Customers and Vendors, and `ledger` became the trial-balance view of
+| Accounting (C5). Each redirects one step further along the same chain rather
+| than being deleted — the route names are what the rest of the application
+| links by, and a missing one is a 500 where a redirect is a shrug.
+*/
+Route::redirect('/ledger', '/dashboard#accounts')->name('ledger.index');

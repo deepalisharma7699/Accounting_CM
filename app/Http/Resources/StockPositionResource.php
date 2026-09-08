@@ -19,6 +19,13 @@ use Illuminate\Http\Resources\Json\JsonResource;
  * Low stock is a purchasing decision; negative stock is a data problem — a sale
  * recorded before its purchase — and a screen that showed them the same way
  * would train people to ignore the second.
+ *
+ * `is_below_minimum` is separate for the same kind of reason and a different
+ * one. `reorder_level` is when to order and `min_stock` is when to stop what you
+ * are doing and go and get some, so a row carries **both levels and both
+ * verdicts** rather than one status the client has to unpick. Neither is
+ * recomputed client-side: the levels are on the variant and the arithmetic that
+ * compares them is {@see StockPosition}'s, once.
  */
 class StockPositionResource extends JsonResource
 {
@@ -66,10 +73,12 @@ class StockPositionResource extends JsonResource
             'average_cost' => $this->position->averageCost()->amount(),
 
             'reorder_level' => $this->position->reorderLevel?->amount(),
+            'min_stock' => $this->position->minStock?->amount(),
             'sell_price' => $this->variant->sell_price === null ? null : (string) $this->variant->sell_price,
 
             'has_stock' => $this->position->hasStock(),
             'is_low' => $this->position->isLow(),
+            'is_below_minimum' => $this->position->isBelowMinimum(),
             'is_negative' => $this->position->isNegative(),
         ];
     }

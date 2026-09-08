@@ -43,7 +43,7 @@ class IndexStockRequest extends FormRequest
             // Archived variants keep their stock, so this defaults to active-only
             // rather than enforcing it.
             'is_active' => ['nullable', 'boolean'],
-            'status' => ['nullable', Rule::in(['low', 'negative', 'out', 'in_stock'])],
+            'status' => ['nullable', Rule::in(['low', 'below_minimum', 'negative', 'out', 'in_stock'])],
             'sort' => ['nullable', Rule::in(['name', 'quantity', 'value', 'cost'])],
             'direction' => ['nullable', Rule::in(['asc', 'desc'])],
             'per_page' => ['nullable', 'integer', 'between:1,200'],

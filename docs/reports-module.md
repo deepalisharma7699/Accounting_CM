@@ -124,6 +124,20 @@ Unfiltered by period, deliberately. A draft is outstanding work rather than an
 event, and the one from three months ago is precisely the one somebody needs to
 see; hiding it because the date picker says "this month" would defeat the purpose.
 
+**Since C3 no settlement and no journal voucher creates one**, and since C4 no
+workshop bill does either: money that has moved is a fact rather than a work in
+progress. What still can is the **shared bill document** — Sales and Purchase
+both offer "Save as a draft" — so this is a worklist that grows from two screens
+and shrinks from everywhere else.
+
+> A note for anyone reading the C3 record: it claimed for a while that nothing in
+> the product parked a transaction any more, and that was wrong. Removing the
+> control from Sales and Purchase is a product decision nobody has taken.
+
+The one place a parked draft can be acted on is the Transactions drawer, which
+offers **Post it** and **Discard draft** for a document that is still one. This
+tab stays read-only, as every statement here is.
+
 ### What "stale" means, and why it is a warning
 
 A fortnight, and it is not an expiry.

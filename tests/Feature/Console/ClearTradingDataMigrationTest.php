@@ -217,6 +217,39 @@ class ClearTradingDataMigrationTest extends TestCase
         $this->migration()->down();
     }
 
+    /**
+     * The second lock, and the one that survives the file being moved back.
+     *
+     * Being outside `database/migrations` is what stops an ordinary `migrate`
+     * reaching this at all. This is what stops a `--path` pointed at the
+     * directory by accident, and it has to refuse *before* anything is deleted
+     * rather than roll back afterwards — a transaction that rolls back is still
+     * a transaction somebody has to notice.
+     */
+    #[Test]
+    public function it_refuses_to_run_unless_it_has_been_asked_for_explicitly(): void
+    {
+        $this->buildAWorkshopsHistory();
+
+        putenv('ALLOW_CLEAR_TRADING_DATA');
+
+        $refused = null;
+
+        try {
+            $this->migration()->up();
+        } catch (\RuntimeException $exception) {
+            $refused = $exception;
+        }
+
+        $this->assertNotNull($refused, 'The cleanup ran without being asked for.');
+        $this->assertStringContainsString('Refusing to run', $refused->getMessage());
+
+        // And it refused before touching anything, not by unwinding afterwards.
+        $this->assertGreaterThan(0, DB::table('parties')->count());
+        $this->assertGreaterThan(0, DB::table('transactions')->count());
+        $this->assertGreaterThan(0, DB::table('item_variants')->count());
+    }
+
     /* ---------------------------------------------------------------------
      | Harness
      |-------------------------------------------------------------------- */
@@ -379,12 +412,31 @@ class ClearTradingDataMigrationTest extends TestCase
 
     private function runTheMigration(): void
     {
-        $this->migration()->up();
+        /*
+        | The file refuses unless it has been asked for explicitly, so this asks
+        | in exactly the way `database/manual/README.md` documents. Unset again
+        | afterwards: a variable left standing would make the refusal test below
+        | pass for the wrong reason if the two ever ran in that order.
+        */
+        putenv('ALLOW_CLEAR_TRADING_DATA=yes');
+
+        try {
+            $this->migration()->up();
+        } finally {
+            putenv('ALLOW_CLEAR_TRADING_DATA');
+        }
     }
 
+    /**
+     * Loaded from `database/manual`, not `database/migrations`.
+     *
+     * It is out of the automatic path on purpose — restoring a dump taken before
+     * it ran and then migrating would empty the books a second time, during a
+     * recovery. The file's own header says the rest.
+     */
     private function migration(): object
     {
-        $path = collect(glob(database_path('migrations/*_'.self::MIGRATION.'.php')))->firstOrFail();
+        $path = collect(glob(database_path('manual/*_'.self::MIGRATION.'.php')))->firstOrFail();
 
         return require $path;
     }

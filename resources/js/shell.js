@@ -41,6 +41,9 @@ import { $, $$, esc, toast } from './ui';
 
 /** Page modules are loaded lazily so the dashboard never ships the CRUD code. */
 const PAGES = {
+    // C5 — the chart of accounts and the trial balance, merged. There is no
+    // `ledger` entry: it was the same question at a second zoom level, and its
+    // screen is the second view of this one.
     accounts: () => import('./pages/accounts'),
     audit: () => import('./pages/audit'),
     bills: () => import('./pages/bills'),
@@ -52,7 +55,6 @@ const PAGES = {
     items: () => import('./pages/items'),
     jobs: () => import('./pages/jobs'),
     journal: () => import('./pages/journal'),
-    ledger: () => import('./pages/ledger'),
     opening: () => import('./pages/opening'),
     purchase: () => import('./pages/purchase'),
     roles: () => import('./pages/roles'),
@@ -80,7 +82,7 @@ let current = null;
  * The open module's deep-link intent — `?type=sale`, `?new=expense`.
  *
  * Held here rather than read from `location.search`, because a module's URL is
- * now a fragment of the dashboard's: `/dashboard#bills?type=sale`. Modules read
+ * now a fragment of the dashboard's: `/dashboard#jobs?status=ready`. Modules read
  * it through {@link moduleParams}.
  */
 let params = new URLSearchParams();
@@ -301,10 +303,9 @@ async function mount(key) {
  * What a module was opened *for*, when it was opened by a link rather than by
  * its card.
  *
- * The dashboard's attention list points at `/bills?payment=overdue`; the shell
- * turns that into `/dashboard#bills?payment=overdue` and opens the module in
- * place. A module reads its intent here instead of from `location.search`, which
- * belongs to the shell now.
+ * An attention list points at `/jobs?overdue=1`; the shell turns that into
+ * `/dashboard#jobs?overdue=1` and opens the module in place. A module reads its
+ * intent here instead of from `location.search`, which belongs to the shell now.
  */
 export function moduleParams() {
     return params;
@@ -440,9 +441,9 @@ export function initShell() {
         /*
         | A link to where a module used to live.
         |
-        | The dashboard's tiles and its attention list point at `/bills?type=sale`
-        | and the like, and some of those hrefs come from the API rather than
-        | from markup here. Following one would be a document load into a
+        | A link can point at `/jobs?status=ready` and the like, and some of
+        | those hrefs come from the API rather than from markup here. Following
+        | one would be a document load into a
         | redirect into another document load — so the shell recognises the path
         | and opens the module in place, intent and all (§1.1, §3.2).
         |
@@ -521,7 +522,7 @@ export function initShell() {
     /*
     | A deep link. `/items` redirects to `/dashboard#items`, and a bookmark of
     | either lands here — so the fragment is read once on boot and opened without
-    | a second load. `#bills?payment=overdue` carries an intent with it.
+    | a second load. `#jobs?overdue=1` carries an intent with it.
     */
     const [key = '', search = ''] = location.hash.replace(/^#/, '').split('?');
 

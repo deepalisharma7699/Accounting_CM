@@ -1,16 +1,16 @@
 /**
  * Writing a bill — the document engine behind every screen that raises one.
  *
- * This is the counter's machinery, lifted out of `pages/bill-counter.js` whole:
- * the lines, the server-priced running total, the confirmation, the payment
- * split, the autosaved draft and the post. What is left in the counter is the
- * part that is genuinely the counter's — the sale/purchase/workshop chooser and
- * everything about billing a job card.
+ * This is the counter's machinery, lifted whole out of the page that used to
+ * live at `/bills/new`: the lines, the server-priced running total, the
+ * confirmation, the payment split, the autosaved draft and the post.
  *
  * It moved because a second caller arrived. The Purchase module raises exactly
  * this document with the direction fixed, and the alternative was a copy —
  * which, on the evidence of the two counterparty forms this codebase carried
- * until last week, would have drifted before anyone noticed.
+ * until last week, would have drifted before anyone noticed. Sales was the
+ * third, and the Jobs card the fourth; the counter itself was retired at C4,
+ * because a workshop bill is now raised from the job it came off.
  *
  * ## The four decisions it inherits, unchanged
  *

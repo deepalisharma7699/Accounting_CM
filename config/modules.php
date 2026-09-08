@@ -22,20 +22,44 @@
 |
 | ## `enabled`
 |
-| Ten are converted to the §2A flow and on: Sales, Purchase, Items, Stock,
-| Customers, Vendors, Insights, Staff, Users, Roles. Ten are off: Bills, Jobs,
-| Transactions, Accounting, Ledger, Uploads, Workshops, Settings, Opening
-| balances, History. They still open on a list with a modal create, which is the
-| *only* reason each is off — turning one back on is `'enabled' => true` and
-| nothing else.
+| Seventeen are converted to the §2A flow and on: Sales, Purchase, Items, Stock,
+| Customers, Vendors, Insights, Staff, Users, Roles, Settings, Opening balances,
+| Expenses, Transactions, Jobs, Accounting and History. Two are off: Uploads and
+| Workshops. They still open on a list with a modal create, which is the *only*
+| reason each is off — turning one back on is `'enabled' => true` and nothing
+| else.
 |
 | **Off is not unbuilt.** Every module below has a finished backend, a finished
 | `pages/*.js`, a fragment view and tests; several are the only way to reach a
-| capability the workshop needs (an expense, a receipt not tied to a bill, the
-| audit trail, go-live balances). What each one still holds that no enabled card
+| capability the workshop needs (a receipt not tied to a bill, a job card, the
+| audit trail). What each one still holds that no enabled card
 | covers, and what has already moved to one that is on, is written up in
 | docs/hidden-modules.md — read it before converting one, because part of some of
 | these screens must *not* be rebuilt (§5.1).
+|
+| **The rest are scheduled**, go-live first, as C1–C7 in Part E of
+| docs/implementation-roadmap.md. **C1 — Settings and Opening balances — is
+| done**, so a workshop can go from sign-up to a correct opening trial balance
+| without a developer; **C2 — Bills, reduced to expenses — is done**, so its P&L
+| has overheads in it; **C3 — Transactions — is done**, so money that arrives
+| without a bill has a home and the books have their correction mechanism back;
+| **C4 — Jobs — is done**, so the workshop's own trade is on a card and
+| `/bills/new` is gone; and **C5 — Accounting, with Ledger merged into it — is
+| done**, so a workshop can add an expense head of its own and an accountant can
+| be shown a trial balance that reconciles. What is left:
+|
+|   C6  uploads
+|   C7  tenants
+|
+| **History went on ahead of its step.** It was the read-mostly half of C7 and
+| needed no re-flow to speak of — one list, no create, no modal — so it took
+| `mountWorkspace(..., { canCreate: false })` and the flag. C7 is now Workshops
+| alone.
+|
+| C5 changed this file by more than a flag: it **removed the `ledger` key**, and
+| that is the only removal any of these steps makes. Do not put it back. The
+| redirect from `/ledger` is registered by hand in routes/web.php, because the
+| loop below only declares one per module the registry still names.
 |
 | Off means off, not merely unlisted. A disabled module gets no card, and its
 | fragment route answers 404 — a URL somebody kept must not be a way round the
@@ -93,38 +117,50 @@ return [
         ],
 
         /*
-        | Bills — what the workshop sells, and what it costs to be open.
+        | Expenses — what it costs the workshop to be open. C2.
         |
-        | **Purchases left this module** when Purchase was converted, and the
-        | reasoning is worth keeping. The note here used to say that one Bills
-        | module avoided making somebody "choose a transaction type before
-        | offering an invoice form". Under §2A that argument inverts: a module
-        | opens *on its create form*, so a combined module would have to open by
-        | asking sale-or-purchase — which is the ledger-shaped screen the
-        | objection was against. One card per document kind lands straight on the
-        | right form with the right counterparty and nothing to choose first.
+        | **This module lost everything except one thing, and kept the one that
+        | mattered.** It was "Bills": a transaction list spanning sales,
+        | purchases, expenses and both kinds of note. Purchases left when
+        | Purchase was converted, sales when Sales was, and the list itself is
+        | now answered three times over — Sales lists invoices and credit notes,
+        | Purchase lists bills and debit notes, and Insights' Day Book lists
+        | every posted document, including the journals neither of those shows.
+        | Rebuilding any of that here would have been §5.1's mistake.
         |
-        | What is left here is sales and expenses, and they still belong
-        | together: an expense is not a purchase — it is what it costs to be open
-        | rather than what was bought to sell — but both are written from the
-        | same counter by the same person, and neither justifies a card alone.
-        | This module is converted after Purchase, following the same shape.
+        | What was only ever here is **writing an expense**. An expense is not a
+        | purchase — it is what it costs to be open rather than what was bought
+        | to sell — and keeping the two apart is the only reason a P&L can
+        | separate gross margin from overheads. `/transactions/expense` has
+        | exactly one caller in the front end and it is this module.
+        |
+        | The **key stays `bills`** while the label says Expenses. The key is the
+        | module's address — the fragment route, the shell's lazy-import table
+        | and the `#bills` URL — and renaming an address to match a label breaks
+        | bookmarks to buy nothing.
         */
         'bills' => [
-            'label' => 'Bills',
-            'description' => 'Sales and expenses',
+            'label' => 'Expenses',
+            'description' => 'Rent, power and what it costs to be open',
             'icon' => 'receipt',
             'tone' => 'bg-violet-50 text-violet-600',
             'permission' => 'READ:TRANSACTIONS',
             'workspace' => true,
-            'enabled' => false,
+            'enabled' => true,
         ],
 
         /*
-        | The bench — M19. Gated on WORKSHOP_JOBS rather than on TRANSACTIONS,
-        | because a job has nothing in the books until somebody bills it. The
-        | split is what keeps "record the day's work" and "post to the ledger"
-        | separate authorities.
+        | The bench — M19, converted at C4. Gated on WORKSHOP_JOBS rather than on
+        | TRANSACTIONS, because a job has nothing in the books until somebody
+        | bills it. The split is what keeps "record the day's work" and "post to
+        | the ledger" separate authorities, and it survives inside the module:
+        | Generate bill additionally needs WRITE:TRANSACTIONS, which the route
+        | enforces.
+        |
+        | Turning this on is what retired `/bills/new`. The counter was the only
+        | screen that could raise a workshop bill, and it is now raised from the
+        | job it came off — so this card is the last page shell in the
+        | application becoming a card, and there are none left.
         */
         'jobs' => [
             'label' => 'Jobs',
@@ -133,9 +169,37 @@ return [
             'tone' => 'bg-amber-50 text-amber-600',
             'permission' => 'READ:WORKSHOP_JOBS',
             'workspace' => true,
-            'enabled' => false,
+            'enabled' => true,
         ],
 
+        /*
+        | Transactions — money that arrives or leaves without a document, and the
+        | books' own correction mechanism. C3.
+        |
+        | **This module lost its list and kept the two things only it had.** It
+        | was four tabs over every transaction, with the receipt, the payment and
+        | the voucher grid behind three buttons on top. Sales lists invoices and
+        | credit notes, Purchase lists bills and debit notes, Expenses lists
+        | expenses, and Insights' Day Book lists every posted document including
+        | the journals none of those show — a fifth copy here would have been
+        | four screens answering one question (§5.1).
+        |
+        | What survived is structural. A customer clearing three invoices with one
+        | cheque, or paying on account before anything is raised, had nowhere to
+        | go; and the manual journal voucher is what CLAUDE.md names as the
+        | correction mechanism for everything else in the books. Without it the
+        | only correction available anywhere was reversing a whole document.
+        |
+        | It also closes M16's hole: `POST /transactions/{id}/allocate` and
+        | `GET /transactions/{id}/open-bills` had no caller anywhere in the front
+        | end, so a receipt could be settled on the way *in* and never re-pointed
+        | afterwards. That screen is the drawer of a posted receipt or payment.
+        |
+        | Gated on TRANSACTIONS, the same grant Sales, Purchase and Expenses need,
+        | so adding this module re-seeds nothing. Re-pointing a receipt
+        | additionally wants UPDATE:TRANSACTIONS, which is the honest grant: it
+        | writes no journal entry and moves no balance.
+        */
         'journal' => [
             'label' => 'Transactions',
             'description' => 'Receipts, payments and journal vouchers',
@@ -143,7 +207,9 @@ return [
             'tone' => 'bg-blue-50 text-blue-600',
             'permission' => 'READ:TRANSACTIONS',
             'workspace' => true,
-            'enabled' => false,
+            // Converted (C3): three sections, each opening on its own create
+            // form with its list behind one switch control — the Staff shape.
+            'enabled' => true,
         ],
 
         /*
@@ -236,26 +302,29 @@ return [
             'enabled' => true,
         ],
 
+        /*
+        | Accounting — C5, and the one entry that swallowed another.
+        |
+        | There was a `ledger` key beside this one, carrying the trial balance
+        | and one account's running ledger. They were the same question at two
+        | zoom levels, so two cards would both have answered "what does this
+        | account stand at" and needed two period pickers and two trial-balance
+        | renderers between them (§5.1). The key is gone; the trial balance is
+        | the second view of this card, and `/ledger` still redirects — see
+        | routes/web.php, which registers that one by hand now.
+        |
+        | Gated on READ:ACCOUNTS, which is authority over the chart. Every figure
+        | inside additionally needs READ:LEDGER, and a holder of the first alone
+        | gets the chart with no figures on it at all.
+        */
         'accounts' => [
             'label' => 'Accounting',
-            'description' => 'Ledger, journal and the chart of accounts',
+            'description' => 'The chart of accounts, balances and the trial balance',
             'icon' => 'book-open',
             'tone' => 'bg-emerald-50 text-emerald-600',
             'permission' => 'READ:ACCOUNTS',
             'workspace' => true,
-            'enabled' => false,
-        ],
-
-        // Reading the whole financial position, which is a different authority
-        // from capturing events — hence LEDGER rather than TRANSACTIONS.
-        'ledger' => [
-            'label' => 'Ledger',
-            'description' => 'Trial balance, account by account',
-            'icon' => 'bar-chart',
-            'tone' => 'bg-blue-50 text-blue-600',
-            'permission' => 'READ:LEDGER',
-            'workspace' => true,
-            'enabled' => false,
+            'enabled' => true,
         ],
 
         /*
@@ -419,12 +488,15 @@ return [
         // platform admin has no workshop to configure.
         'workspace' => [
             'label' => 'Settings',
-            'description' => 'Identity, GSTIN and the financial year',
+            'description' => 'Identity, the financial year and trading rules',
             'icon' => 'settings',
             'tone' => 'bg-emerald-50 text-emerald-600',
             'permission' => 'READ:WORKSPACE',
             'workspace' => true,
-            'enabled' => false,
+            // Converted (C1). One record, so one surface: the module declares
+            // only `data-ws-list` and mounts with `canCreate: false`, landing
+            // straight on the form with no switch control to paint.
+            'enabled' => true,
         ],
 
         /*
@@ -440,7 +512,9 @@ return [
             'tone' => 'bg-amber-50 text-amber-600',
             'permission' => 'UPDATE:WORKSPACE',
             'workspace' => true,
-            'enabled' => false,
+            // Converted (C1): opens on the declaration, with every import ever
+            // run behind "Show list". The two-button discipline is unchanged.
+            'enabled' => true,
         ],
 
         /*
@@ -456,7 +530,10 @@ return [
             'tone' => 'bg-amber-50 text-amber-600',
             'permission' => 'READ:AUDIT',
             'workspace' => true,
-            'enabled' => false,
+            // Converted: read-mostly (§2A.10), so it opens on its list with no
+            // switch control. That is not a choice that could be widened —
+            // there is no POST, PATCH or DELETE anywhere in its API group.
+            'enabled' => true,
         ],
     ],
 ];

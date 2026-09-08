@@ -298,6 +298,19 @@
                  class="mt-3 hidden items-center gap-2.5 rounded-[10px] border border-amber-100 bg-amber-50 px-3 py-2.5">
                 <span class="shrink-0 text-amber-500"><x-icon name="alert-triangle" :size="14" /></span>
                 <p class="flex-1 text-[0.78125rem] font-medium text-amber-700" id="drawer-alert-text"></p>
+
+                {{-- Only ever shown for the review message, and only to somebody
+                     who may write items. Here as well as on the row menu because
+                     this is where a draft is actually read: the alternative is
+                     checking the product, closing the drawer, finding the row
+                     again and opening its menu.
+
+                     Gated in renderDrawerAlert() rather than by
+                     `data-requires-permission`: that gate works by toggling
+                     `hidden`, and so does the draft condition, so declaring both
+                     would leave whichever ran last as the answer. --}}
+                <button type="button" id="drawer-clear-draft"
+                        class="btn btn-ghost btn-sm hidden shrink-0 text-amber-700">Mark as checked</button>
             </div>
         </div>
 
@@ -327,6 +340,22 @@
         </div>
     </div>
 </div>
+
+{{--
+    Correcting what is on the shelf under one variant — level 3, over the drawer.
+
+    The form is not written here. It is `partials/stock-adjust.blade.php` and
+    `components/stock-adjust.js`, which is also the Stock screen's "Record a
+    count" — one act, entered two ways. This side types **what the count found**
+    and the component subtracts what the books say; Stock types the difference
+    directly. A second copy of a form that writes to the stock ledger is the last
+    thing this application should have two of (§5.1).
+
+    It is not an "edit quantity" field and there is deliberately no such thing
+    anywhere: what it posts is a stock adjustment like any other, through the
+    posting engine and the stock ledger (§4.3).
+--}}
+@include('partials.stock-adjust')
 
 {{--
     Editing an item family — level 2.
@@ -416,48 +445,11 @@
                     </div>
                 </div>
 
-                {{-- ── The category's own fields ────────────────────────────
-                     Built from the server's schema for the chosen category, never
-                     written here. This is the whole point of the module: an admin
-                     adds "Lumens" to a category and this section grows a Lumens
-                     box, with no change to this file. --}}
-                <section id="item-attributes-section" class="hidden rounded-[12px] border border-muted bg-muted/30 p-4"
-                         data-variant-half>
-                    <div class="mb-3 flex items-center justify-between gap-3">
-                        <h3 class="text-[0.8125rem] font-semibold text-foreground">
-                            Specification
-                            <span class="ml-1 font-normal text-muted-foreground" id="item-attributes-for"></span>
-                        </h3>
-                        <button type="button" class="btn btn-ghost btn-sm" id="item-attributes-configure"
-                                data-requires-permission="UPDATE:ITEMS">
-                            <x-icon name="settings" :size="14" />
-                            Configure fields
-                        </button>
-                    </div>
-                    <div id="item-attributes" class="grid grid-cols-1 gap-4 sm:grid-cols-2"></div>
-                    <p class="field-error hidden" data-error-for="attributes"></p>
-                </section>
-
-                {{-- ── Identification and pricing ───────────────────────────── --}}
+                {{-- ── How the product is identified and taxed ──────────────
+                     Everything here belongs to the *family*: one HSN code, one
+                     rate, one unit, however many things are on the shelf under
+                     it. What tells those apart is in the variants below. --}}
                 <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <div data-variant-half>
-                        <label for="item-sku" class="field-label">
-                            SKU <span class="font-normal text-muted-foreground">(optional)</span>
-                        </label>
-                        <input id="item-sku" name="sku" type="text" class="field-input"
-                               autocomplete="off" placeholder="e.g. MOT-5HP-1440">
-                        <p class="field-error hidden" data-error-for="sku"></p>
-                    </div>
-
-                    <div data-variant-half>
-                        <label for="item-barcode" class="field-label">
-                            Barcode <span class="font-normal text-muted-foreground">(optional)</span>
-                        </label>
-                        <input id="item-barcode" name="barcode" type="text" class="field-input"
-                               autocomplete="off" inputmode="numeric" placeholder="Scan or type">
-                        <p class="field-error hidden" data-error-for="barcode"></p>
-                    </div>
-
                     <div>
                         <label for="item-code" class="field-label">
                             Product code <span class="font-normal text-muted-foreground">(optional)</span>
@@ -476,41 +468,6 @@
                         <p class="field-error hidden" data-error-for="base_uom"></p>
                     </div>
 
-                    <div data-variant-half>
-                        <label for="item-purchase-price" class="field-label">
-                            Purchase price <span class="font-normal text-muted-foreground">(optional)</span>
-                        </label>
-                        <div class="relative">
-                            <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">₹</span>
-                            <input id="item-purchase-price" name="purchase_price" type="text" inputmode="decimal"
-                                   class="field-input pl-7 text-right font-mono" placeholder="0.00">
-                        </div>
-                        {{-- Says what it actually does, which is one thing.
-                             "For reference and price suggestions" promised a
-                             suggestion nothing makes: no screen reads this back,
-                             and a purchase line's rate deliberately never does —
-                             see docs/purchase-module.md. The cost the books use
-                             is the weighted average of what was really paid,
-                             derived from the stock movements. --}}
-                        <p class="mt-1.5 text-xs text-muted-foreground">
-                            Used as the value of any opening stock you record below. The cost the books carry
-                            is what you actually pay on purchases.
-                        </p>
-                        <p class="field-error hidden" data-error-for="purchase_price"></p>
-                    </div>
-
-                    <div data-variant-half>
-                        <label for="item-sell-price" class="field-label">
-                            Selling price <span class="font-normal text-muted-foreground">(optional)</span>
-                        </label>
-                        <div class="relative">
-                            <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">₹</span>
-                            <input id="item-sell-price" name="sell_price" type="text" inputmode="decimal"
-                                   class="field-input pl-7 text-right font-mono" placeholder="0.00">
-                        </div>
-                        <p class="field-error hidden" data-error-for="sell_price"></p>
-                    </div>
-
                     <div>
                         <label for="item-hsn" class="field-label" id="item-hsn-label">HSN code</label>
                         <input id="item-hsn" name="hsn_sac" type="text" inputmode="numeric" class="field-input"
@@ -521,12 +478,18 @@
                     <div>
                         <label for="item-gst" class="field-label">GST rate</label>
                         <div class="relative">
-                            {{-- The placeholder reads as an instruction, not as a
-                                 numeral. "18" sitting greyed in a right-aligned
-                                 monospace box is indistinguishable from a value
-                                 somebody has already accepted, and what it saved
-                                 was 0%. --}}
-                            <input id="item-gst" name="gst_rate" type="text" inputmode="decimal"
+                            {{-- Prefilled at the rate most of this trade charges,
+                                 as a real value and not a greyed placeholder.
+                                 This box used to suggest "18" in placeholder
+                                 grey, which is indistinguishable from a figure
+                                 somebody has already accepted and saved 0%; a
+                                 value that is actually there saves what it
+                                 shows. A category charging something else still
+                                 replaces it, and a figure typed here beats both
+                                 — see applyTypeToForm() in pages/items.js.
+                                 Cleared is still "you decide", which is what the
+                                 placeholder then says. --}}
+                            <input id="item-gst" name="gst_rate" type="text" inputmode="decimal" value="18"
                                    class="field-input pr-8 text-right font-mono" placeholder="Rate in %">
                             <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground">%</span>
                         </div>
@@ -571,62 +534,304 @@
                         </label>
                     </div>
 
-                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2" id="item-stock-fields" data-variant-half>
-                        <div>
-                            <label for="item-opening-stock" class="field-label">
-                                Opening stock <span class="font-normal text-muted-foreground">(optional)</span>
-                            </label>
-                            <div class="relative">
-                                <input id="item-opening-stock" name="opening_stock" type="text" inputmode="decimal"
-                                       class="field-input pr-14 text-right font-mono" placeholder="0">
-                                <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground"
-                                      data-uom-suffix></span>
-                            </div>
-                            {{-- Posted as an ordinary stock adjustment through the
-                                 same engine the stock screen uses, so there is no
-                                 second way for stock to come into existence. --}}
-                            <p class="mt-1.5 text-xs text-muted-foreground">
-                                What is already on the shelf. Recorded as a stock adjustment.
-                            </p>
-                            <p class="field-error hidden" data-error-for="opening_stock"></p>
-                        </div>
-
-                        <div>
-                            <label for="item-opening-cost" class="field-label">
-                                Opening stock cost <span class="font-normal text-muted-foreground">(per unit)</span>
-                            </label>
-                            <div class="relative">
-                                <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">₹</span>
-                                <input id="item-opening-cost" name="opening_cost" type="text" inputmode="decimal"
-                                       class="field-input pl-7 text-right font-mono" placeholder="0.00">
-                            </div>
-                            <p class="mt-1.5 text-xs text-muted-foreground">
-                                Defaults to the purchase price above.
-                            </p>
-                            <p class="field-error hidden" data-error-for="opening_cost"></p>
-                        </div>
-
-                        <div>
-                            <label for="item-reorder" class="field-label">
-                                Reorder level <span class="font-normal text-muted-foreground">(optional)</span>
-                            </label>
-                            <input id="item-reorder" name="reorder_level" type="text" inputmode="decimal"
-                                   class="field-input text-right font-mono" placeholder="0">
-                            <p class="mt-1.5 text-xs text-muted-foreground">Order more when it drops to this.</p>
-                            <p class="field-error hidden" data-error-for="reorder_level"></p>
-                        </div>
-
-                        <div>
-                            <label for="item-min-stock" class="field-label">
-                                Minimum stock <span class="font-normal text-muted-foreground">(optional)</span>
-                            </label>
-                            <input id="item-min-stock" name="min_stock" type="text" inputmode="decimal"
-                                   class="field-input text-right font-mono" placeholder="0">
-                            <p class="mt-1.5 text-xs text-muted-foreground">Never let it fall below this.</p>
-                            <p class="field-error hidden" data-error-for="min_stock"></p>
-                        </div>
+                    {{-- The day the shelf was counted, and there is one of it
+                         however many variants declare a quantity: they post a
+                         single stock adjustment between them, and a document has
+                         one date. Marked `data-opening-field` with the pairs in
+                         each variant block — together they are the whole of what
+                         an edit withholds, because opening stock is a transaction
+                         that posted once and is corrected from Stock afterwards.
+                         Everything else about a variant is editable. --}}
+                    <div class="max-w-xs" id="item-opening-date-field" data-opening-field>
+                        <label for="item-opening-date" class="field-label">Counted on</label>
+                        <input id="item-opening-date" name="opening_date" type="date" class="field-input">
+                        <p class="mt-1.5 text-xs text-muted-foreground">
+                            The day the shelf was counted. One stock adjustment covers every variant below.
+                        </p>
+                        <p class="field-error hidden" data-error-for="opening_date"></p>
                     </div>
                 </div>
+
+                {{-- ── The things on the shelf ──────────────────────────────
+                     A motor family is bought in three ratings and catalogued in
+                     one sitting. Saving the product and then adding each rating
+                     from the drawer is the two-screen shape this form exists to
+                     remove — and it is how the specification gets skipped: by the
+                     third rating nobody is re-typing the HP. --}}
+                <section id="item-variants-section" class="space-y-3">
+                    <div class="flex items-start justify-between gap-3">
+                        <div>
+                            <h3 class="text-[0.8125rem] font-semibold text-foreground">
+                                <span id="item-variants-title">Variants</span>
+                                <span class="ml-1 font-normal text-muted-foreground" id="item-variants-for"></span>
+                            </h3>
+                            <p class="mt-0.5 text-xs text-muted-foreground" id="item-variants-hint">
+                                The actual things you buy and sell. One is normal; add a block per rating or size.
+                            </p>
+                        </div>
+                        <div class="flex shrink-0 items-center gap-1">
+                            {{-- Shown while one variant of several is open, which
+                                 is the only time there is anywhere to go back to.
+                                 A product with exactly one has no list behind its
+                                 block, and a create has no list at all. --}}
+                            <button type="button" class="btn btn-ghost btn-sm hidden" id="item-variant-back">
+                                <x-icon name="chevron-left" :size="14" />
+                                All variants
+                            </button>
+                            {{-- One control for the whole form rather than one per
+                                 block: which fields a category asks for is the
+                                 category's business, and it is the same answer in
+                                 every block. Lands straight inside the category the
+                                 form is on — the shortest route from "this field is
+                                 missing" to the place it is added (§7.5). --}}
+                            <button type="button" class="btn btn-ghost btn-sm" id="item-attributes-configure"
+                                    data-requires-permission="UPDATE:ITEMS">
+                                <x-icon name="settings" :size="14" />
+                                Configure fields
+                            </button>
+                        </div>
+                    </div>
+
+                    {{-- Pane one: which variant.
+                         A product with several has no single set of boxes that
+                         could mean any one of them, so the half becomes a picker
+                         first. Drawn by pages/items.js from the same row renderer
+                         the drawer's Variants tab uses — the same four facts,
+                         asked in two places (§4.4). --}}
+                    <div id="item-variant-list" class="hidden space-y-2"></div>
+
+                    {{-- Pane two: the variant itself.
+                         One block per variant on a create, and exactly one — the
+                         one being edited — afterwards. §2A.2's judgement applied
+                         one level down: two panes, one on screen. --}}
+                    <div id="item-variants" class="space-y-3"></div>
+
+                    <button type="button" class="btn btn-secondary btn-sm" id="item-add-variant">
+                        <x-icon name="plus" :size="15" />
+                        Add another variant
+                    </button>
+
+                    {{-- One thing on the shelf, cloned per block by
+                         pages/items.js — which stamps the block's index onto
+                         every name, id, `for` and error slot. So a 422 about
+                         `variants.2.sell_price` lands in the third block rather
+                         than on a banner above five identical ones, and
+                         re-indexing after a removal is a walk over these hooks.
+                         Nothing here carries an index of its own. --}}
+                    <template id="item-variant-template">
+                        <div class="space-y-4 rounded-[12px] border border-muted bg-muted/20 p-4" data-variant-block>
+                            <div class="flex items-center justify-between gap-3">
+                                {{-- Two headings, one shown. A block on a create
+                                     is "Variant 2" and has no other name yet — the
+                                     number is also what its error keys are counted
+                                     in. One standing for something already on the
+                                     shelf takes that thing's own label. --}}
+                                <h4 class="text-[0.8125rem] font-semibold text-foreground">
+                                    <span data-variant-generic>Variant <span data-variant-number>1</span></span>
+                                    <span class="hidden" data-variant-name></span>
+                                </h4>
+                                {{-- From the second block only: a product with
+                                     nothing on the shelf under it cannot be sold,
+                                     priced or counted. --}}
+                                <button type="button" class="btn btn-ghost btn-sm hidden text-rose-600"
+                                        data-remove-variant>
+                                    <x-icon name="trash" :size="14" />
+                                    Remove
+                                </button>
+                            </div>
+
+                            {{-- What is on the shelf under this variant right
+                                 now — read-only, and from M8 rather than from
+                                 anything on this form. Filled only when the block
+                                 is bound to a variant that already exists,
+                                 because a quantity printed beside the boxes that
+                                 create one reads as a figure somebody may type
+                                 over. --}}
+                            <p class="hidden rounded-[10px] border border-border bg-secondary/40 px-3.5 py-2
+                                      text-[0.8125rem] text-secondary-foreground"
+                               data-variant-position></p>
+
+                            {{-- The category's own fields, built from the
+                                 server's schema and never written here. This is
+                                 the whole point of the module: an admin adds
+                                 "Lumens" to a category and every block grows a
+                                 Lumens box, with no change to this file. --}}
+                            <div class="hidden" data-variant-attributes-section>
+                                <p class="field-label">Specification</p>
+                                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2" data-variant-attributes></div>
+                                <p class="field-error hidden" data-variant-error="attributes"></p>
+                            </div>
+
+                            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                                <div>
+                                    <label class="field-label" data-variant-label="sku">
+                                        SKU <span class="font-normal text-muted-foreground">(optional)</span>
+                                    </label>
+                                    <input type="text" class="field-input" data-variant-field="sku"
+                                           autocomplete="off" placeholder="e.g. MOT-5HP-1440">
+                                    <p class="field-error hidden" data-variant-error="sku"></p>
+                                </div>
+
+                                <div>
+                                    <label class="field-label" data-variant-label="barcode">
+                                        Barcode <span class="font-normal text-muted-foreground">(optional)</span>
+                                    </label>
+                                    <input type="text" class="field-input" data-variant-field="barcode"
+                                           autocomplete="off" inputmode="numeric" placeholder="Scan or type">
+                                    <p class="field-error hidden" data-variant-error="barcode"></p>
+                                </div>
+
+                                <div>
+                                    <label class="field-label" data-variant-label="purchase_price">
+                                        Purchase price <span class="font-normal text-muted-foreground">(optional)</span>
+                                    </label>
+                                    <div class="relative">
+                                        <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">₹</span>
+                                        <input type="text" inputmode="decimal" data-variant-field="purchase_price"
+                                               class="field-input pl-7 text-right font-mono" placeholder="0.00">
+                                    </div>
+                                    {{-- Says what it actually does, which is one
+                                         thing. No screen reads it back, and a
+                                         purchase line's rate deliberately never
+                                         does — see docs/purchase-module.md. The
+                                         cost the books carry is the weighted
+                                         average of what was really paid. --}}
+                                    <p class="mt-1.5 text-xs text-muted-foreground">
+                                        Values any opening stock below. The cost the books carry is what you
+                                        actually pay on purchases.
+                                    </p>
+                                    <p class="field-error hidden" data-variant-error="purchase_price"></p>
+                                </div>
+
+                                <div>
+                                    <label class="field-label" data-variant-label="sell_price">
+                                        Selling price <span class="font-normal text-muted-foreground">(optional)</span>
+                                    </label>
+                                    <div class="relative">
+                                        <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">₹</span>
+                                        <input type="text" inputmode="decimal" data-variant-field="sell_price"
+                                               class="field-input pl-7 text-right font-mono" placeholder="0.00">
+                                    </div>
+                                    <p class="field-error hidden" data-variant-error="sell_price"></p>
+                                </div>
+
+                                {{-- The two that only mean anything once the
+                                     variant exists, so they are shown on an edit
+                                     and withheld on a create: a name is worth
+                                     typing only where the specification has
+                                     already failed to say it, and a markup over
+                                     cost suggests a price against an average
+                                     nothing has moved yet.
+
+                                     Declared here all the same, because this
+                                     block is the only variant editor there is —
+                                     the drawer's pencil opens it too. A second set
+                                     of these boxes elsewhere is how two editors
+                                     end up asking for different fields. --}}
+                                <div data-variant-edit-only>
+                                    <label class="field-label" data-variant-label="label">
+                                        Name it <span class="font-normal text-muted-foreground">(optional)</span>
+                                    </label>
+                                    <input type="text" class="field-input" data-variant-field="label"
+                                           autocomplete="off" placeholder="Built from the specification">
+                                    <p class="mt-1.5 text-xs text-muted-foreground">
+                                        Only if your fitters ask for it by another name.
+                                    </p>
+                                    <p class="field-error hidden" data-variant-error="label"></p>
+                                </div>
+
+                                <div data-variant-edit-only>
+                                    <label class="field-label" data-variant-label="markup_percent">
+                                        Target markup <span class="font-normal text-muted-foreground">(optional)</span>
+                                    </label>
+                                    <div class="relative">
+                                        <input type="text" inputmode="decimal" data-variant-field="markup_percent"
+                                               class="field-input pr-8 text-right font-mono" placeholder="0">
+                                        <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground">%</span>
+                                    </div>
+                                    <p class="mt-1.5 text-xs text-muted-foreground">
+                                        Suggests a price over cost once stock exists.
+                                    </p>
+                                    <p class="field-error hidden" data-variant-error="markup_percent"></p>
+                                </div>
+                            </div>
+
+                            {{-- Hidden for a category that holds no stock, and
+                                 greyed while "Keep stock of this" is off — the
+                                 checkbox above is what explains why they are
+                                 inert, and a box that vanishes reads as a bug. --}}
+                            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2" data-variant-stock>
+                                <div data-opening-field>
+                                    <label class="field-label" data-variant-label="opening_stock">
+                                        Opening stock <span class="font-normal text-muted-foreground">(optional)</span>
+                                    </label>
+                                    <div class="relative">
+                                        <input type="text" inputmode="decimal" data-variant-field="opening_stock"
+                                               class="field-input pr-14 text-right font-mono" placeholder="0">
+                                        <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground"
+                                              data-uom-suffix></span>
+                                    </div>
+                                    {{-- Posted as an ordinary stock adjustment
+                                         through the same engine the stock screen
+                                         uses, so there is no second way for stock
+                                         to come into existence. --}}
+                                    <p class="mt-1.5 text-xs text-muted-foreground">
+                                        What is already on the shelf. Recorded as a stock adjustment.
+                                    </p>
+                                    <p class="field-error hidden" data-variant-error="opening_stock"></p>
+                                </div>
+
+                                <div data-opening-field>
+                                    <label class="field-label" data-variant-label="opening_cost">
+                                        Opening stock cost <span class="font-normal text-muted-foreground">(per unit)</span>
+                                    </label>
+                                    <div class="relative">
+                                        <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">₹</span>
+                                        <input type="text" inputmode="decimal" data-variant-field="opening_cost"
+                                               class="field-input pl-7 text-right font-mono" placeholder="0.00">
+                                    </div>
+                                    {{-- Stock cannot arrive worth nothing: valued
+                                         at zero it never reaches the Inventory
+                                         account, and the first sale of it reports
+                                         the whole price as profit. Said here,
+                                         where the box is, rather than only in the
+                                         refusal. --}}
+                                    <p class="mt-1.5 text-xs text-muted-foreground">
+                                        Defaults to the buying price above. A quantity needs one of the two.
+                                    </p>
+                                    <p class="field-error hidden" data-variant-error="opening_cost"></p>
+                                </div>
+
+                                <div>
+                                    <label class="field-label" data-variant-label="reorder_level">
+                                        Reorder level <span class="font-normal text-muted-foreground">(optional)</span>
+                                    </label>
+                                    <input type="text" inputmode="decimal" data-variant-field="reorder_level"
+                                           class="field-input text-right font-mono" placeholder="0">
+                                    <p class="mt-1.5 text-xs text-muted-foreground">Order more when it drops to this.</p>
+                                    <p class="field-error hidden" data-variant-error="reorder_level"></p>
+                                </div>
+
+                                <div>
+                                    <label class="field-label" data-variant-label="min_stock">
+                                        Minimum stock <span class="font-normal text-muted-foreground">(optional)</span>
+                                    </label>
+                                    <input type="text" inputmode="decimal" data-variant-field="min_stock"
+                                           class="field-input text-right font-mono" placeholder="0">
+                                    <p class="mt-1.5 text-xs text-muted-foreground">Never let it fall below this.</p>
+                                    <p class="field-error hidden" data-variant-error="min_stock"></p>
+                                </div>
+                            </div>
+
+                            {{-- The block's own footer, for a refusal that named
+                                 no field of its own — a missing required
+                                 attribute arrives as `variants.2` and nothing
+                                 else. Without it the message goes to the banner
+                                 above every block equally. --}}
+                            <p class="field-error hidden" data-variant-error></p>
+                        </div>
+                    </template>
+                </section>
 
                 <div>
                     <label for="item-description" class="field-label">
@@ -653,105 +858,8 @@
                     <x-icon name="plus" :size="15" />
                     Create product
                 </button>
-                <button type="reset" class="btn btn-ghost">Clear</button>
+                <button type="button" class="btn btn-ghost" id="item-form-clear">Clear</button>
             </div>
 </form>
-
-{{-- Create / edit a variant. Its attribute fields are built from
-     GET /items/meta rather than rendered here, because which fields exist depends
-     on the item's type — and an attribute schema copied into the markup is a copy
-     that drifts. --}}
-<div id="variant-modal" class="modal-backdrop hidden" data-modal role="dialog" aria-modal="true"
-     aria-labelledby="variant-modal-title">
-    <div class="modal-panel max-w-xl">
-        <form id="variant-form" novalidate>
-            <input type="hidden" name="id">
-            <input type="hidden" name="item_id">
-
-            <div class="flex items-center justify-between border-b border-muted px-6 py-4">
-                <h2 id="variant-modal-title" class="text-base font-bold text-foreground">New variant</h2>
-                <button type="button" class="btn btn-ghost btn-icon" data-modal-close aria-label="Close">
-                    <x-icon name="x" :size="18" />
-                </button>
-            </div>
-
-            <div class="max-h-[70vh] space-y-4 overflow-y-auto px-6 py-5">
-                <p class="hidden rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-3 text-[0.8125rem] text-rose-700"
-                   data-form-banner role="alert"></p>
-
-                <div id="variant-attributes" class="grid grid-cols-1 gap-4 sm:grid-cols-2"></div>
-
-                <p class="field-error hidden" data-error-for="attributes"></p>
-
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <div>
-                        <label for="variant-sku" class="field-label">
-                            SKU <span class="font-normal text-muted-foreground">(optional)</span>
-                        </label>
-                        <input id="variant-sku" name="sku" type="text" class="field-input" autocomplete="off">
-                        <p class="field-error hidden" data-error-for="sku"></p>
-                    </div>
-
-                    <div>
-                        <label for="variant-label" class="field-label">
-                            Name it <span class="font-normal text-muted-foreground">(optional)</span>
-                        </label>
-                        <input id="variant-label" name="label" type="text" class="field-input"
-                               autocomplete="off" placeholder="Built from the specification">
-                        <p class="mt-1.5 text-xs text-muted-foreground">
-                            Only if your fitters ask for it by another name.
-                        </p>
-                        <p class="field-error hidden" data-error-for="label"></p>
-                    </div>
-
-                    <div>
-                        <label for="variant-price" class="field-label">
-                            Selling price <span class="font-normal text-muted-foreground">(optional)</span>
-                        </label>
-                        <input id="variant-price" name="sell_price" type="text" inputmode="decimal"
-                               class="field-input text-right font-mono" placeholder="0.00">
-                        <p class="mt-1.5 text-xs text-muted-foreground">
-                            Leave blank if you quote per job.
-                        </p>
-                        <p class="field-error hidden" data-error-for="sell_price"></p>
-                    </div>
-
-                    <div>
-                        <label for="variant-markup" class="field-label">
-                            Target markup <span class="font-normal text-muted-foreground">(optional)</span>
-                        </label>
-                        <div class="relative">
-                            <input id="variant-markup" name="markup_percent" type="text" inputmode="decimal"
-                                   class="field-input pr-8 text-right font-mono" placeholder="0">
-                            <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground">%</span>
-                        </div>
-                        <p class="mt-1.5 text-xs text-muted-foreground">
-                            Suggests a price over cost once stock exists.
-                        </p>
-                        <p class="field-error hidden" data-error-for="markup_percent"></p>
-                    </div>
-
-                    <div id="variant-reorder-field">
-                        <label for="variant-reorder" class="field-label">
-                            Reorder level <span class="font-normal text-muted-foreground">(optional)</span>
-                        </label>
-                        <div class="relative">
-                            <input id="variant-reorder" name="reorder_level" type="text" inputmode="decimal"
-                                   class="field-input pr-10 text-right font-mono" placeholder="0">
-                            <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-                                  id="variant-reorder-unit"></span>
-                        </div>
-                        <p class="field-error hidden" data-error-for="reorder_level"></p>
-                    </div>
-                </div>
-            </div>
-
-            <div class="flex gap-2 border-t border-muted px-6 py-4">
-                <button type="button" class="btn btn-secondary flex-1" data-modal-close>Cancel</button>
-                <button type="submit" class="btn btn-primary flex-1">Save variant</button>
-            </div>
-        </form>
-    </div>
-</div>
 
 

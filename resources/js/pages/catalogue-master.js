@@ -503,6 +503,9 @@ function openCategoryForm(category = null) {
         $('#category-parent').value = category.parent_id ?? '';
         $('#category-description').value = category.description ?? '';
         $('#category-unit').value = category.default_unit_code ?? '';
+        // Empty, not the markup's prefill: a category that states no rate is a
+        // real answer, and it is the one the product form leans on to insist a
+        // product of its own supplies one.
         $('#category-gst').value = category.default_gst_rate ?? '';
         $('#category-hsn').value = category.default_hsn_sac ?? '';
         $('#category-holds-stock').checked = category.holds_stock;

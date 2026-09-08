@@ -1,377 +1,316 @@
-
-<header class="mb-6 flex flex-wrap items-start justify-between gap-4">
-    <div>
-        <h2 class="text-2xl font-bold tracking-tight text-foreground">Transactions</h2>
-        <p class="mt-1.5 text-[0.9375rem] text-muted-foreground">
-            Sales, purchases, expenses and the drafts nobody has authorised yet. A posted entry can
-            never be edited — a mistake is corrected with a reversing entry, so both stay on the record.
-        </p>
-    </div>
-
-    {{-- Three separate actions rather than one "new transaction" that then asks
-         what kind. Collecting money from a customer, paying a supplier and
-         writing a correcting voucher are different jobs done by different people
-         at different moments, and a receipt is by far the commonest — it should
-         be one click, not two. --}}
-    <div class="flex flex-wrap gap-2">
-        <button type="button" id="new-receipt" class="btn btn-primary hidden"
-                data-requires-permission="WRITE:TRANSACTIONS">
-            <x-icon name="plus" :size="17" />
-            Record receipt
-        </button>
-
-        <button type="button" id="new-payment" class="btn btn-secondary hidden"
-                data-requires-permission="WRITE:TRANSACTIONS">
-            <x-icon name="plus" :size="17" />
-            Record payment
-        </button>
-
-        <button type="button" id="new-journal" class="btn btn-secondary hidden"
-                data-requires-permission="WRITE:TRANSACTIONS">
-            <x-icon name="plus" :size="17" />
-            Journal entry
-        </button>
-    </div>
-</header>
-
 {{--
-    Four views of one list, from the design.
+    Transactions — settlement and the journal voucher. C3.
 
-    Each tab is a *set* of types rather than a single one, and that is the whole
-    reason the grouping lives here instead of in the API. A customer receipt is
-    not a different subject from the invoice it settles — it is the next thing
-    that happened to it — so putting the two on one tab is how somebody chasing
-    a payment actually reads the page. Splitting them by enum case would be
-    organising the screen around the posting engine.
+    ## What this module stopped being
 
-    Counts come from GET /transactions/counts, which publishes the raw breakdown
-    and lets this file decide what a tab means.
+    It was four tabs over the whole transaction list — sales, purchases,
+    expenses and drafts — with the receipt, the payment and the journal grid
+    behind three buttons on top of it. Every part of that list now has a better
+    home: Sales lists invoices and credit notes, Purchase lists bills and debit
+    notes, Expenses lists expenses, and Insights' Day Book lists every posted
+    document including the journals none of those show. A fifth copy here would
+    have been four screens answering one question (§5.1).
+
+    What was only ever here is the two structural holes, and they are the whole
+    of the module now:
+
+    - **Money that arrives or leaves without a document.** A customer clearing
+      three invoices with one cheque, or paying on account before anything is
+      raised, had nowhere to go. Settling on the *way in* was never the gap —
+      Sales collects against the invoice its drawer is open on and Purchase pays
+      a bill the same way.
+    - **The manual journal voucher.** CLAUDE.md names it as the correction
+      mechanism for everything else in the books; it is why the Insights overview
+      is allowed to disagree with the P&L at all. Without it the only correction
+      available anywhere was reversing a whole document.
+
+    ## Three sections, and the shared renderer used three times
+
+    Receipt, Payment and Journal voucher are three write acts on one card, so
+    this follows **Staff** rather than inventing a shape: each section is an
+    ordinary §2A workspace mounted on its own root, so all three inherit the
+    form/list swap, the one switch control and the count badge with no per-module
+    flow code. Sections mount lazily, on the first click of their tab (§2.5,
+    §7.2) — a workshop that only ever takes receipts never pays for the voucher
+    grid's chart of accounts.
+
+    It opens on **Receipt**, which is the one done most, rather than asking which
+    of the three.
+
+    ## Which invoices the money settled — level 2
+
+    The allocation screen lives in the drawer of a posted receipt or payment, and
+    nowhere else. `POST /transactions/{id}/allocate` and
+    `GET /transactions/{id}/open-bills` have existed and been tested since M16
+    with no caller anywhere; this is the screen that answers them.
+
+    It is *after* the fact on purpose. A receipt with no allocations named is
+    applied to the party's open bills oldest first, which is what an accounts
+    department does when nobody says otherwise — but it is still a decision about
+    which invoice a cheque was for, and only the operator can make it. Insights
+    reports an unallocated receipt as a worklist and refuses to net it away for
+    the same reason: **nothing may guess which invoice a cheque was for.** What
+    was missing was somewhere to answer.
+
+    ## What is deliberately not here
+
+    **No transaction list.** See above; three enabled cards already draw it.
+
+    **No draft.** Every converted module posts outright, and this was the last
+    screen in the product that parked a transaction.
 --}}
-<div class="tab-strip mb-5" id="txn-tabs" role="tablist" aria-label="Transaction views">
-    @foreach ([
-        'sales'     => 'Sales',
-        'purchases' => 'Purchase Bills',
-        'expenses'  => 'Expenses',
-        'drafts'    => 'Drafts',
-    ] as $tab => $label)
-        <button type="button" class="tab" role="tab" data-tab="{{ $tab }}"
-                aria-selected="{{ $tab === 'sales' ? 'true' : 'false' }}"
-                aria-controls="journal-rows">
-            {{ $label }}
-            {{-- Blank until the counts arrive. A zero here would be a claim
-                 about an empty workshop that nothing has checked yet. --}}
-            <span data-tab-count></span>
+<div class="mx-auto max-w-[1080px]">
+
+    {{--
+        Three write acts, named. Not one "new transaction" that then asks which:
+        collecting from a customer, paying a supplier and writing a correcting
+        voucher are different jobs done by different people at different moments,
+        and a receipt is much the commonest — it should be one click.
+
+        Each section root below carries exactly one [data-ws-form] and one
+        [data-ws-list], which is what `mountWorkspace()` looks for. The heading
+        and the switch control above each pair are the workspace's, so there is
+        no <h1> and no create button written out here (§2A.3).
+    --}}
+    <div class="tab-strip mb-5" role="tablist" aria-label="Transactions" data-txn-tabs>
+        <button type="button" class="tab" role="tab" data-txn-tab="receipt" aria-selected="true">
+            <x-icon name="arrow-down-left" :size="15" />
+            Receipt
         </button>
-    @endforeach
-</div>
 
-<div class="surface mb-4 flex flex-wrap items-center gap-3 p-3">
-    <div class="relative min-w-56 flex-1">
-        <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
-            <x-icon name="search" :size="17" />
-        </span>
-        <input type="search" id="filter-search" class="field-input pl-9"
-               placeholder="Search notes…" aria-label="Search transactions">
+        <button type="button" class="tab" role="tab" data-txn-tab="payment" aria-selected="false">
+            <x-icon name="arrow-up-right" :size="15" />
+            Payment
+        </button>
+
+        <button type="button" class="tab" role="tab" data-txn-tab="journal" aria-selected="false">
+            <x-icon name="file-text" :size="15" />
+            Journal voucher
+        </button>
     </div>
 
-    {{-- Types come from the enum, so the filter cannot drift from what the
-         engine can actually post.
-
-         This is also the only way to reach the types no tab covers — a manual
-         journal, a stock adjustment, an opening balance. Choosing one of those
-         *overrides* the open tab rather than being ignored inside it, and the
-         chip below says so: a filter that silently returned nothing would look
-         like an empty workshop. --}}
-    <select id="filter-type" class="field-input w-auto min-w-36" aria-label="Filter by type">
-        <option value="">All types on this tab</option>
-        @foreach (\App\Enums\TransactionType::cases() as $type)
-            <option value="{{ $type->value }}">{{ $type->label() }}</option>
-        @endforeach
-    </select>
-
-    {{-- Absent from the Drafts tab, which *is* a status: the JS disables it
-         there rather than offering a choice that contradicts the tab. --}}
-    <select id="filter-status" class="field-input w-auto min-w-36" aria-label="Filter by status">
-        <option value="">All statuses</option>
-        @foreach (\App\Enums\TransactionStatus::cases() as $status)
-            <option value="{{ $status->value }}">{{ $status->label() }}</option>
-        @endforeach
-    </select>
-
-    <label class="flex items-center gap-2 text-[0.8125rem] text-muted-foreground">
-        From
-        <input type="date" id="filter-from" class="field-input w-auto" aria-label="From date">
-    </label>
-
-    <label class="flex items-center gap-2 text-[0.8125rem] text-muted-foreground">
-        To
-        <input type="date" id="filter-to" class="field-input w-auto" aria-label="To date">
-    </label>
-</div>
-
-{{-- Shown only while a type filter is overriding the open tab. --}}
-<p id="txn-override" class="mb-4 hidden items-center gap-2 rounded-[10px] border border-border bg-secondary/40
-                            px-3.5 py-2.5 text-[0.8125rem] text-secondary-foreground">
-    <span data-override-label></span>
-    <button type="button" class="btn btn-ghost btn-sm" data-override-clear>Show the whole tab</button>
-</p>
-
-<div class="surface overflow-hidden">
-    <div class="overflow-x-auto">
-        {{-- Both the head and the body are rendered from JS, because the columns
-             are what differ between the tabs: an expense has a payment mode and
-             no counterparty, an invoice has a balance and no mode. One table
-             carrying the union of every tab's columns would be mostly empty
-             cells on every tab. --}}
-        <table class="w-full min-w-[820px] border-collapse">
-            <thead id="journal-head"></thead>
-            <tbody id="journal-rows"></tbody>
-        </table>
+    <div data-txn-section="receipt">
+        @include('partials.settlement-section', ['direction' => 'receipt'])
     </div>
 
-    <div class="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3">
-        <p id="journal-summary" class="text-[0.8125rem] text-muted-foreground"></p>
+    <div data-txn-section="payment" hidden>
+        @include('partials.settlement-section', ['direction' => 'payment'])
+    </div>
 
-        <div class="flex gap-2">
-            <button type="button" id="page-prev" class="btn btn-secondary btn-sm" disabled>Previous</button>
-            <button type="button" id="page-next" class="btn btn-secondary btn-sm" disabled>Next</button>
+    {{--
+        The double-entry grid — the books' own correction mechanism.
+
+        The only surface in the application that writes ledger lines directly,
+        and the reason the Insights overview is allowed to disagree with the P&L:
+        a journal straight to Sales is income the document lines cannot see. That
+        is a real state of the books and the overview states it rather than
+        repairing it.
+
+        The accounts are fetched from `GET /accounts`, never rendered here — the
+        catalogue's rule about vocabulary, applied to the chart. An expense head
+        added from Accounting must appear in this picker without a deployment.
+    --}}
+    <div data-txn-section="journal" hidden>
+
+        <div data-ws-form>
+
+            <div class="mb-4 hidden rounded-[10px] border border-emerald-200 bg-emerald-50/60 px-4 py-3
+                        text-[0.8125rem] text-emerald-900" data-voucher-outcome role="status"></div>
+
+            <form id="voucher-form" novalidate class="space-y-4">
+
+                <p class="hidden rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-3
+                          text-[0.8125rem] text-rose-700" data-form-banner role="alert"></p>
+
+                <section class="surface p-5 sm:p-6">
+                    <h3 class="text-sm font-bold text-foreground">What this voucher is for</h3>
+
+                    <p class="mt-1 text-[0.8125rem] text-muted-foreground">
+                        A depreciation charge, a write-off, a correction the reversing entry on a document
+                        cannot express. Every other screen in this product writes its own entries; this is
+                        the one that lets somebody write them directly, which is what makes it the
+                        correction mechanism for all of them.
+                    </p>
+
+                    <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                        <div>
+                            <label for="voucher-date" class="field-label">Date</label>
+                            <input id="voucher-date" name="date" type="date" class="field-input" required>
+                            <p class="field-error hidden" data-error-for="date"></p>
+                        </div>
+
+                        {{-- Optional, and genuinely so: a depreciation entry and
+                             a correcting journal have no counterparty. The
+                             picker is mounted without a role, because a journal
+                             does not decide one — see the note on `role` in
+                             components/party-picker.js. --}}
+                        <div data-voucher-party-host></div>
+                    </div>
+
+                    <div class="mt-4">
+                        <label for="voucher-notes" class="field-label">Narration</label>
+                        <input id="voucher-notes" name="notes" type="text" class="field-input" maxlength="500"
+                               autocomplete="off" placeholder="Depreciation for the year on the lathe">
+                        <p class="mt-1.5 text-xs text-muted-foreground">
+                            Why this entry exists, in the words somebody auditing it would look for.
+                        </p>
+                        <p class="field-error hidden" data-error-for="notes"></p>
+                    </div>
+                </section>
+
+                <section class="surface overflow-hidden">
+                    <div class="overflow-x-auto">
+                        <table class="w-full min-w-[720px] border-collapse">
+                            <thead>
+                                <tr class="border-b border-border bg-secondary/40 text-left text-xs uppercase
+                                           tracking-wide text-muted-foreground">
+                                    <th class="px-3 py-3 font-semibold">Account</th>
+                                    <th class="px-3 py-3 text-right font-semibold">Debit</th>
+                                    <th class="px-3 py-3 text-right font-semibold">Credit</th>
+                                    <th class="px-3 py-3 font-semibold">Memo</th>
+                                    <th class="px-3 py-3"><span class="sr-only">Remove</span></th>
+                                </tr>
+                            </thead>
+
+                            <tbody data-voucher-lines></tbody>
+
+                            {{-- Live, and the whole reason it is here: the server
+                                 refuses an unbalanced entry, but finding that out
+                                 on submit means retyping a voucher. --}}
+                            <tfoot>
+                                <tr class="border-t border-border bg-secondary/30">
+                                    <td class="px-3 py-2 text-right text-[0.8125rem] font-semibold
+                                               text-muted-foreground">Total</td>
+                                    <td class="px-3 py-2 text-right font-mono text-[0.8125rem] font-bold"
+                                        data-total-debit>0.00</td>
+                                    <td class="px-3 py-2 text-right font-mono text-[0.8125rem] font-bold"
+                                        data-total-credit>0.00</td>
+                                    <td class="px-3 py-2 text-[0.8125rem] font-semibold"
+                                        data-balance-note colspan="2"></td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+
+                    <div class="border-t border-border px-3 py-3">
+                        <button type="button" class="btn btn-secondary btn-sm" data-add-line>
+                            <x-icon name="plus" :size="15" />
+                            Add a line
+                        </button>
+                        <p class="field-error hidden mt-2" data-error-for="lines"></p>
+                    </div>
+                </section>
+
+                <div class="flex items-center justify-end gap-3" data-requires-permission="WRITE:TRANSACTIONS">
+                    <button type="submit" class="btn btn-primary">Post the voucher</button>
+                </div>
+            </form>
         </div>
-    </div>
-</div>
 
-{{-- Write a journal entry --}}
-<div id="journal-modal" class="modal-backdrop hidden" data-modal role="dialog" aria-modal="true"
-     aria-labelledby="journal-modal-title">
-    <div class="modal-panel max-w-4xl">
-        <form id="journal-form" novalidate>
-            <input type="hidden" name="id">
+        <div data-ws-list>
 
-            <div class="flex items-center justify-between border-b border-border px-6 py-4">
-                <h2 id="journal-modal-title" class="text-base font-bold text-foreground">New journal entry</h2>
-                <button type="button" class="btn btn-ghost btn-icon" data-modal-close aria-label="Close">
-                    <x-icon name="x" :size="18" />
-                </button>
-            </div>
-
-            <div class="max-h-[70vh] space-y-4 overflow-y-auto px-6 py-5">
-                <p class="hidden rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-3 text-[0.8125rem] text-rose-700"
-                   data-form-banner role="alert"></p>
-
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                    <div>
-                        <label for="journal-date" class="field-label">Date</label>
-                        <input id="journal-date" name="date" type="date" class="field-input" required>
-                        <p class="mt-1.5 text-xs text-muted-foreground">
-                            The date the event happened, not the date you are entering it.
-                        </p>
-                        <p class="field-error hidden" data-error-for="date"></p>
-                    </div>
-
-                    <div>
-                        <label for="journal-notes" class="field-label">Narration</label>
-                        <input id="journal-notes" name="notes" type="text" class="field-input"
-                               autocomplete="off" placeholder="Why this entry exists">
-                        <p class="field-error hidden" data-error-for="notes"></p>
-                    </div>
-
-                    {{-- Optional, and genuinely so: a depreciation entry or a
-                         correcting journal has no counterparty. When it is set,
-                         the entry appears on that party's statement. --}}
-                    <div>
-                        <label for="journal-party" class="field-label">
-                            Party <span class="font-normal text-muted-foreground">(optional)</span>
-                        </label>
-                        <select id="journal-party" name="party_id" class="field-input">
-                            <option value="">No counterparty</option>
-                        </select>
-                        <p class="mt-1.5 text-xs text-muted-foreground">
-                            Puts this entry on their statement.
-                        </p>
-                        <p class="field-error hidden" data-error-for="party_id"></p>
-                    </div>
+            <div class="surface mb-4 flex flex-wrap items-center gap-3 p-3">
+                <div class="search-pill min-w-56 flex-1">
+                    <x-icon name="search" :size="16" />
+                    <input type="search" data-filter-search class="w-full bg-transparent text-sm outline-none"
+                           placeholder="Voucher number or narration…" aria-label="Search vouchers">
                 </div>
 
-                {{-- The double-entry grid. Every line is one account and one
-                     side; the totals below are the balance check the engine
-                     will apply server-side. --}}
-                <div class="overflow-hidden rounded-[10px] border border-border">
-                    <table class="w-full min-w-[640px] border-collapse">
+                <select data-filter-status class="field-input w-auto min-w-36" aria-label="Filter by state">
+                    <option value="">Any state</option>
+                    @foreach (\App\Enums\TransactionStatus::cases() as $status)
+                        <option value="{{ $status->value }}">{{ $status->label() }}</option>
+                    @endforeach
+                </select>
+
+                <label class="flex items-center gap-2 text-[0.8125rem] text-muted-foreground">
+                    From
+                    <input type="date" data-filter-from class="field-input w-auto" aria-label="From date">
+                </label>
+
+                <label class="flex items-center gap-2 text-[0.8125rem] text-muted-foreground">
+                    To
+                    <input type="date" data-filter-to class="field-input w-auto" aria-label="To date">
+                </label>
+
+                <button type="button" data-clear-filters class="btn btn-ghost btn-sm">Clear</button>
+            </div>
+
+            <div class="surface overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="w-full min-w-[720px] border-collapse">
                         <thead>
-                            <tr class="bg-secondary/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
-                                <th class="px-3 py-2 font-semibold">Account</th>
-                                <th class="w-36 px-3 py-2 text-right font-semibold">Debit</th>
-                                <th class="w-36 px-3 py-2 text-right font-semibold">Credit</th>
-                                <th class="px-3 py-2 font-semibold">Memo</th>
-                                <th class="w-10 px-3 py-2"></th>
+                            <tr class="border-b border-border bg-secondary/40 text-left text-xs uppercase
+                                       tracking-wide text-muted-foreground">
+                                <th class="px-4 py-3 font-semibold">Voucher</th>
+                                <th class="px-4 py-3 font-semibold">Date</th>
+                                <th class="px-4 py-3 font-semibold">Narration</th>
+                                <th class="px-4 py-3 font-semibold">Counterparty</th>
+                                <th class="px-4 py-3 text-right font-semibold">Amount</th>
+                                <th class="px-4 py-3 font-semibold">Status</th>
                             </tr>
                         </thead>
-                        <tbody id="journal-lines"></tbody>
-                        <tfoot>
-                            <tr class="border-t border-border bg-secondary/30 text-sm font-semibold">
-                                <td class="px-3 py-2 text-right text-muted-foreground">Totals</td>
-                                <td class="px-3 py-2 text-right font-mono" id="total-debit">0.00</td>
-                                <td class="px-3 py-2 text-right font-mono" id="total-credit">0.00</td>
-                                <td class="px-3 py-2 text-[0.8125rem] font-medium" id="balance-note" colspan="2"></td>
-                            </tr>
-                        </tfoot>
+                        <tbody data-txn-body></tbody>
                     </table>
                 </div>
 
-                <button type="button" id="add-line" class="btn btn-secondary btn-sm">
-                    <x-icon name="plus" :size="15" />
-                    Add line
-                </button>
-            </div>
+                <div class="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3">
+                    <p data-txn-summary class="text-[0.8125rem] text-muted-foreground"></p>
 
-            <div class="flex flex-wrap justify-end gap-2 border-t border-border px-6 py-4">
-                <button type="button" class="btn btn-secondary" data-modal-close>Cancel</button>
-                {{-- Two explicit actions. Committing to the ledger is the
-                     consequential one and must never happen by omission. --}}
-                <button type="button" class="btn btn-secondary" id="save-draft">Save as draft</button>
-                <button type="submit" class="btn btn-primary">Post entry</button>
-            </div>
-        </form>
-    </div>
-</div>
-
-{{-- Record a payment or a receipt. One form for both: the payload is identical
-     and the direction is the endpoint, not a field the user could get the wrong
-     way round without noticing. The heading and the wording say which. --}}
-<div id="settlement-modal" class="modal-backdrop hidden" data-modal role="dialog" aria-modal="true"
-     aria-labelledby="settlement-modal-title">
-    <div class="modal-panel max-w-3xl">
-        <form id="settlement-form" novalidate>
-            <input type="hidden" name="id">
-            <input type="hidden" name="kind">
-
-            <div class="flex items-center justify-between border-b border-border px-6 py-4">
-                <h2 id="settlement-modal-title" class="text-base font-bold text-foreground">Record receipt</h2>
-                <button type="button" class="btn btn-ghost btn-icon" data-modal-close aria-label="Close">
-                    <x-icon name="x" :size="18" />
-                </button>
-            </div>
-
-            <div class="max-h-[70vh] space-y-4 overflow-y-auto px-6 py-5">
-                <p class="hidden rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-3 text-[0.8125rem] text-rose-700"
-                   data-form-banner role="alert"></p>
-
-                <p id="settlement-explainer"
-                   class="rounded-[10px] border border-border bg-secondary/40 px-3.5 py-2.5 text-[0.8125rem] text-secondary-foreground"></p>
-
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                    {{-- Required here where a journal's counterparty is optional:
-                         money moved to or from somebody, and a settlement
-                         attributed to nobody sits in a control account no
-                         statement could account for. --}}
-                    <div>
-                        <label for="settlement-party" class="field-label" id="settlement-party-label">Party</label>
-                        <select id="settlement-party" name="party_id" class="field-input" required>
-                            <option value="">Choose a party…</option>
-                        </select>
-                        <p class="mt-1.5 text-xs text-muted-foreground" id="settlement-party-hint"></p>
-                        <p class="field-error hidden" data-error-for="party_id"></p>
-                    </div>
-
-                    <div>
-                        <label for="settlement-date" class="field-label">Date</label>
-                        <input id="settlement-date" name="date" type="date" class="field-input" required>
-                        <p class="mt-1.5 text-xs text-muted-foreground">
-                            The date the money moved.
-                        </p>
-                        <p class="field-error hidden" data-error-for="date"></p>
-                    </div>
-
-                    <div>
-                        <label for="settlement-notes" class="field-label">Narration</label>
-                        <input id="settlement-notes" name="notes" type="text" class="field-input"
-                               autocomplete="off" placeholder="e.g. against invoice 118">
-                        <p class="field-error hidden" data-error-for="notes"></p>
+                    <div class="flex gap-2">
+                        <button type="button" data-page-prev class="btn btn-secondary btn-sm" disabled>Previous</button>
+                        <button type="button" data-page-next class="btn btn-secondary btn-sm" disabled>Next</button>
                     </div>
                 </div>
-
-                {{-- How the money moved. One row per tender, because ₹2,000 from
-                     the till and ₹3,000 by UPI is one receipt that moves two
-                     accounts — and each of those accounts is reconciled
-                     separately against a cash box or a passbook. --}}
-                <div class="overflow-hidden rounded-[10px] border border-border">
-                    <table class="w-full min-w-[560px] border-collapse">
-                        <thead>
-                            <tr class="bg-secondary/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
-                                <th class="px-3 py-2 font-semibold">How</th>
-                                <th class="w-40 px-3 py-2 text-right font-semibold">Amount</th>
-                                <th class="px-3 py-2 font-semibold">Reference</th>
-                                <th class="w-10 px-3 py-2"></th>
-                            </tr>
-                        </thead>
-                        <tbody id="settlement-rows"></tbody>
-                        <tfoot>
-                            <tr class="border-t border-border bg-secondary/30 text-sm font-semibold">
-                                <td class="px-3 py-2 text-right text-muted-foreground">Total</td>
-                                <td class="px-3 py-2 text-right font-mono" id="settlement-total">0.00</td>
-                                <td class="px-3 py-2" colspan="2"></td>
-                            </tr>
-                        </tfoot>
-                    </table>
-                </div>
-
-                <p class="field-error hidden" data-error-for="payments"></p>
-
-                <button type="button" id="add-payment-row" class="btn btn-secondary btn-sm">
-                    <x-icon name="plus" :size="15" />
-                    Add another tender
-                </button>
             </div>
 
-            <div class="flex flex-wrap justify-end gap-2 border-t border-border px-6 py-4">
-                <button type="button" class="btn btn-secondary" data-modal-close>Cancel</button>
-                {{-- Two explicit actions, as everywhere else: committing to the
-                     ledger must never happen as a side effect of saving. --}}
-                <button type="button" class="btn btn-secondary" id="save-settlement-draft">Save as draft</button>
-                <button type="submit" class="btn btn-primary" id="settlement-submit">Record receipt</button>
-            </div>
-        </form>
+        </div>{{-- /data-ws-list --}}
     </div>
 </div>
 
 {{--
-    Read a voucher, in the side panel from the design.
+    One document, read without leaving the list — level 2, and one drawer for all
+    three sections rather than one each (§5.1).
 
-    A drawer rather than the centred modal the forms use, because reading is not
-    the same act as writing: the row you clicked stays visible behind it, so you
-    can tell at a glance that you opened the one you meant. Its sub-tabs are
-    rendered from JS, because which of them apply depends on the transaction —
-    only a bill has items, only a stock-moving posting has movements.
+    A posted transaction is immutable and there is no edit here. What it offers
+    is the two things a posted settlement or voucher still permits: **reverse**,
+    which posts the mirror entry and leaves both documents on the record, and —
+    for a receipt or a payment only — **which bills this money settles**, which
+    writes no ledger entry at all and is therefore the one property of a posted
+    document that can simply be corrected.
+
+    A draft that predates the conversion is still openable, and gets the two acts
+    a draft has: post it, or discard it. Nothing in the converted product creates
+    one.
 --}}
-<div id="voucher-drawer" class="drawer-backdrop hidden" data-modal role="dialog" aria-modal="true"
-     aria-labelledby="voucher-drawer-title">
-    <div class="drawer-panel">
-        <div class="flex items-start justify-between gap-3 border-b border-border px-6 py-4">
-            <div class="min-w-0">
-                <p class="section-label" id="voucher-drawer-kind">&nbsp;</p>
-                <h2 id="voucher-drawer-title" class="truncate text-base font-bold text-foreground">Transaction</h2>
-            </div>
+<div id="txn-drawer" class="drawer-backdrop hidden" data-modal role="dialog" aria-modal="true"
+     aria-labelledby="txn-drawer-title">
+    <div class="drawer-panel max-w-[620px]">
+        <div class="border-b border-muted px-6 py-4">
+            <div class="flex items-start justify-between gap-2">
+                <div class="flex min-w-0 items-center gap-2.5">
+                    <span class="grid size-9 shrink-0 place-items-center rounded-[10px] bg-blue-50 text-blue-600"
+                          data-drawer-icon>
+                        <x-icon name="file-text" :size="16" />
+                    </span>
+                    <div class="min-w-0">
+                        <h3 id="txn-drawer-title"
+                            class="truncate text-[15.5px] font-bold leading-tight text-foreground"></h3>
+                        <p data-drawer-subtitle class="truncate text-xs text-muted-foreground"></p>
+                    </div>
+                </div>
 
-            <div class="flex shrink-0 items-center gap-2">
-                <span id="voucher-drawer-status"></span>
-                <button type="button" class="btn btn-ghost btn-icon" data-modal-close aria-label="Close">
-                    <x-icon name="x" :size="18" />
-                </button>
+                <div class="flex shrink-0 items-center gap-2">
+                    <span data-drawer-status></span>
+                    <button type="button" class="btn btn-ghost btn-icon" data-modal-close aria-label="Close">
+                        <x-icon name="x" :size="16" />
+                    </button>
+                </div>
             </div>
         </div>
 
-        {{-- Sub-tabs. Same underline treatment as the page's own strip, one
-             level in, which is what the design does. --}}
-        <div class="tab-strip px-4" id="voucher-tabs" role="tablist" aria-label="Voucher sections"></div>
+        <div class="flex-1 overflow-y-auto px-6 py-5" data-drawer-body></div>
 
-        <div class="flex-1 overflow-y-auto px-6 py-5" id="voucher-body"></div>
-
-        {{-- Whatever can still be done to this transaction, which depends on
-             its status: a draft can be posted or discarded, a posted entry can
-             only be reversed. Filled from JS for that reason. --}}
-        <div class="flex flex-wrap justify-end gap-2 border-t border-border px-6 py-4" id="voucher-actions">
-            <button type="button" class="btn btn-secondary" data-modal-close>Close</button>
-        </div>
+        <div class="flex flex-wrap items-center gap-2 border-t border-muted px-6 py-4" data-drawer-actions></div>
     </div>
 </div>
-
-

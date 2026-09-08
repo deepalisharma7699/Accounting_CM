@@ -267,6 +267,35 @@ export function clearFormErrors(form) {
 }
 
 /**
+ * The slot a field's message belongs in, allowing for a key that names one entry
+ * of a repeated group.
+ *
+ * The server reports nested keys — `permission_ids.0`, `variants.2.opening_cost`
+ * — and a form may label them at any depth. The item form gives every variant
+ * block its own `variants.2.opening_cost` box *and* a `variants.2` footer for a
+ * refusal that named no field of its own, where a form with a plain list of ids
+ * labels `permission_ids` and nothing under it.
+ *
+ * So the key is tried whole and then shortened a segment at a time, landing on
+ * the most specific slot the form actually declared. That collapses
+ * `permission_ids.0` onto `permission_ids` exactly as this always did, and it is
+ * the difference between "one of these five variants is wrong" and "this one".
+ */
+function errorSlot(form, field) {
+    const parts = String(field).split('.');
+
+    while (parts.length) {
+        const slot = $(`[data-error-for="${parts.join('.')}"]`, form);
+
+        if (slot) return slot;
+
+        parts.pop();
+    }
+
+    return null;
+}
+
+/**
  * Paint an ApiError onto the form.
  *
  * 422 carries per-field messages under error.details.fields; every other status
@@ -279,10 +308,8 @@ export function showFormErrors(form, error) {
 
     if (error.fields) {
         Object.entries(error.fields).forEach(([field, messages]) => {
-            // Laravel reports nested keys like "permission_ids.0".
-            const name = field.split('.')[0];
-            const slot = $(`[data-error-for="${name}"]`, form);
-            const input = form.elements?.[name];
+            const slot = errorSlot(form, field);
+            const input = form.elements?.[field] ?? form.elements?.[field.split('.')[0]];
 
             if (slot) {
                 slot.textContent = messages[0];

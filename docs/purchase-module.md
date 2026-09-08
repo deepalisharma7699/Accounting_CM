@@ -17,7 +17,7 @@ registry — and it added **zero endpoints, zero migrations and zero permissions
 ```
 Purchase card
    └─ level 1  workspace.js              §2A: form ⇄ list, one switch control
-        ├─ form   components/bill-document.js   the document, shared with /bills/new
+        ├─ form   components/bill-document.js   the document, shared with Sales and Jobs
         │           ├─ party-picker  + quick-party    the supplier, created inline
         │           ├─ item-picker   + quick-item     the goods, created inline
         │           └─ payment-rows                   what was paid at the counter
@@ -40,7 +40,7 @@ eventually disagree about what a bill comes to.
 
 ## The decisions
 
-### Purchase is its own card, and Bills narrowed to sales and expenses
+### Purchase is its own card, and Bills narrowed until nothing was left of it
 
 The registry used to argue for one Bills module covering everything, on the
 grounds that a screen making somebody "choose a transaction type before offering
@@ -51,6 +51,10 @@ module would have to open by asking sale-or-purchase — which is exactly the
 ledger-shaped screen the original objection was against. One card per document
 kind lands straight on the right form, with the right counterparty, and nothing
 to choose first.
+
+Purchases left Bills here, sales left it when Sales was converted, and C2 finished
+the argument: what was left was the **expense**, which is the one thing that was
+only ever there. The card is called Expenses now.
 
 ### The rate box starts empty on a purchase
 
@@ -252,7 +256,7 @@ movement whose type already says everything. A stock card reads
 
 ### A posted bill stays on the form
 
-§2A.8. The counter at `/bills/new` exists to write one bill and hands the
+§2A.8. The counter that used to live at `/bills/new` existed to write one bill and handed the
 operator to a list afterwards. A clerk working through the morning's deliveries
 writes six in a row, so the document is emptied for the next entry, focus returns
 to the supplier, and the new row is *flagged* rather than shown — the flash

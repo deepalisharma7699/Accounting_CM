@@ -1,73 +1,149 @@
 import auth from '../auth-client';
-import { badge, lifecycleTone, sourceBadge } from '../components/badge';
 import { can } from '../permissions';
 import {
     $, $$, clearFormErrors, confirmAction, debounce, downloadCsv, esc, formatDate,
-    formatMoney, hideModal, isZeroAmount, setSubmitting, showFormErrors,
-    showModal, toast,
+    formatMoney, isZeroAmount, setSubmitting, showFormErrors, showModal, toast,
 } from '../ui';
+import { adoptForm, mountWorkspace } from '../workspace';
 
 /**
- * The Accounting screen: three views of the books behind one tab strip.
+ * Accounting — C5. The chart of accounts, and the proof that the books balance.
  *
- *   Ledger Accounts   — every ledger and what it stands at
- *   Journal Entries   — the entries that put it there
- *   Chart of Accounts — the structure those ledgers are arranged into
+ * ```
+ * card → CREATE ACCOUNT            ← always lands here (§2A.1, §2A.5)
+ *      → "Show list (37)"          → the books, in two views over one period
+ *           ├── Chart of accounts  — every account, grouped, what it stands at
+ *           └── Trial balance      — with the reconciliation stated, not implied
+ *      → row → drawer (level 2)    → the running statement, the CSV, Edit
+ *      → confirm (level 3)
+ * ```
  *
- * The chart is small by nature — the system accounts plus whatever the workshop
- * has added — so it is fetched whole once and the first and third tabs are both
- * rendered from that one copy in memory. Only the journal paginates, because
- * only the journal grows without bound.
+ * ## Why this is one module and not two
  *
- * Three tabs, three grants. The page itself is READ:ACCOUNTS; balances need
- * READ:LEDGER and the journal needs READ:TRANSACTIONS, and neither follows from
- * the first. What a caller cannot read is removed rather than blanked — see
- * {@link applyGrantVisibility}.
+ * Accounting and Ledger were separate cards answering one question at two zoom
+ * levels — what an account stands at — and the old code said so itself: this
+ * drawer showed ten entries because "the full statement is the Ledger screen's
+ * job". Two cards would have needed two period pickers and two trial-balance
+ * renderers, and the second copy of each is the one that drifts (§4.4, §5.1).
+ * So the `ledger` key is gone from the registry and its screen with it; what it
+ * could do that nothing else could — the **trial balance** — is the second view
+ * here.
+ *
+ * ## One fetch, two views
+ *
+ * `GET /ledger/trial-balance` over the chosen period is the whole of both. The
+ * trial balance renders its rows; the chart renders the same figures against the
+ * accounts they belong to, with an account the period never touched standing at
+ * zero. There is deliberately no second arithmetic and no per-account balance
+ * request — a chart of forty accounts would be forty round trips for a column.
+ *
+ * ## Two grants, and what is *removed*
+ *
+ * The module is gated on `READ:ACCOUNTS`; every figure on it needs `READ:LEDGER`
+ * as well, and neither implies the other. What the caller may not read is taken
+ * out of the DOM rather than blanked — see {@link applyGrantVisibility}. A
+ * column of dashes reads as "every account is at zero", which is a claim about
+ * the books rather than about the reader's permissions.
+ *
+ * ## The filters narrow the chart and never the trial balance
+ *
+ * This is the part of the screen that would be wrong in a way that looks right.
+ * A trial balance's totals come from the server, over every account with
+ * movement in the period — including archived ones, which still hold whatever
+ * was posted to them. Filter its rows in the browser and the columns stop adding
+ * up to the figures beneath them, with nothing on screen saying so. So the
+ * search box and the archived select belong to the chart and are hidden on the
+ * other view; the period is the one control both share.
+ *
+ * ## Why the chart is fetched whole, archived accounts included
+ *
+ * `is_active` is a filter the index endpoint accepts, and it is deliberately not
+ * used. **An archived account still owns its code.** Ask for the active ones and
+ * the form's next-free-code suggestion cannot see the rest, so it offers a
+ * number the server then refuses — a 422 on a field the screen had filled in
+ * itself. A chart of accounts is bounded and small, so one request holds all of
+ * it and the archived select narrows what is drawn.
  */
 
+/** A chart of accounts is small by nature: the whole of it, in one request. */
 const CHART_PAGE_SIZE = 200;
-const JOURNAL_PAGE_SIZE = 25;
+
+/** The window of movement the drawer shows before somebody asks for the file. */
+const STATEMENT_WINDOW = 10;
+
+/** The API's ceiling on `per_page`, and the guard on how many pages a CSV walks. */
+const STATEMENT_PAGE_SIZE = 200;
+const STATEMENT_PAGE_LIMIT = 25;
 
 /** Canonical statement order, not alphabetical. */
 const TYPE_ORDER = ['asset', 'liability', 'equity', 'income', 'expense'];
 
-/** Which pills the Ledger Accounts tab offers, and the tile that jumps to each. */
-const PL_TYPES = ['income', 'expense'];
-
 const state = {
-    tab: 'ledger',
+    view: 'chart',
 
     search: '',
     isActive: '1',
-    side: '',
-
-    ledgerPill: 'all',
-    journalPill: 'all',
     from: '',
     to: '',
-    journalPage: 1,
 
-    types: {},          // { asset: {label, code_range, normal_balance, …} }
+    /** `{ asset: {label, code_range, normal_balance, is_balance_sheet}, … }` */
+    types: {},
+
     accounts: [],
+    total: null,
+
     /*
-    | account id -> the trial-balance row for it. Absent for an account nothing
-    | has been posted to, which is why every read of this goes through
-    | `balanceOf` rather than indexing it directly: "no row" means zero, and it
-    | is the one case where a zero is the honest answer rather than a guess.
+    | account id -> its trial-balance row. Absent for an account the period never
+    | touched, which is why every read goes through `balanceOf` rather than
+    | indexing this directly: "no row" means zero, and that is the one case where
+    | a zero is the honest answer rather than a guess.
     */
     balances: {},
-    balancesFailed: false,
+    trial: null,
+    balanceError: null,
 
-    transactions: [],
-    journalPagination: null,
-    journalCounts: null,
-
-    // Collapsed groups on the chart tab, by type. Everything starts open.
+    /** Collapsed groups on the chart, by type. Everything starts open. */
     collapsed: {},
 
     canLedger: false,
-    canTransactions: false,
+
+    /** The account the drawer is open on, and where its statement has got to. */
+    current: null,
+    entryPage: 1,
 };
+
+let root = null;
+let formRoot = null;
+let listRoot = null;
+let form = null;
+let workspace = null;
+
+/** The id being edited in the drawer, or null while the form is the create surface. */
+let editing = null;
+
+/**
+ * Has the chart been fetched at all?
+ *
+ * Not the same question as "is the list held". The *form* needs the chart too —
+ * a free code cannot be suggested without knowing which are taken — so it is
+ * fetched on the first type chosen as well as on the first Show, and whichever
+ * happens first pays for it.
+ */
+let chartLoaded = false;
+
+/*
+| Each surface's own node, held from mount.
+|
+| §2A.2 keeps exactly one of the form and the list attached, so for half the
+| module's life the other is not a descendant of `document` at all and every
+| lookup into it comes back null. Querying a node works detached; querying
+| `document` for it does not.
+*/
+const inForm = (selector) => $(selector, formRoot);
+const inList = (selector) => $(selector, listRoot);
+
+/** The drawer, which lives outside both surfaces and is always attached. */
+const el = (selector) => $(selector, root);
 
 /* -------------------------------------------------------------------------
  | Money
@@ -98,13 +174,13 @@ function paiseToAmount(paise) {
 }
 
 /**
- * What an account stands at, as {amount, side}.
+ * What an account stands at over the chosen period, as `{amount, side}`.
  *
- * Null — not zero — when balances have not been read, so a caller can tell
+ * Null — not zero — when there are no figures to read, so a caller can tell
  * "nothing posted" from "not yours to see" and render each differently.
  */
 function balanceOf(account) {
-    if (!state.canLedger || state.balancesFailed) return null;
+    if (!state.canLedger || state.trial === null) return null;
 
     const row = state.balances[account.id];
 
@@ -117,7 +193,24 @@ function balanceOf(account) {
  | Data
  | ---------------------------------------------------------------------- */
 
-/** Type metadata comes from the server so the code bands are never duplicated here. */
+/** The period, as the two read endpoints both take it. */
+function period() {
+    const params = new URLSearchParams();
+
+    if (state.from) params.set('from', state.from);
+    if (state.to) params.set('to', state.to);
+
+    return params;
+}
+
+function periodLabel() {
+    if (!state.from && !state.to) return 'over the whole of the books';
+    if (state.from && state.to) return `between ${formatDate(state.from)} and ${formatDate(state.to)}`;
+
+    return state.from ? `from ${formatDate(state.from)}` : `up to ${formatDate(state.to)}`;
+}
+
+/** Type metadata comes from the server, so the code bands are never copied here. */
 async function loadTypes() {
     if (Object.keys(state.types).length) return;
 
@@ -126,120 +219,91 @@ async function loadTypes() {
     state.types = Object.fromEntries(data.map((type) => [type.value, type]));
 }
 
+/** The whole chart, archived accounts included — see the note in the header. */
 async function loadAccounts() {
-    const params = new URLSearchParams({ per_page: CHART_PAGE_SIZE });
-
-    if (state.isActive !== '') params.set('is_active', state.isActive);
-
-    const payload = await auth.call(`/accounts?${params}`);
+    const payload = await auth.call(`/accounts?per_page=${CHART_PAGE_SIZE}`);
 
     state.accounts = payload.data;
+    state.total = payload.data.length;
+    chartLoaded = true;
+}
+
+/** Fetch the chart if nothing has yet, and say nothing if it fails. */
+async function ensureChart() {
+    if (chartLoaded) return;
+
+    try {
+        await loadAccounts();
+    } catch {
+        // The suggestion is a convenience; the band is on the hint either way,
+        // and the server is the authority on both (§6.1).
+    }
 }
 
 /**
- * Balances for every account, in one request rather than one per row.
+ * Every figure on the screen, in one request.
  *
- * A failure here is not a failure of the page: the chart still reads, and the
- * balance column says so rather than the whole screen going red.
+ * A failure here is not a failure of the module: the chart still reads and says
+ * so where the balances would have been, rather than the whole screen going red
+ * because one of two calls did.
  */
 async function loadBalances() {
     if (!state.canLedger) return;
 
     try {
-        const payload = await auth.call('/ledger/trial-balance');
+        const payload = await auth.call(`/ledger/trial-balance?${period()}`);
 
+        state.trial = payload;
         state.balances = Object.fromEntries(payload.data.map((row) => [row.account.id, row]));
-        state.balancesFailed = false;
-    } catch {
+        state.balanceError = null;
+    } catch (error) {
+        state.trial = null;
         state.balances = {};
-        state.balancesFailed = true;
+        state.balanceError = error;
     }
 }
 
-async function loadJournal() {
-    if (!state.canTransactions) return;
-
-    const body = $('#journal-body');
-
-    body.innerHTML = rowMessage(8, 'Loading journal entries…');
-
-    const params = new URLSearchParams({
-        per_page: JOURNAL_PAGE_SIZE,
-        page: state.journalPage,
-        sort: 'date',
-        direction: 'desc',
-    });
-
-    if (state.search) params.set('search', state.search);
-    if (state.journalPill !== 'all') params.set('source', state.journalPill);
-    if (state.from) params.set('from', state.from);
-    if (state.to) params.set('to', state.to);
+/** The list's one load: the chart, and the figures over it. */
+async function load() {
+    paintLoading();
 
     try {
-        const payload = await auth.call(`/transactions?${params}`);
-
-        state.transactions = payload.data;
-        state.journalPagination = payload.meta?.pagination ?? null;
-
-        renderJournal();
+        await loadAccounts();
     } catch (error) {
-        state.transactions = [];
-        body.innerHTML = rowMessage(8, failureText(error), 'error');
-        $('#journal-summary').textContent = '';
-        $('#journal-pager').innerHTML = '';
+        state.accounts = [];
+        state.total = null;
+
+        paintChartFailure(failureText(error));
+        workspace?.refresh();
+
+        return;
     }
+
+    await loadBalances();
+
+    render();
 }
+
+/** What every change to a filter or the period means. */
+const refetch = debounce(load, 250);
 
 /**
- * The four figures above the journal. Unfiltered on purpose — they count the
- * workshop's books rather than the current search, and a badge that shrank as
- * somebody typed would be answering a different question from the one it looks
- * like it is answering.
+ * A platform super-admin holds every grant and belongs to no workshop, so they
+ * can reach this module and there is nothing to show them. That is a situation,
+ * not a mistake on their part.
  */
-async function loadJournalCounts() {
-    if (!state.canTransactions) return;
-
-    try {
-        const { data } = await auth.call('/transactions/counts');
-
-        state.journalCounts = data;
-        renderJournalStats();
-    } catch {
-        // The tiles keep their em-dashes. A zero here would be a claim about an
-        // empty workshop that nothing has checked.
-    }
+function failureText(error) {
+    return error.code === 'NO_WORKSPACE'
+        ? 'Your account administers the platform rather than a single workshop, so it has no books of '
+          + 'its own. Open a workshop from the workspaces list to see its accounts.'
+        : error.message;
 }
 
 /* -------------------------------------------------------------------------
  | Shared rendering
  | ---------------------------------------------------------------------- */
 
-function rowMessage(colspan, text, tone = 'muted') {
-    const color = tone === 'error' ? 'text-rose-600' : 'text-muted-foreground';
-
-    return `<tr><td colspan="${colspan}" class="px-4 py-12 text-center text-sm ${color}">${esc(text)}</td></tr>`;
-}
-
-/**
- * A platform super-admin holds every grant and belongs to no workshop, so they
- * can reach this page by typing the URL and there is nothing to show them. That
- * is a situation, not a mistake on their part.
- */
-function failureText(error) {
-    return error.code === 'NO_WORKSPACE'
-        ? 'Your account administers the platform rather than a single workshop, so it has no books of its own. '
-          + 'Open a workshop from the workspaces list to see its accounts.'
-        : error.message;
-}
-
-const TYPE_BADGE = {
-    asset: 'bg-blue-50 text-blue-700',
-    liability: 'bg-rose-50 text-rose-600',
-    equity: 'bg-purple-50 text-purple-700',
-    income: 'bg-emerald-50 text-emerald-700',
-    expense: 'bg-amber-50 text-amber-600',
-};
-
+/** One dot colour per type, so a group reads as its own block at a glance. */
 const TYPE_TINT = {
     asset: { bg: 'bg-blue-50', text: 'text-blue-600' },
     liability: { bg: 'bg-rose-50', text: 'text-rose-500' },
@@ -248,10 +312,10 @@ const TYPE_TINT = {
     expense: { bg: 'bg-amber-50', text: 'text-amber-500' },
 };
 
-function typeBadge(account) {
-    const label = account.type_label ?? state.types[account.type]?.label ?? account.type;
+const tintOf = (type) => TYPE_TINT[type] ?? { bg: 'bg-muted', text: 'text-muted-foreground' };
 
-    return `<span class="badge ${TYPE_BADGE[account.type] ?? 'bg-muted text-secondary-foreground'}">${esc(label)}</span>`;
+function typeLabel(account) {
+    return account.type_label ?? state.types[account.type]?.label ?? account.type;
 }
 
 function statusBadge(isActive) {
@@ -260,303 +324,188 @@ function statusBadge(isActive) {
         : '<span class="badge bg-muted text-muted-foreground"><span class="size-1.5 rounded-full bg-muted-foreground"></span>Archived</span>';
 }
 
-/**
- * Both of these were local colour maps until M21's §38 sweep, and they had
- * already drifted from the journal screen's copies: a reversed transaction was
- * rose here and neutral there, against the same status on the same kind of row.
- * There is one helper now — `components/badge` — and the judgement about which
- * states are alarming lives with the enum that owns them.
- */
-function txnStatusBadge(transaction) {
-    return badge(transaction.status_label, lifecycleTone(transaction.status));
-}
-
-
-/** A balance as "12,340.00 Dr", or an em-dash when the account is flat. */
+/** A balance as "12,340.00 Dr", an em-dash when flat, nothing when unreadable. */
 function balanceCell(account) {
     const balance = balanceOf(account);
 
     if (balance === null) return '';
 
-    if (isZeroAmount(balance.amount)) {
-        return '<span class="text-muted-foreground">—</span>';
-    }
+    if (isZeroAmount(balance.amount)) return '<span class="text-muted-foreground">—</span>';
 
     return `${esc(formatMoney(balance.amount))}
-            <span class="ml-1 text-[0.6875rem] font-normal text-muted-foreground">${balance.side === 'debit' ? 'Dr' : 'Cr'}</span>`;
+            <span class="ml-1 text-[0.6875rem] font-normal text-muted-foreground">${
+                balance.side === 'debit' ? 'Dr' : 'Cr'
+            }</span>`;
+}
+
+function stateBlock(text, tone = 'muted') {
+    return `<div class="surface px-4 py-12 text-center text-sm ${
+        tone === 'error' ? 'text-rose-600' : 'text-muted-foreground'
+    }">${esc(text)}</div>`;
+}
+
+function stateRow(colspan, text, tone = 'muted') {
+    return `<tr><td colspan="${colspan}" class="px-4 py-12 text-center text-sm ${
+        tone === 'error' ? 'text-rose-600' : 'text-muted-foreground'
+    }">${esc(text)}</td></tr>`;
+}
+
+function paintLoading() {
+    inList('[data-chart-groups]').innerHTML = stateBlock('Reading the chart of accounts…');
+    inList('[data-chart-tiles]').innerHTML = '';
+
+    const body = inList('[data-trial-body]');
+
+    if (body) body.innerHTML = stateRow(5, 'Working out the trial balance…');
+}
+
+function paintChartFailure(text) {
+    inList('[data-chart-groups]').innerHTML = stateBlock(text, 'error');
+    inList('[data-chart-tiles]').innerHTML = '';
+    inList('[data-chart-summary]').textContent = '';
+
+    const body = inList('[data-trial-body]');
+
+    if (body) {
+        body.innerHTML = stateRow(5, text, 'error');
+        inList('[data-trial-foot]').innerHTML = '';
+        inList('[data-trial-summary]').textContent = '';
+        inList('[data-reconciliation]').innerHTML = '';
+    }
+}
+
+function render() {
+    renderChart();
+    renderTrial();
+    workspace?.refresh();
 }
 
 /* -------------------------------------------------------------------------
- | Filtering
+ | View 1 — the chart of accounts
+ |
+ | Five collapsible blocks, which is how an accountant reads one. A group's
+ | total is the sum of its accounts' balances in paise; summing a column of
+ | balances is only meaningful *within* a type, so there is deliberately no grand
+ | total — assets plus expenses is not a number anybody wants.
  | ---------------------------------------------------------------------- */
 
+/** The chart the archived select leaves — the population the tiles count. */
+function chartAccounts() {
+    if (state.isActive === '') return state.accounts;
+
+    const wanted = state.isActive === '1';
+
+    return state.accounts.filter((account) => account.is_active === wanted);
+}
+
 /**
- * The accounts the current search and filters leave, in statement order.
+ * The accounts the search leaves as well, in statement order.
  *
  * Searching reaches the code as well as the name: somebody looking for "4002"
- * is after an account by its number, and the number is the one thing that never
- * changes.
+ * is after an account by its number, and the number is the one thing about an
+ * account that never changes.
  */
-function visibleAccounts({ pill = state.ledgerPill } = {}) {
+function visibleAccounts() {
     const needle = state.search.trim().toLowerCase();
 
-    return state.accounts
-        .filter((account) => {
-            if (state.side && account.normal_balance !== state.side) return false;
-
-            if (pill === 'pl') {
-                if (!PL_TYPES.includes(account.type)) return false;
-            } else if (pill !== 'all' && account.type !== pill) {
-                return false;
-            }
-
-            if (!needle) return true;
-
-            return account.name.toLowerCase().includes(needle)
-                || String(account.code).includes(needle)
-                || (account.description ?? '').toLowerCase().includes(needle);
-        })
+    return chartAccounts()
+        .filter((account) => !needle
+            || account.name.toLowerCase().includes(needle)
+            || String(account.code).includes(needle)
+            || (account.description ?? '').toLowerCase().includes(needle))
         .sort((a, b) => TYPE_ORDER.indexOf(a.type) - TYPE_ORDER.indexOf(b.type)
             || String(a.code).localeCompare(String(b.code)));
 }
 
-/* -------------------------------------------------------------------------
- | Tab 1 — Ledger Accounts
- | ---------------------------------------------------------------------- */
-
-function renderLedgerStats() {
-    const count = (predicate) => state.accounts.filter(predicate).length;
-
-    $('#stat-ledgers').textContent = state.accounts.length;
-    $('#stat-assets').textContent = count((a) => a.type === 'asset');
-    $('#stat-liabilities').textContent = count((a) => a.type === 'liability');
-    $('#stat-pl').textContent = count((a) => PL_TYPES.includes(a.type));
-
-    $$('[data-stat-filter]').forEach((tile) => {
-        tile.classList.toggle('stat-tile-on', tile.dataset.statFilter === state.ledgerPill);
-    });
-}
-
-function renderLedger() {
-    const body = $('#ledger-body');
-    const rows = visibleAccounts();
-    const columns = state.canLedger && !state.balancesFailed ? 6 : 5;
-
-    renderLedgerStats();
-
-    $$('#ledger-pills [data-pill]').forEach((pill) => {
-        pill.setAttribute('aria-pressed', String(pill.dataset.pill === state.ledgerPill));
-    });
-
-    if (!rows.length) {
-        body.innerHTML = rowMessage(columns, state.accounts.length
-            ? 'No accounts match these filters.'
-            : 'This workshop has no chart of accounts yet.');
-        $('#ledger-summary').textContent = '';
-
-        return;
-    }
-
-    body.innerHTML = rows.map((account) => `
-        <tr class="cursor-pointer transition hover:bg-secondary/60 ${account.is_active ? '' : 'opacity-60'}"
-            data-ledger="${account.id}" tabindex="0" role="button"
-            aria-label="Open ${esc(account.name)}">
-
-            <td class="table-cell">
-                <div class="flex items-center gap-2">
-                    <span class="font-semibold">${esc(account.name)}</span>
-                    ${account.is_system ? iconLock : ''}
-                </div>
-                <div class="mt-0.5 font-mono text-[0.6875rem] text-muted-foreground">${esc(account.code)}</div>
-            </td>
-
-            <td class="table-cell">${typeBadge(account)}</td>
-
-            ${state.canLedger && !state.balancesFailed ? `
-                <td class="table-cell w-40 text-right font-mono text-[0.8125rem] font-semibold whitespace-nowrap">
-                    ${balanceCell(account)}
-                </td>` : ''}
-
-            <td class="table-cell w-36 whitespace-nowrap text-[0.78125rem] text-muted-foreground">
-                ${esc(formatDate(account.updated_at))}
-            </td>
-
-            <td class="table-cell w-28">${statusBadge(account.is_active)}</td>
-
-            <td class="table-cell w-14">
-                <div class="flex justify-end">
-                    <button type="button" class="btn btn-ghost btn-icon" data-menu="${account.id}"
-                            aria-haspopup="menu" aria-expanded="false" aria-label="Actions">
-                        ${iconMore}
-                    </button>
-                </div>
-            </td>
-        </tr>`).join('');
-
-    $('#ledger-summary').textContent = rows.length === state.accounts.length
-        ? `${rows.length} account${rows.length === 1 ? '' : 's'}.`
-        : `Showing ${rows.length} of ${state.accounts.length} accounts.`;
-}
-
-/* -------------------------------------------------------------------------
- | Tab 2 — Journal Entries
- | ---------------------------------------------------------------------- */
-
-function renderJournalStats() {
-    const counts = state.journalCounts;
-
-    if (!counts) return;
-
-    /*
-    | All four come from the status breakdown, which is what the endpoint
-    | actually publishes — it counts by type and by status, not by source. A
-    | tile fed from a key that is never sent would show a zero nothing had
-    | counted.
-    */
-    const statuses = counts.statuses ?? {};
-    const total = Object.values(statuses).reduce((sum, n) => sum + n, 0);
-
-    $('#stat-entries').textContent = total;
-    $('#stat-posted').textContent = statuses.posted ?? 0;
-    $('#stat-drafts').textContent = statuses.draft ?? 0;
-    $('#stat-reversed').textContent = statuses.reversed ?? 0;
-}
-
-function renderJournal() {
-    const body = $('#journal-body');
-
-    $$('#journal-pills [data-pill]').forEach((pill) => {
-        pill.setAttribute('aria-pressed', String(pill.dataset.pill === state.journalPill));
-    });
-
-    if (!state.transactions.length) {
-        body.innerHTML = rowMessage(8, 'No journal entries match these filters.');
-        $('#journal-summary').textContent = '';
-        $('#journal-pager').innerHTML = '';
-
-        return;
-    }
-
-    body.innerHTML = state.transactions.map((transaction) => {
-        /*
-        | A posted transaction is balanced by construction, so its total is both
-        | its debit and its credit — that is what "balanced" means, and showing
-        | the same figure twice is the columns doing their job rather than a
-        | duplication. A draft has reached nothing, so both columns say so.
-        */
-        const amount = transaction.is_draft ? null : transaction.total;
-
-        return `
-        <tr class="cursor-pointer transition hover:bg-secondary/60"
-            data-journal="${transaction.id}" tabindex="0" role="button"
-            aria-label="Open journal entry ${transaction.id}">
-
-            <td class="table-cell w-28 font-semibold text-primary">#${transaction.id}</td>
-
-            <td class="table-cell w-32 whitespace-nowrap text-[0.78125rem] text-muted-foreground">
-                ${esc(formatDate(transaction.date))}
-            </td>
-
-            <td class="table-cell">
-                <div class="font-medium">${esc(transaction.notes || transaction.type_label)}</div>
-                <div class="mt-0.5 text-[0.78125rem] text-muted-foreground">
-                    ${esc(transaction.type_label)}${transaction.party ? ` · ${esc(transaction.party.name)}` : ''}
-                </div>
-            </td>
-
-            <td class="table-cell w-36 text-right font-mono text-[0.8125rem] font-semibold whitespace-nowrap">
-                ${amount === null ? '<span class="text-muted-foreground">—</span>' : esc(formatMoney(amount))}
-            </td>
-
-            <td class="table-cell w-36 text-right font-mono text-[0.8125rem] font-semibold whitespace-nowrap">
-                ${amount === null ? '<span class="text-muted-foreground">—</span>' : esc(formatMoney(amount))}
-            </td>
-
-            <td class="table-cell w-28">${txnStatusBadge(transaction)}</td>
-
-            <td class="table-cell w-32">${sourceBadge(transaction.source, transaction.source_label)}</td>
-
-            <td class="table-cell w-14">
-                <div class="flex justify-end">${iconChevron}</div>
-            </td>
-        </tr>`;
-    }).join('');
-
-    const pagination = state.journalPagination;
-    const total = pagination?.total ?? state.transactions.length;
-
-    $('#journal-summary').textContent =
-        `Showing ${state.transactions.length} of ${total} entr${total === 1 ? 'y' : 'ies'}.`;
-
-    $('#journal-pager').innerHTML = pagination && pagination.last_page > 1
-        ? `<button type="button" class="btn btn-secondary btn-sm" data-page="prev"
-                   ${pagination.current_page <= 1 ? 'disabled' : ''}>Previous</button>
-           <span class="px-2 text-[0.78125rem] text-muted-foreground">
-               ${pagination.current_page} / ${pagination.last_page}
-           </span>
-           <button type="button" class="btn btn-secondary btn-sm" data-page="next"
-                   ${pagination.has_more ? '' : 'disabled'}>Next</button>`
-        : '';
-}
-
-/* -------------------------------------------------------------------------
- | Tab 3 — Chart of Accounts
- | ---------------------------------------------------------------------- */
-
 /**
- * The chart as five collapsible blocks, which is how an accountant reads one.
+ * A group's position, in paise, signed against the type's own normal side.
  *
- * The group total is the sum of its accounts' balances in paise. Summing a
- * column of balances is only meaningful *within* a type — every account in a
- * group falls on the same side — so there is deliberately no grand total here:
- * assets plus expenses is not a number anybody wants.
+ * **Not the sum of the balance column, and this is the one that looks right and
+ * is not.** A row shows an absolute figure and the side it fell out on, which is
+ * what a reader wants of one account. Add that column up and an overdrawn bank —
+ * a credit sitting in a block of debits — is *added* to the workshop's assets
+ * rather than netted out of them, so a shop with ₹72,950 in the till and a bank
+ * ₹40,000 down reports assets of ₹1,12,950 instead of ₹32,950.
+ *
+ * `signed_balance` is the server's answer to exactly this question: positive
+ * where an account stands on its own normal side, negative where it does not.
+ * There is no second arithmetic here (§4.4).
  */
-function renderCoa() {
-    const host = $('#coa-groups');
-    const rows = visibleAccounts({ pill: 'all' });
-
-    const grouped = TYPE_ORDER
-        .map((type) => [type, rows.filter((account) => account.type === type)])
-        .filter(([, accounts]) => accounts.length);
-
-    renderCoaTiles();
-
-    if (!grouped.length) {
-        host.innerHTML = `<div class="surface px-4 py-12 text-center text-sm text-muted-foreground">
-                              ${esc(state.accounts.length ? 'No accounts match these filters.' : 'This workshop has no chart of accounts yet.')}
-                          </div>`;
-        $('#coa-summary').textContent = '';
-
-        return;
-    }
-
-    host.innerHTML = grouped.map(([type, accounts]) => renderCoaGroup(type, accounts)).join('');
-
-    $('#coa-summary').textContent = rows.length === state.accounts.length
-        ? `${rows.length} account${rows.length === 1 ? '' : 's'} across ${grouped.length} type${grouped.length === 1 ? '' : 's'}.`
-        : `Showing ${rows.length} of ${state.accounts.length} accounts.`;
-}
-
 function groupTotalPaise(accounts) {
     return accounts.reduce((total, account) => {
-        const balance = balanceOf(account);
+        const row = state.balances[account.id];
 
-        return balance === null ? total : total + toPaise(balance.amount);
+        return row ? total + toPaise(row.signed_balance) : total;
     }, 0);
 }
 
-function renderCoaTiles() {
-    const host = $('#coa-tiles');
+/** That position as "1,34,464.00 Dr" — on the other side when it went negative. */
+function groupTotal(type, accounts) {
+    const paise = groupTotalPaise(accounts);
+    const amount = formatMoney(paiseToAmount(Math.abs(paise)));
 
-    if (!host) return;
+    // A group that nets to nothing is on neither side, and "0.00 Cr" would be
+    // claiming one.
+    if (paise === 0) return amount;
+
+    const normal = state.types[type]?.normal_balance ?? 'debit';
+
+    return `${amount} ${(normal === 'debit') === (paise > 0) ? 'Dr' : 'Cr'}`;
+}
+
+function renderChart() {
+    const host = inList('[data-chart-groups]');
+    const rows = visibleAccounts();
+    const population = chartAccounts();
+
+    /*
+    | Each group is carried with the whole of its type beside it. A group header
+    | states a *total*, and a total of whatever a search happened to leave is not
+    | an accounting figure — so the header needs to know it is looking at a
+    | subset, and says how many of how many instead.
+    */
+    const grouped = TYPE_ORDER
+        .map((type) => [
+            type,
+            rows.filter((account) => account.type === type),
+            population.filter((account) => account.type === type),
+        ])
+        .filter(([, accounts]) => accounts.length);
+
+    renderChartTiles();
+
+    if (!grouped.length) {
+        host.innerHTML = stateBlock(state.accounts.length
+            ? 'No accounts match this search and filter.'
+            : 'Nothing on this chart yet. A workshop is seeded with fifteen accounts the moment it is '
+              + 'provisioned, so an empty chart usually means the books belong to another workshop.');
+        inList('[data-chart-summary]').textContent = '';
+
+        return;
+    }
+
+    host.innerHTML = grouped
+        .map(([type, accounts, whole]) => renderChartGroup(type, accounts, whole))
+        .join('');
+
+    inList('[data-chart-summary]').textContent = rows.length === state.accounts.length
+        ? `${rows.length} account${rows.length === 1 ? '' : 's'} across ${grouped.length} type${
+            grouped.length === 1 ? '' : 's'}.`
+        : `Showing ${rows.length} of ${state.accounts.length} accounts.`;
+}
+
+function renderChartTiles() {
+    const host = inList('[data-chart-tiles]');
+    const showTotals = state.canLedger && state.trial !== null;
+    const population = chartAccounts();
 
     host.innerHTML = TYPE_ORDER.map((type) => {
-        const accounts = state.accounts.filter((account) => account.type === type);
+        const accounts = population.filter((account) => account.type === type);
 
         if (!accounts.length) return '';
 
         const meta = state.types[type] ?? {};
-        const tint = TYPE_TINT[type];
+        const tint = tintOf(type);
 
         return `
             <div class="stat-tile !gap-2.5 !p-3">
@@ -564,56 +513,66 @@ function renderCoaTiles() {
                     ${iconDot}
                 </span>
                 <span class="min-w-0">
-                    <span class="block truncate text-[0.6875rem] text-muted-foreground">${esc(meta.label ?? type)}</span>
+                    <span class="block truncate text-[0.6875rem] text-muted-foreground">
+                        ${esc(meta.label ?? type)} · ${accounts.length}
+                    </span>
                     <span class="block truncate text-[0.84375rem] font-bold text-foreground">
-                        ${esc(formatMoney(paiseToAmount(groupTotalPaise(accounts))))}
+                        ${showTotals
+                            ? esc(groupTotal(type, accounts))
+                            : `${accounts.length} account${accounts.length === 1 ? '' : 's'}`}
                     </span>
                 </span>
             </div>`;
     }).join('');
 }
 
-function renderCoaGroup(type, accounts) {
+function renderChartGroup(type, accounts, whole) {
     const meta = state.types[type] ?? {};
-    const tint = TYPE_TINT[type];
+    const tint = tintOf(type);
     const [low, high] = meta.code_range ?? [];
     const open = !state.collapsed[type];
     const mayWrite = can('WRITE', 'ACCOUNTS');
-    const showTotal = state.canLedger && !state.balancesFailed;
+    const partial = accounts.length !== whole.length;
+    const showBalances = state.canLedger && state.trial !== null;
+
+    // A row's own balance is a fact about that row; a group *total* over
+    // whatever a search happened to leave is not a figure anybody wants. So the
+    // header states one only when it is over the whole group.
+    const showTotal = showBalances && !partial;
 
     const rows = accounts.map((account) => `
-        <div class="flex items-center gap-4 border-b border-muted px-5 py-3 transition last:border-b-0 hover:bg-secondary/60
-                    ${account.is_active ? '' : 'opacity-60'}">
+        <div class="flex cursor-pointer items-center gap-4 border-b border-muted px-5 py-3 transition
+                    last:border-b-0 hover:bg-secondary/60 ${account.is_active ? '' : 'opacity-60'}${
+                        workspace?.isNew(account.id) ? ' row-new' : ''}"
+             data-account="${account.id}" tabindex="0" role="button"
+             aria-label="Open ${esc(account.name)}">
+
             <span class="flex w-6 shrink-0 justify-center">
                 <span class="h-4 w-px bg-border"></span>
             </span>
 
             <span class="flex min-w-0 flex-1 items-center gap-2">
-                <button type="button" class="truncate text-left text-[0.8125rem] font-medium text-secondary-foreground
-                                             transition hover:text-primary"
-                        data-ledger="${account.id}">${esc(account.name)}</button>
+                <span class="truncate text-[0.8125rem] font-medium text-secondary-foreground">
+                    ${esc(account.name)}
+                </span>
                 ${account.is_system ? iconLock : ''}
                 ${account.is_active ? '' : '<span class="badge bg-muted text-muted-foreground">Archived</span>'}
             </span>
 
-            <code class="shrink-0 rounded bg-muted px-2 py-0.5 font-mono text-[0.6875rem] text-muted-foreground">${esc(account.code)}</code>
+            <code class="shrink-0 rounded bg-muted px-2 py-0.5 font-mono text-[0.6875rem] text-muted-foreground">${
+                esc(String(account.code))
+            }</code>
 
-            ${showTotal ? `
-                <span class="w-28 shrink-0 text-right font-mono text-[0.8125rem] font-semibold text-foreground">
+            ${showBalances ? `
+                <span class="w-32 shrink-0 text-right font-mono text-[0.8125rem] font-semibold text-foreground">
                     ${balanceCell(account)}
                 </span>` : ''}
-
-            <span class="flex w-8 shrink-0 items-center justify-end">
-                ${account.is_system || !can('UPDATE', 'ACCOUNTS')
-                    ? ''
-                    : `<button type="button" class="btn btn-ghost btn-icon" data-edit="${account.id}"
-                               title="Edit account" aria-label="Edit ${esc(account.name)}">${iconPencil}</button>`}
-            </span>
         </div>`).join('');
 
     return `
         <section class="surface overflow-hidden rounded-[14px]">
-            <button type="button" class="flex w-full items-center gap-3 px-5 py-3.5 text-left transition hover:bg-secondary/60"
+            <button type="button" class="flex w-full items-center gap-3 px-5 py-3.5 text-left transition
+                                         hover:bg-secondary/60"
                     data-group="${type}" aria-expanded="${open}">
                 <span class="grid size-8 shrink-0 place-items-center rounded-[8px] ${tint.bg} ${tint.text}">
                     ${iconDot}
@@ -622,13 +581,17 @@ function renderCoaGroup(type, accounts) {
                 <span class="flex-1">
                     <span class="block text-sm font-bold text-foreground">${esc(meta.label ?? type)}</span>
                     <span class="block text-[0.71875rem] text-muted-foreground">
-                        ${accounts.length} account${accounts.length === 1 ? '' : 's'}
+                        ${partial
+                            ? `${accounts.length} of ${whole.length} accounts`
+                            : `${whole.length} account${whole.length === 1 ? '' : 's'}`}
                         ${low ? ` · band ${low}–${high}` : ''}
-                        ${showTotal ? ` · ${esc(formatMoney(paiseToAmount(groupTotalPaise(accounts))))}` : ''}
+                        ${showTotal ? ` · ${esc(groupTotal(type, whole))}` : ''}
                     </span>
                 </span>
 
-                <span class="text-muted-foreground ${open ? '' : '-rotate-90'} transition-transform">${iconChevronDown}</span>
+                <span class="text-muted-foreground ${open ? '' : '-rotate-90'} transition-transform">
+                    ${iconChevronDown}
+                </span>
             </button>
 
             ${open ? `
@@ -636,15 +599,114 @@ function renderCoaGroup(type, accounts) {
                     ${rows}
                     ${mayWrite && !state.search ? `
                         <div class="border-t border-muted px-5 py-2.5">
-                            <button type="button" class="flex items-center gap-1.5 text-[0.78125rem] font-medium text-primary
-                                                         transition hover:text-primary/80"
-                                    data-add-to="${type}">
+                            <button type="button" data-add-to="${type}"
+                                    class="flex items-center gap-1.5 text-[0.78125rem] font-medium text-primary
+                                           transition hover:text-primary/80">
                                 ${iconPlus}
-                                Add account to ${esc(meta.label ?? type)}
+                                Add an account to ${esc(meta.label ?? type)}
                             </button>
                         </div>` : ''}
                 </div>` : ''}
         </section>`;
+}
+
+/* -------------------------------------------------------------------------
+ | View 2 — the trial balance
+ | ---------------------------------------------------------------------- */
+
+function renderTrial() {
+    const body = inList('[data-trial-body]');
+
+    // Removed for a caller without READ:LEDGER, along with the switch that would
+    // have reached it.
+    if (!body) return;
+
+    if (state.trial === null) {
+        const text = state.balanceError
+            ? failureText(state.balanceError)
+            : 'The trial balance has not been read yet.';
+
+        body.innerHTML = stateRow(5, text, 'error');
+        inList('[data-trial-foot]').innerHTML = '';
+        inList('[data-trial-summary]').textContent = '';
+        inList('[data-reconciliation]').innerHTML = '';
+
+        return;
+    }
+
+    const rows = state.trial.data;
+    const meta = state.trial.meta;
+
+    body.innerHTML = rows.length
+        ? rows.map((row) => `
+            <tr class="cursor-pointer border-t border-border transition hover:bg-secondary/60"
+                data-account="${row.account.id}" tabindex="0" role="button"
+                aria-label="Open the ledger for ${esc(row.account.name)}">
+                <td class="table-cell">
+                    <span class="font-mono text-[0.8125rem] text-muted-foreground">${esc(String(row.account.code))}</span>
+                    <span class="ml-2 font-medium">${esc(row.account.name)}</span>
+                    ${row.account.is_active ? '' : '<span class="badge ml-2 bg-muted text-muted-foreground">Archived</span>'}
+                </td>
+                <td class="table-cell w-32 text-[0.8125rem] text-muted-foreground">${esc(row.account.type_label)}</td>
+                <td class="table-cell w-36 text-right font-mono text-[0.8125rem]">${esc(formatMoney(row.debit))}</td>
+                <td class="table-cell w-36 text-right font-mono text-[0.8125rem]">${esc(formatMoney(row.credit))}</td>
+                <td class="table-cell w-40 text-right font-mono text-[0.8125rem] font-semibold">
+                    ${isZeroAmount(row.balance)
+                        ? '—'
+                        : `${esc(formatMoney(row.balance))} <span class="ml-1 text-xs font-normal text-muted-foreground">${
+                            row.balance_side === 'debit' ? 'Dr' : 'Cr'}</span>`}
+                </td>
+            </tr>`).join('')
+        // Correct rather than empty: a workshop that has posted nothing has a
+        // trial balance of 0 = 0.
+        : stateRow(5, 'Nothing has been posted in this period, so every account stands at zero.');
+
+    inList('[data-trial-foot]').innerHTML = `
+        <tr class="border-t-2 border-border bg-secondary/30 text-sm font-semibold">
+            <td class="px-4 py-3 text-right text-muted-foreground" colspan="2">Totals</td>
+            <td class="px-4 py-3 text-right font-mono">${esc(formatMoney(meta.totals.debit))}</td>
+            <td class="px-4 py-3 text-right font-mono">${esc(formatMoney(meta.totals.credit))}</td>
+            <td class="px-4 py-3 text-right font-mono">
+                ${esc(formatMoney(meta.balances.debit))}
+                <span class="text-xs font-normal text-muted-foreground">Dr</span>
+                / ${esc(formatMoney(meta.balances.credit))}
+                <span class="text-xs font-normal text-muted-foreground">Cr</span>
+            </td>
+        </tr>`;
+
+    inList('[data-trial-summary]').textContent = rows.length
+        ? `${rows.length} account${rows.length === 1 ? '' : 's'} with movement ${periodLabel()}. `
+          + 'An account nothing was posted to in this period is not listed; it is on the chart, at zero.'
+        : '';
+
+    renderReconciliation(meta);
+}
+
+/**
+ * The one figure that matters, stated rather than left to be worked out.
+ *
+ * If the two sides differ, everything else on this screen is suspect — so it is
+ * said in words above the table instead of being inferred from two columns a
+ * reader would have to compare themselves.
+ */
+function renderReconciliation(meta) {
+    inList('[data-reconciliation]').innerHTML = meta.is_balanced
+        ? `<div class="surface flex flex-wrap items-center gap-x-2 gap-y-1 border-emerald-200 bg-emerald-50/60
+                       px-4 py-3 text-[0.8125rem] text-emerald-800">
+               <span class="font-semibold">The books balance.</span>
+               <span>
+                   Debits and credits both total ${esc(formatMoney(meta.totals.debit))} ${esc(periodLabel())}.
+               </span>
+           </div>`
+        : `<div class="surface flex flex-wrap items-center gap-x-2 gap-y-1 border-rose-200 bg-rose-50
+                       px-4 py-3 text-[0.8125rem] text-rose-700">
+               <span class="font-semibold">The books do not balance.</span>
+               <span>
+                   Debits exceed credits by ${esc(formatMoney(meta.difference))}. The posting engine refuses
+                   an unbalanced entry, so this should be impossible — please report it before entering
+                   anything further.
+               </span>
+           </div>`;
 }
 
 /* -------------------------------------------------------------------------
@@ -655,145 +717,75 @@ const svg = (paths, size = 16) =>
     `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor"
           stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
 
-const iconLock = `<span class="shrink-0 text-border" title="System account">${svg('<rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>', 11)}</span>`;
-const iconMore = svg('<circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/>', 15);
-const iconChevron = `<span class="text-border">${svg('<path d="m9 18 6-6-6-6"/>', 14)}</span>`;
+const iconLock = `<span class="shrink-0 text-border" title="System account">${
+    svg('<rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>', 11)}</span>`;
 const iconChevronDown = svg('<path d="m6 9 6 6 6-6"/>', 15);
-const iconPencil = svg('<path d="M21.17 6.83a2.83 2.83 0 0 0-4-4L3.5 16.5 2 22l5.5-1.5z"/><path d="m15 5 4 4"/>', 13);
 const iconPlus = svg('<path d="M5 12h14"/><path d="M12 5v14"/>', 13);
 const iconDot = svg('<circle cx="12" cy="12" r="7"/>', 13);
-const iconEye = svg('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>', 13);
-const iconDownload = svg('<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/>', 13);
-const iconArchive = svg('<rect x="2" y="4" width="20" height="5" rx="1"/><path d="M4 9v9a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9"/><path d="M10 13h4"/>', 13);
-const iconRestore = svg('<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/>', 13);
+const iconCheck = svg('<circle cx="12" cy="12" r="9"/><path d="m8.5 12.5 2.5 2.5 4.5-5"/>', 15);
 
 /* -------------------------------------------------------------------------
- | The row menu
+ | One account — level 2
  |
- | Opened as a fixed layer on the body rather than inside the row: the table
- | scrolls sideways on a narrow screen, and a container that scrolls on one axis
- | clips the other — an absolutely positioned menu would be cut off exactly
- | where the last row's menu opens.
+ | The running statement over the period the list is set to, the details behind
+ | it, and the acts a chart of accounts permits: rename it, renumber it, or take
+ | it out of the pickers. There is no delete, and there is no route for one — an
+ | account that has been posted to must survive or its journal entries lose the
+ | name that explains them.
  | ---------------------------------------------------------------------- */
 
-function closeMenus() {
-    $$('[data-row-menu]').forEach((menu) => menu.remove());
-    $$('[data-menu]').forEach((button) => button.setAttribute('aria-expanded', 'false'));
-}
-
-function openMenu(button, accountId) {
-    const account = state.accounts.find((row) => String(row.id) === String(accountId));
+async function openDrawer(id) {
+    const account = state.accounts.find((row) => String(row.id) === String(id));
 
     if (!account) return;
 
-    closeMenus();
+    state.current = account;
+    state.entryPage = 1;
 
-    const entries = [{ label: 'View ledger', icon: iconEye, action: 'open' }];
+    closeEdit();
 
-    if (state.canLedger) {
-        entries.push({ label: 'Download statement', icon: iconDownload, action: 'statement' });
-    }
-
-    if (can('UPDATE', 'ACCOUNTS')) {
-        entries.push({ label: 'Edit account', icon: iconPencil, action: 'edit' });
-
-        // System accounts keep no archive entry at all: the posting engine
-        // resolves them by key, so archiving one would break a template rather
-        // than tidy a list.
-        if (!account.is_system) {
-            entries.push(account.is_active
-                ? { label: 'Archive account', icon: iconArchive, action: 'archive' }
-                : { label: 'Restore account', icon: iconRestore, action: 'restore' });
-        }
-    }
-
-    const menu = document.createElement('div');
-
-    menu.className = 'row-menu';
-    menu.dataset.rowMenu = '';
-    menu.setAttribute('role', 'menu');
-
-    menu.innerHTML = entries.map((entry) => `
-        <button type="button" role="menuitem" class="row-menu-item"
-                data-action="${entry.action}" data-id="${account.id}">
-            ${entry.icon}
-            ${entry.label}
-        </button>`).join('');
-
-    // Measured off-screen first: the height decides whether it opens down or up,
-    // and asking for it before the browser has laid it out returns zero.
-    menu.style.position = 'fixed';
-    menu.style.visibility = 'hidden';
-    document.body.append(menu);
-
-    const rect = button.getBoundingClientRect();
-    const height = menu.offsetHeight;
-    const below = window.innerHeight - rect.bottom;
-
-    menu.style.top = below < height + 8
-        ? `${Math.max(8, rect.top - height - 4)}px`
-        : `${rect.bottom + 4}px`;
-
-    menu.style.left = `${Math.max(8, rect.right - menu.offsetWidth)}px`;
-    menu.style.right = 'auto';
-    menu.style.visibility = 'visible';
-
-    button.setAttribute('aria-expanded', 'true');
-}
-
-/* -------------------------------------------------------------------------
- | The ledger drawer
- | ---------------------------------------------------------------------- */
-
-let openLedgerAccount = null;
-
-async function openLedgerDrawer(accountId) {
-    const account = state.accounts.find((row) => String(row.id) === String(accountId));
-
-    if (!account) return;
-
-    openLedgerAccount = account;
+    el('#account-drawer-title').textContent = account.name;
+    el('[data-drawer-subtitle]').textContent =
+        `${account.code} · ${typeLabel(account)}${account.is_system ? ' · System account' : ''}`;
+    el('[data-drawer-status]').innerHTML = statusBadge(account.is_active);
 
     const balance = balanceOf(account);
 
-    $('#ledger-drawer-title').textContent = account.name;
-    $('#ledger-drawer-subtitle').textContent =
-        `${account.code} · ${account.type_label}${account.is_system ? ' · System account' : ''}`;
-    $('#ledger-drawer-status').innerHTML = statusBadge(account.is_active);
-
-    $('#ledger-drawer-edit').classList.toggle('hidden', !can('UPDATE', 'ACCOUNTS'));
-    $('#ledger-drawer-statement').classList.toggle('hidden', !state.canLedger);
-
-    $('#ledger-drawer-body').innerHTML = `
+    el('[data-drawer-body]').innerHTML = `
         ${balance === null ? '' : `
             <div class="mb-5 rounded-[12px] border border-border bg-secondary/40 px-4 py-3.5">
-                <p class="text-[0.6875rem] uppercase tracking-wide text-muted-foreground">Current balance</p>
+                <p class="text-[0.6875rem] uppercase tracking-wide text-muted-foreground">
+                    Balance ${esc(periodLabel())}
+                </p>
                 <p class="mt-1 font-mono text-[22px] font-bold leading-none text-foreground">
                     ${esc(formatMoney(balance.amount))}
-                    <span class="text-sm font-normal text-muted-foreground">${balance.side === 'debit' ? 'Dr' : 'Cr'}</span>
+                    <span class="text-sm font-normal text-muted-foreground">${
+                        balance.side === 'debit' ? 'Dr' : 'Cr'}</span>
                 </p>
             </div>`}
 
-        <h4 class="section-label mb-2">Ledger details</h4>
+        <h4 class="section-label mb-2">Account</h4>
         <dl class="mb-5 space-y-2 text-[0.8125rem]">
-            ${detail('Account name', account.name)}
-            ${detail('Account type', account.type_label)}
-            ${detail('Account code', account.code, 'font-mono')}
+            ${detail('Name', account.name)}
+            ${detail('Type', typeLabel(account))}
+            ${detail('Code', String(account.code), 'font-mono')}
             ${detail('Increases on', account.normal_balance === 'debit' ? 'Debit' : 'Credit')}
             ${detail('Statement', account.is_balance_sheet ? 'Balance sheet' : 'Profit & loss')}
             ${detail('Last updated', formatDate(account.updated_at))}
             ${detail('System account', account.is_system ? 'Yes' : 'No')}
-            ${account.description ? detail('Description', account.description) : ''}
+            ${account.description ? detail('What belongs in it', account.description) : ''}
         </dl>
 
         ${state.canLedger ? `
-            <h4 class="section-label mb-2">Running ledger</h4>
-            <div id="drawer-ledger-rows" class="text-[0.8125rem] text-muted-foreground">Loading entries…</div>`
+            <h4 class="section-label mb-2">Running statement</h4>
+            <div data-statement class="text-[0.8125rem] text-muted-foreground">Loading entries…</div>`
         : ''}`;
 
-    showModal('#ledger-drawer');
+    paintDrawerActions(account);
 
-    if (state.canLedger) loadDrawerLedger(account);
+    showModal(el('#account-drawer'));
+
+    if (state.canLedger) loadStatement();
 }
 
 function detail(label, value, extraClass = '') {
@@ -804,34 +796,96 @@ function detail(label, value, extraClass = '') {
         </div>`;
 }
 
-/**
- * The last page of movement on this account, newest first.
- *
- * A window rather than the whole ledger: the drawer answers "what has been
- * happening here", and the full statement is the Ledger screen's job.
- */
-async function loadDrawerLedger(account) {
-    const host = $('#drawer-ledger-rows');
+const SYSTEM_ARCHIVE_REASON =
+    'The posting engine finds this account by an internal key, so archiving it would break the templates '
+    + 'that post to it.';
 
-    if (!host) return;
+/**
+ * The drawer's footer.
+ *
+ * A system account's archive control is **disabled with its reason beside it**
+ * rather than hidden: archiving one would break a template rather than tidy a
+ * list, and that is the answer to a question somebody is asking right here. A
+ * grant the caller does not hold is the other case and the control is absent,
+ * because there is no answer to give.
+ */
+function paintDrawerActions(account) {
+    const parts = [];
+    const locked = can('UPDATE', 'ACCOUNTS') && account.is_system;
+
+    if (can('UPDATE', 'ACCOUNTS')) {
+        parts.push('<button type="button" class="btn btn-secondary btn-sm" data-edit-account>Edit</button>');
+
+        parts.push(account.is_system
+            ? `<button type="button" class="btn btn-secondary btn-sm" disabled
+                       title="${esc(SYSTEM_ARCHIVE_REASON)}">Archive</button>`
+            : `<button type="button" class="btn btn-secondary btn-sm" data-toggle-archived>${
+                account.is_active ? 'Archive' : 'Restore'}</button>`);
+    }
+
+    if (state.canLedger) {
+        parts.push('<button type="button" class="btn btn-secondary btn-sm" data-statement-csv>Statement CSV</button>');
+    }
+
+    parts.push('<button type="button" class="btn btn-secondary btn-sm ml-auto" data-modal-close>Close</button>');
+
+    // Last, and on its own line: the controls stay together on one row, and the
+    // reason sits under the control it explains rather than between two of them.
+    if (locked) {
+        parts.push(`<p class="w-full text-[0.71875rem] text-muted-foreground">${esc(SYSTEM_ARCHIVE_REASON)}</p>`);
+    }
+
+    el('[data-drawer-actions]').innerHTML = parts.join('');
+}
+
+/**
+ * The window of movement on this account, oldest first with a running balance.
+ *
+ * A page rather than the whole ledger: the drawer answers "what has been
+ * happening here", and the whole of it is the CSV below it.
+ */
+async function loadStatement() {
+    const account = state.current;
+    const host = el('[data-statement]');
+
+    if (!account || !host) return;
+
+    const params = period();
+
+    params.set('per_page', STATEMENT_WINDOW);
+    params.set('page', state.entryPage);
 
     try {
-        const payload = await auth.call(`/ledger/accounts/${account.id}?per_page=10`);
-        const entries = payload.data;
+        const payload = await auth.call(`/ledger/accounts/${account.id}?${params}`);
 
         // Still the drawer we started for? A fast second click would otherwise
         // paint one account's entries under another's name.
-        if (openLedgerAccount?.id !== account.id) return;
+        if (state.current?.id !== account.id) return;
 
-        if (!entries.length) {
-            host.innerHTML = '<p class="py-3">Nothing has been posted to this account yet.</p>';
+        renderStatement(payload);
+    } catch (error) {
+        if (state.current?.id !== account.id) return;
 
-            return;
-        }
+        host.innerHTML = `<p class="py-3 text-rose-600">${esc(failureText(error))}</p>`;
+    }
+}
 
-        host.innerHTML = `
-            <div class="overflow-hidden rounded-[10px] border border-border">
-                <table class="w-full border-collapse">
+function renderStatement(payload) {
+    const host = el('[data-statement]');
+    const entries = payload.data;
+    const meta = payload.meta;
+    const pagination = meta.pagination ?? {};
+
+    if (!entries.length) {
+        host.innerHTML = `<p class="py-3">Nothing was posted to this account ${esc(periodLabel())}.</p>`;
+
+        return;
+    }
+
+    host.innerHTML = `
+        <div class="overflow-hidden rounded-[10px] border border-border">
+            <div class="overflow-x-auto">
+                <table class="w-full min-w-[420px] border-collapse">
                     <thead>
                         <tr class="border-b border-border bg-secondary/40 text-left">
                             <th class="px-3 py-2 text-[0.6875rem] font-semibold text-muted-foreground">Date</th>
@@ -842,6 +896,10 @@ async function loadDrawerLedger(account) {
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-muted">
+                        <tr class="bg-secondary/20 text-[0.71875rem] italic text-muted-foreground">
+                            <td class="px-3 py-2" colspan="4">Balance brought forward</td>
+                            <td class="px-3 py-2 text-right font-mono not-italic">${esc(formatMoney(meta.opening_balance))}</td>
+                        </tr>
                         ${entries.map((entry) => `
                             <tr>
                                 <td class="px-3 py-2 whitespace-nowrap text-[0.71875rem] text-muted-foreground">
@@ -849,7 +907,10 @@ async function loadDrawerLedger(account) {
                                 </td>
                                 <td class="px-3 py-2 text-[0.75rem] text-foreground">
                                     ${esc(entry.transaction?.notes || entry.memo || 'Journal entry')}
-                                    <span class="block text-[0.6875rem] text-muted-foreground">#${entry.transaction_id}</span>
+                                    <span class="block text-[0.6875rem] text-muted-foreground">
+                                        #${esc(String(entry.transaction_id))}${
+                                            entry.transaction?.status === 'reversed' ? ' · reversed' : ''}
+                                    </span>
                                 </td>
                                 <td class="px-3 py-2 text-right font-mono text-[0.71875rem]">
                                     ${isZeroAmount(entry.debit) ? '' : esc(formatMoney(entry.debit))}
@@ -862,204 +923,49 @@ async function loadDrawerLedger(account) {
                                 </td>
                             </tr>`).join('')}
                     </tbody>
-                </table>
-            </div>
-
-            <div class="mt-2 flex items-center justify-between">
-                <span class="text-[0.71875rem]">
-                    Closing balance ${esc(formatMoney(payload.meta.closing_balance))}
-                    ${payload.meta.normal_balance === 'debit' ? 'Dr' : 'Cr'}
-                </span>
-                ${(payload.meta.pagination?.total ?? 0) > entries.length
-                    ? `<a href="/ledger" class="text-[0.71875rem] font-medium text-primary hover:underline">
-                           See all ${payload.meta.pagination.total} entries
-                       </a>`
-                    : ''}
-            </div>`;
-    } catch (error) {
-        if (openLedgerAccount?.id !== account.id) return;
-
-        host.innerHTML = `<p class="py-3 text-rose-600">${esc(failureText(error))}</p>`;
-    }
-}
-
-/* -------------------------------------------------------------------------
- | The journal drawer
- | ---------------------------------------------------------------------- */
-
-async function openJournalDrawer(transactionId) {
-    $('#journal-drawer-title').textContent = `Journal entry #${transactionId}`;
-    $('#journal-drawer-subtitle').textContent = '';
-    $('#journal-drawer-status').innerHTML = '';
-    $('#journal-drawer-open').href = `/journal?open=${transactionId}`;
-    $('#journal-drawer-body').innerHTML =
-        '<p class="text-[0.8125rem] text-muted-foreground">Loading entry…</p>';
-
-    showModal('#journal-drawer');
-
-    try {
-        const { data } = await auth.call(`/transactions/${transactionId}`);
-
-        renderJournalDrawer(data);
-    } catch (error) {
-        $('#journal-drawer-body').innerHTML =
-            `<p class="text-[0.8125rem] text-rose-600">${esc(failureText(error))}</p>`;
-    }
-}
-
-function renderJournalDrawer(transaction) {
-    const lines = transaction.lines ?? [];
-
-    const debitPaise = lines.reduce((total, line) => total + toPaise(line.debit), 0);
-    const creditPaise = lines.reduce((total, line) => total + toPaise(line.credit), 0);
-    const balanced = debitPaise === creditPaise;
-
-    $('#journal-drawer-title').textContent = `Journal entry #${transaction.id}`;
-    $('#journal-drawer-subtitle').textContent =
-        `${transaction.type_label} · ${formatDate(transaction.date)}`;
-    $('#journal-drawer-status').innerHTML = txnStatusBadge(transaction);
-
-    $('#journal-drawer-body').innerHTML = `
-        <h4 class="section-label mb-2">Journal information</h4>
-        <dl class="mb-5 space-y-2 text-[0.8125rem]">
-            ${detail('Journal number', `#${transaction.id}`)}
-            ${detail('Date', formatDate(transaction.date))}
-            ${detail('Type', transaction.type_label)}
-            ${detail('Source', transaction.source_label)}
-            ${detail('Status', transaction.status_label)}
-            ${transaction.party ? detail('Party', transaction.party.name) : ''}
-            ${transaction.created_by ? detail('Entered by', transaction.created_by) : ''}
-            ${transaction.notes ? detail('Notes', transaction.notes) : ''}
-            ${transaction.reverses_id ? detail('Reverses', `#${transaction.reverses_id}`) : ''}
-            ${transaction.reversal_id ? detail('Reversed by', `#${transaction.reversal_id}`) : ''}
-        </dl>
-
-        <h4 class="section-label mb-2">Debit &amp; credit entries</h4>
-
-        ${lines.length ? `
-            <div class="overflow-hidden rounded-[10px] border border-border">
-                <table class="w-full border-collapse">
-                    <thead>
-                        <tr class="border-b border-border bg-secondary/40 text-left">
-                            <th class="px-3 py-2 text-[0.6875rem] font-semibold text-muted-foreground">Account</th>
-                            <th class="px-3 py-2 text-right text-[0.6875rem] font-semibold text-muted-foreground">Debit</th>
-                            <th class="px-3 py-2 text-right text-[0.6875rem] font-semibold text-muted-foreground">Credit</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-muted">
-                        ${lines.map((line) => `
-                            <tr>
-                                <td class="px-3 py-2 text-[0.75rem] text-foreground">
-                                    ${esc(line.account?.name ?? accountName(line.account_id))}
-                                    ${line.memo ? `<span class="block text-[0.6875rem] text-muted-foreground">${esc(line.memo)}</span>` : ''}
-                                </td>
-                                <td class="px-3 py-2 text-right font-mono text-[0.71875rem]">
-                                    ${isZeroAmount(line.debit) ? '' : esc(formatMoney(line.debit))}
-                                </td>
-                                <td class="px-3 py-2 text-right font-mono text-[0.71875rem]">
-                                    ${isZeroAmount(line.credit) ? '' : esc(formatMoney(line.credit))}
-                                </td>
-                            </tr>`).join('')}
-                    </tbody>
                     <tfoot>
-                        <tr class="border-t-2 border-border bg-secondary/30 font-semibold">
-                            <td class="px-3 py-2 text-right text-[0.71875rem] text-muted-foreground">Total</td>
-                            <td class="px-3 py-2 text-right font-mono text-[0.71875rem]">${esc(formatMoney(paiseToAmount(debitPaise)))}</td>
-                            <td class="px-3 py-2 text-right font-mono text-[0.71875rem]">${esc(formatMoney(paiseToAmount(creditPaise)))}</td>
+                        <tr class="border-t-2 border-border bg-secondary/30 text-[0.71875rem] font-semibold">
+                            <td class="px-3 py-2 text-right text-muted-foreground" colspan="2">Closing</td>
+                            <td class="px-3 py-2 text-right font-mono">${esc(formatMoney(meta.period.debit))}</td>
+                            <td class="px-3 py-2 text-right font-mono">${esc(formatMoney(meta.period.credit))}</td>
+                            <td class="px-3 py-2 text-right font-mono">
+                                ${esc(formatMoney(meta.closing_balance))}
+                                <span class="ml-1 font-normal text-muted-foreground">${
+                                    meta.normal_balance === 'debit' ? 'Dr' : 'Cr'}</span>
+                            </td>
                         </tr>
                     </tfoot>
                 </table>
             </div>
+        </div>
 
-            <p class="mt-2 flex items-center gap-1.5 text-[0.71875rem] ${balanced ? 'text-emerald-700' : 'text-rose-600'}">
-                ${balanced
-                    ? 'Entry is balanced — debit equals credit.'
-                    : 'This entry does not balance. It should be impossible; please report it.'}
-            </p>`
-        : `<p class="text-[0.8125rem] text-muted-foreground">
-               ${transaction.is_draft
-                   ? 'This draft has no lines yet. Nothing has reached the ledger.'
-                   : 'No lines were returned for this entry.'}
-           </p>`}`;
-}
+        <div class="mt-2 flex flex-wrap items-center justify-between gap-2">
+            <span class="text-[0.71875rem]">
+                ${esc(String(pagination.total ?? entries.length))} entr${
+                    (pagination.total ?? entries.length) === 1 ? 'y' : 'ies'} ${esc(periodLabel())}
+            </span>
 
-/** A line's account name, for the rare payload that sends only the id. */
-function accountName(id) {
-    return state.accounts.find((account) => account.id === id)?.name ?? `Account #${id}`;
-}
-
-/* -------------------------------------------------------------------------
- | Export
- | ---------------------------------------------------------------------- */
-
-/**
- * Export what is on screen — the rows the current tab, search and filters have
- * narrowed to. Anything else would hand somebody a file that disagrees with the
- * table they were looking at when they asked for it.
- */
-function exportCurrentTab() {
-    const stamp = new Date().toISOString().slice(0, 10);
-
-    if (state.tab === 'journal') {
-        if (!state.transactions.length) {
-            toast('Nothing to export on this tab.', 'info');
-
-            return;
-        }
-
-        downloadCsv(`journal-entries-${stamp}.csv`, [
-            ['Journal ID', 'Date', 'Particulars', 'Type', 'Party', 'Debit', 'Credit', 'Status', 'Source'],
-            ...state.transactions.map((transaction) => [
-                transaction.id,
-                transaction.date,
-                transaction.notes ?? '',
-                transaction.type_label,
-                transaction.party?.name ?? '',
-                transaction.is_draft ? '' : transaction.total,
-                transaction.is_draft ? '' : transaction.total,
-                transaction.status_label,
-                transaction.source_label,
-            ]),
-        ]);
-
-        return;
-    }
-
-    const rows = visibleAccounts({ pill: state.tab === 'coa' ? 'all' : state.ledgerPill });
-
-    if (!rows.length) {
-        toast('Nothing to export on this tab.', 'info');
-
-        return;
-    }
-
-    const withBalance = state.canLedger && !state.balancesFailed;
-
-    downloadCsv(`${state.tab === 'coa' ? 'chart-of-accounts' : 'ledger-accounts'}-${stamp}.csv`, [
-        [
-            'Code', 'Name', 'Type', 'Normal balance',
-            ...(withBalance ? ['Balance', 'Side'] : []),
-            'Status', 'System', 'Last updated',
-        ],
-        ...rows.map((account) => {
-            const balance = balanceOf(account);
-
-            return [
-                account.code,
-                account.name,
-                account.type_label,
-                account.normal_balance === 'debit' ? 'Debit' : 'Credit',
-                ...(withBalance ? [balance?.amount ?? '', balance?.side === 'debit' ? 'Dr' : 'Cr'] : []),
-                account.is_active ? 'Active' : 'Archived',
-                account.is_system ? 'Yes' : 'No',
-                account.updated_at ?? '',
-            ];
-        }),
-    ]);
+            ${(pagination.last_page ?? 1) > 1 ? `
+                <span class="flex items-center gap-1">
+                    <button type="button" class="btn btn-secondary btn-sm" data-entries-page="prev"
+                            ${(pagination.current_page ?? 1) <= 1 ? 'disabled' : ''}>Previous</button>
+                    <span class="px-1 text-[0.71875rem] text-muted-foreground">
+                        ${esc(String(pagination.current_page ?? 1))} / ${esc(String(pagination.last_page))}
+                    </span>
+                    <button type="button" class="btn btn-secondary btn-sm" data-entries-page="next"
+                            ${pagination.has_more ? '' : 'disabled'}>Next</button>
+                </span>` : ''}
+        </div>`;
 }
 
 /* -------------------------------------------------------------------------
- | Create / edit
+ | Create, and correct
+ |
+ | One form node for both. `adoptForm()` moves it between the level-1 create
+ | surface and the drawer, and the blocks marked `data-form-chrome` decide which
+ | frame is shown. A module that rendered the same fields twice would have two
+ | sets of ids, two submit handlers and two places for a validation rule to be
+ | added to only one of (§4.4, §5.1).
  | ---------------------------------------------------------------------- */
 
 /**
@@ -1083,79 +989,130 @@ function suggestCode(type) {
 
 function applyTypeHints(type, { suggest = false } = {}) {
     const meta = state.types[type];
-    const codeInput = $('#account-code');
+    const typeHint = $('[data-type-hint]', form);
+    const codeHint = $('[data-code-hint]', form);
 
     if (!meta) {
-        $('#account-type-hint').textContent = 'Decides which side increases the account.';
-        $('#account-code-hint').textContent = 'Four digits, inside the band for the chosen type.';
+        typeHint.textContent = 'Decides which side increases the account.';
+        codeHint.textContent = 'Four digits, inside the band for the chosen type.';
 
         return;
     }
 
     const [low, high] = meta.code_range;
-    const side = meta.normal_balance === 'credit' ? 'credit' : 'debit';
 
-    $('#account-type-hint').textContent =
-        `Increases on the ${side} side · ${meta.is_balance_sheet ? 'Balance sheet' : 'Profit & loss'}`;
-    $('#account-code-hint').textContent = `Must be between ${low} and ${high}.`;
+    typeHint.textContent = `Increases on the ${meta.normal_balance === 'credit' ? 'credit' : 'debit'} side · ${
+        meta.is_balance_sheet ? 'Balance sheet' : 'Profit & loss'}`;
+    codeHint.textContent = `Must be between ${low} and ${high}.`;
 
-    if (suggest && !codeInput.value) codeInput.value = suggestCode(type);
+    if (suggest && !form.elements.code.value) form.elements.code.value = suggestCode(type);
 }
 
-async function openForm(account = null, { type = '' } = {}) {
-    const form = $('#account-form');
-    const editing = account !== null;
-    const locked = editing && account.is_system;
-
-    await loadTypes();
-
+/** Empty the form for the next entry — §2A.8. */
+function resetForm({ type = '' } = {}) {
     clearFormErrors(form);
     form.reset();
 
-    $('#account-modal-title').textContent = editing ? 'Edit account' : 'New account';
-    $('#account-system-note').classList.toggle('hidden', !locked);
-    $('#account-system-note').classList.toggle('flex', locked);
+    form.elements.id.value = '';
+    form.elements.type.value = type;
+    form.elements.type.disabled = false;
+    form.elements.code.disabled = false;
 
-    form.elements.id.value = editing ? account.id : '';
-    form.elements.name.value = editing ? account.name : '';
-    form.elements.description.value = editing ? (account.description ?? '') : '';
-    form.elements.code.value = editing ? account.code : '';
-    form.elements.type.value = editing ? account.type : type;
+    $('[data-account-system-note]', form).classList.remove('flex');
+    $('[data-account-system-note]', form).classList.add('hidden');
 
-    // Type is immutable for every account, system or not: reclassifying would
-    // move every journal entry already posted against it onto a different
-    // financial statement. Code is fixed for system accounts only.
-    form.elements.type.disabled = editing;
-    form.elements.code.disabled = locked;
-
-    applyTypeHints(editing ? account.type : type, { suggest: !editing && Boolean(type) });
-
-    showModal('#account-modal');
+    applyTypeHints(type, { suggest: Boolean(type) });
 }
 
-function validate(form, editing) {
+function openEdit(account) {
+    editing = account.id;
+
+    clearFormErrors(form);
+
+    form.elements.id.value = account.id;
+    form.elements.name.value = account.name;
+    form.elements.description.value = account.description ?? '';
+    form.elements.code.value = account.code;
+    form.elements.type.value = account.type;
+
+    /*
+    | Type is immutable for every account, system or not: reclassifying would
+    | move every journal entry already posted against it onto a different
+    | financial statement. The code is fixed for system accounts only, and both
+    | are *disabled with the note above them* rather than removed — the reason
+    | belongs where the question is asked.
+    */
+    form.elements.type.disabled = true;
+    form.elements.code.disabled = account.is_system;
+
+    const note = $('[data-account-system-note]', form);
+
+    note.classList.toggle('hidden', !account.is_system);
+    note.classList.toggle('flex', account.is_system);
+
+    applyTypeHints(account.type);
+
+    adoptForm(form, el('[data-account-edit-slot]'), { chrome: 'modal' });
+
+    el('[data-account-edit-slot]').classList.remove('hidden');
+    el('[data-drawer-body]').classList.add('hidden');
+    el('[data-drawer-actions]').innerHTML =
+        '<button type="button" class="btn btn-secondary btn-sm ml-auto" data-modal-close>Close</button>';
+}
+
+/**
+ * Give the form back to the create surface.
+ *
+ * Idempotent, and called from four places — Cancel, a save, the drawer closing
+ * and Escape — because a form left behind in a hidden drawer is a create surface
+ * with no fields on it, and nothing on screen would say why.
+ */
+function closeEdit() {
+    if (editing === null) return;
+
+    editing = null;
+
+    /*
+    | Before the move, while the drawer's own Save is still the visible submit
+    | button. `setSubmitting` restores whichever one is on screen — releasing it
+    | afterwards would leave "Saving…", disabled, on the create surface's button.
+    */
+    setSubmitting(form, false);
+
+    adoptForm(form, inForm('[data-account-form-slot]'), { chrome: 'inline' });
+
+    el('[data-account-edit-slot]').classList.add('hidden');
+    el('[data-drawer-body]').classList.remove('hidden');
+
+    resetForm();
+
+    if (state.current) paintDrawerActions(state.current);
+}
+
+/**
+ * Checked here as well as server-side, so the band is explained before a round
+ * trip rather than after a 422. The server is still the authority (§6.1).
+ */
+function validate(editingAccount) {
     const errors = {};
 
-    if (!editing && !form.elements.type.value) {
+    if (!editingAccount && !form.elements.type.value) {
         errors.type = ['Choose an account type.'];
     }
 
-    const code = form.elements.code.value.trim();
-
     if (!form.elements.code.disabled) {
+        const code = form.elements.code.value.trim();
+
         if (!/^\d{4}$/.test(code)) {
             errors.code = ['An account code is exactly four digits.'];
         } else {
-            // Checked here as well as server-side so the band is explained
-            // before a round trip, not after a 409.
-            const type = form.elements.type.value;
-            const meta = state.types[type];
+            const meta = state.types[form.elements.type.value];
 
             if (meta) {
                 const [low, high] = meta.code_range;
 
                 if (Number(code) < low || Number(code) > high) {
-                    errors.code = [`A ${type} account must be numbered between ${low} and ${high}.`];
+                    errors.code = [`A ${meta.label.toLowerCase()} account is numbered between ${low} and ${high}.`];
                 }
             }
         }
@@ -1176,13 +1133,11 @@ function validate(form, editing) {
 async function submitForm(event) {
     event.preventDefault();
 
-    const form = event.target;
-    const id = form.elements.id.value;
-    const editing = id !== '';
+    const editingId = editing;
 
     clearFormErrors(form);
 
-    const errors = validate(form, editing);
+    const errors = validate(editingId !== null);
 
     if (errors) {
         showFormErrors(form, { fields: errors, message: 'Please correct the highlighted fields.' });
@@ -1195,23 +1150,48 @@ async function submitForm(event) {
         description: form.elements.description.value.trim() || null,
     };
 
-    // A disabled input is not submitted, and the server rejects a system
-    // account's code outright — so it is only ever sent when editable.
+    // A disabled input is not submitted, and the server refuses a system
+    // account's code outright — so it is only ever sent when it is editable.
     if (!form.elements.code.disabled) payload.code = form.elements.code.value.trim();
-    if (!editing) payload.type = form.elements.type.value;
+    if (editingId === null) payload.type = form.elements.type.value;
 
-    setSubmitting(form, true);
+    setSubmitting(form, true, editingId === null ? 'Creating…' : 'Saving…');
 
     try {
-        await auth.call(editing ? `/accounts/${id}` : '/accounts', {
-            method: editing ? 'PATCH' : 'POST',
+        const response = await auth.call(editingId === null ? '/accounts' : `/accounts/${editingId}`, {
+            method: editingId === null ? 'POST' : 'PATCH',
             body: payload,
         });
 
-        hideModal('#account-modal');
-        toast(editing ? 'Account updated.' : 'Account created.');
+        if (editingId !== null) {
+            closeEdit();
+            toast('Account updated.');
 
-        await refreshChart();
+            await refreshHeld();
+            await reopenDrawer(editingId);
+
+            return;
+        }
+
+        /*
+        | §2A.8 — a clerk adding heads adds several in a row, so a create stays
+        | on the form, clears it and puts the cursor back on the type. The new
+        | row is flagged rather than shown: they never see the list in between.
+        */
+        const created = response.data;
+
+        resetForm();
+        form.elements.type.focus();
+
+        workspace?.flagNew(created.id);
+
+        paintOutcome(`
+            <p><strong>${esc(created.code)} · ${esc(created.name)}</strong> is on the chart.</p>
+            <button type="button" class="mt-1 font-semibold underline" data-outcome-account="${created.id}">
+                Open the account
+            </button>`);
+
+        await refreshHeld();
     } catch (error) {
         showFormErrors(form, error);
     } finally {
@@ -1219,16 +1199,65 @@ async function submitForm(event) {
     }
 }
 
+function paintOutcome(html) {
+    const host = inForm('[data-account-outcome]');
+
+    host.innerHTML = `<span class="mt-0.5 shrink-0">${iconCheck}</span><div>${html}</div>`;
+    host.classList.remove('hidden');
+    host.classList.add('flex');
+}
+
+/**
+ * Bring whatever is held up to date after this module's own write.
+ *
+ * Two cases, because two things can be holding the chart. If the list has been
+ * shown it is refetched with its figures; if only the form has ever needed it —
+ * for a code suggestion — the chart is refreshed on its own, so the next
+ * suggestion does not offer the number just used. A module nothing has fetched
+ * yet fetches nothing here (§2A.7, §7.2).
+ */
+async function refreshHeld() {
+    if (workspace?.hasList()) {
+        await load();
+
+        return;
+    }
+
+    if (chartLoaded) await loadAccounts().catch(() => {});
+}
+
+async function reopenDrawer(id) {
+    try {
+        const { data } = await auth.call(`/accounts/${id}`);
+
+        // The list may not be held, so the drawer reads the record it was just
+        // handed rather than looking for it among rows that were never fetched.
+        const at = state.accounts.findIndex((row) => String(row.id) === String(id));
+
+        if (at === -1) state.accounts.push(data);
+        else state.accounts[at] = data;
+
+        await openDrawer(id);
+    } catch (error) {
+        toast(failureText(error), 'error');
+    }
+}
+
 /* -------------------------------------------------------------------------
- | Archive / restore
+ | Archive and restore
+ |
+ | There is no delete, and no route for one. An account that has been posted to
+ | must survive or its journal entries lose the name that explains them, so
+ | archiving takes it out of every picker and leaves its history intact.
  | ---------------------------------------------------------------------- */
 
-async function toggleArchived(id, name, currentlyActive) {
-    if (currentlyActive) {
+async function toggleArchived(account) {
+    if (account.is_active) {
         const confirmed = await confirmAction({
             title: 'Archive account',
-            body: `${name} will stop appearing when choosing an account. Nothing already posted to it changes — `
-                + 'accounts are never deleted, so its history stays intact. You can restore it at any time.',
+            body: `${account.name} will stop appearing when choosing an account. Nothing already posted to `
+                + 'it changes — accounts are never deleted, so its entries and every historical report keep '
+                + 'its name. You can restore it at any time.',
             confirmLabel: 'Archive account',
         });
 
@@ -1236,457 +1265,132 @@ async function toggleArchived(id, name, currentlyActive) {
     }
 
     try {
-        await auth.call(`/accounts/${id}`, {
+        await auth.call(`/accounts/${account.id}`, {
             method: 'PATCH',
-            body: { is_active: !currentlyActive },
+            body: { is_active: !account.is_active },
         });
 
-        toast(currentlyActive ? 'Account archived.' : 'Account restored.');
+        toast(account.is_active ? 'Account archived.' : 'Account restored.');
 
-        await refreshChart();
+        await refreshHeld();
+        await reopenDrawer(account.id);
     } catch (error) {
-        toast(error.message, 'error');
+        toast(failureText(error), 'error');
     }
 }
 
 /* -------------------------------------------------------------------------
- | Tabs
+ | Export
  | ---------------------------------------------------------------------- */
 
-const SEARCH_PLACEHOLDER = {
-    ledger: 'Search ledgers, account code…',
-    journal: 'Search journal ID, notes…',
-    coa: 'Search accounts…',
-};
+const stamp = () => new Date().toISOString().slice(0, 10);
 
-function switchTab(tab) {
-    if (tab === state.tab) return;
-
-    state.tab = tab;
-
-    /*
-    | The search box is cleared on a tab change rather than carried over. The
-    | placeholder names what is being searched, and a term left in it would go on
-    | filtering — silently, against a different kind of record.
-    */
-    state.search = '';
-    $('#filter-search').value = '';
-    $('#filter-search').placeholder = SEARCH_PLACEHOLDER[tab];
-
-    $$('#accounting-tabs [data-tab]').forEach((button) => {
-        button.setAttribute('aria-selected', String(button.dataset.tab === tab));
-    });
-
-    ['ledger', 'journal', 'coa'].forEach((name) => {
-        $(`#panel-${name}`)?.classList.toggle('hidden', name !== tab);
-    });
-
-    applyToolbarVisibility();
-
-    closePanels();
-
-    if (tab === 'journal') {
-        state.journalPage = 1;
-        loadJournal();
-    } else if (tab === 'coa') {
-        renderCoa();
-    } else {
-        renderLedger();
-    }
-}
-
-/** Re-read the chart and repaint whichever account view is open. */
-async function refreshChart() {
-    await Promise.all([loadAccounts(), loadBalances()]);
-
-    if (state.tab === 'coa') renderCoa();
-    else renderLedger();
-}
-
-function renderCurrentTab() {
-    if (state.tab === 'journal') loadJournal();
-    else if (state.tab === 'coa') renderCoa();
-    else renderLedger();
-}
-
-/* -------------------------------------------------------------------------
- | Toolbar popovers
- | ---------------------------------------------------------------------- */
-
-function closePanels() {
-    $('#filter-panel')?.classList.add('hidden');
-    $('#filter-toggle')?.setAttribute('aria-expanded', 'false');
-    $('#period-panel')?.classList.add('hidden');
-    $('#period-toggle')?.setAttribute('aria-expanded', 'false');
-}
-
-function renderFilterCount() {
-    const active = (state.isActive === '1' ? 0 : 1) + (state.side ? 1 : 0);
-    const badge = $('#filter-count');
-
-    badge.textContent = active;
-    badge.classList.toggle('hidden', active === 0);
-
-    const periodActive = (state.from ? 1 : 0) + (state.to ? 1 : 0);
-    const periodBadge = $('#period-count');
-
-    if (periodBadge) {
-        periodBadge.textContent = periodActive;
-        periodBadge.classList.toggle('hidden', periodActive === 0);
-    }
-}
-
-/* -------------------------------------------------------------------------
- | Grants
- | ---------------------------------------------------------------------- */
-
-/**
- * Strip what this caller's grants do not cover.
- *
- * Removed rather than blanked, exactly as the catalogue does with stock: a
- * balance column full of dashes reads as "every account is at zero", which is a
- * claim about the books rather than about the reader's permissions.
- */
-/**
- * Show the toolbar controls that mean something on the open tab.
- *
- * Both gates apply, and the grant is re-checked rather than inferred from
- * whatever `applyPermissionGates` left in the class list: a control hidden
- * because the wrong tab was open must come back when its tab opens, and a
- * control hidden because the caller lacks the grant must not.
- */
-function applyToolbarVisibility() {
-    $$('[data-panel-for]').forEach((element) => {
-        const applies = element.dataset.panelFor.split(' ').includes(state.tab);
-        const grant = element.dataset.requiresPermission;
-        const [action, resource] = grant ? grant.split(':') : [];
-
-        element.classList.toggle('hidden', !applies || (grant ? !can(action, resource) : false));
-    });
-}
-
-function applyGrantVisibility() {
-    if (!state.canLedger) {
-        $$('[data-ledger-only]').forEach((element) => element.remove());
-    }
-
-    if (!state.canTransactions) {
-        $('#panel-journal')?.remove();
-    }
-}
-
-/* -------------------------------------------------------------------------
- | Boot
- | ---------------------------------------------------------------------- */
-
-export default async function initAccounts() {
-    state.canLedger = can('READ', 'LEDGER');
-    state.canTransactions = can('READ', 'TRANSACTIONS');
-
-    applyGrantVisibility();
-    /*
-    | Run once at boot as well as on every tab change. `applyPermissionGates`
-    | has just un-hidden the period control for anyone holding
-    | READ:TRANSACTIONS, and the page opens on the ledger tab, where a period
-    | means nothing.
-    */
-    applyToolbarVisibility();
-
-    try {
-        await loadTypes();
-    } catch {
-        // Without type metadata the bands and labels fall back to the raw enum
-        // values; the chart below still reads.
-    }
-
-    try {
-        await loadAccounts();
-    } catch (error) {
-        $('#ledger-body').innerHTML = rowMessage(6, failureText(error), 'error');
-        $('#new-account')?.classList.add('hidden');
+/** Whichever view is open, narrowed exactly as it is on screen. */
+function exportCurrentView() {
+    if (state.view === 'trial') {
+        exportTrialBalance();
 
         return;
     }
 
-    await loadBalances();
-
-    renderLedger();
-    loadJournalCounts();
-
-    /* --- toolbar --- */
-
-    $('#filter-search').addEventListener('input', debounce((event) => {
-        state.search = event.target.value.trim();
-
-        if (state.tab === 'journal') state.journalPage = 1;
-
-        renderCurrentTab();
-    }, 350));
-
-    $('#filter-toggle').addEventListener('click', (event) => {
-        event.stopPropagation();
-
-        const panel = $('#filter-panel');
-        const opening = panel.classList.contains('hidden');
-
-        closePanels();
-        panel.classList.toggle('hidden', !opening);
-        $('#filter-toggle').setAttribute('aria-expanded', String(opening));
-    });
-
-    $('#period-toggle')?.addEventListener('click', (event) => {
-        event.stopPropagation();
-
-        const panel = $('#period-panel');
-        const opening = panel.classList.contains('hidden');
-
-        closePanels();
-        panel.classList.toggle('hidden', !opening);
-        $('#period-toggle').setAttribute('aria-expanded', String(opening));
-    });
-
-    $('#filter-status').addEventListener('change', async (event) => {
-        state.isActive = event.target.value;
-        renderFilterCount();
-
-        // Archived state is a server-side filter, so the chart is re-fetched
-        // rather than filtered in place.
-        await refreshChart();
-    });
-
-    $('#filter-side').addEventListener('change', (event) => {
-        state.side = event.target.value;
-        renderFilterCount();
-        renderCurrentTab();
-    });
-
-    ['from', 'to'].forEach((field) => {
-        $(`#filter-${field}`)?.addEventListener('change', (event) => {
-            state[field] = event.target.value;
-            state.journalPage = 1;
-            renderFilterCount();
-            loadJournal();
-        });
-    });
-
-    $('#clear-period')?.addEventListener('click', () => {
-        state.from = '';
-        state.to = '';
-        state.journalPage = 1;
-        $('#filter-from').value = '';
-        $('#filter-to').value = '';
-        renderFilterCount();
-        loadJournal();
-    });
-
-    $('#export-csv').addEventListener('click', exportCurrentTab);
-    $('#new-account')?.addEventListener('click', () => openForm());
-    $('#add-ledger')?.addEventListener('click', () => openForm());
-
-    /* --- tabs, pills, tiles --- */
-
-    $('#accounting-tabs').addEventListener('click', (event) => {
-        const button = event.target.closest('[data-tab]');
-
-        if (button) switchTab(button.dataset.tab);
-    });
-
-    $('#ledger-pills').addEventListener('click', (event) => {
-        const pill = event.target.closest('[data-pill]');
-
-        if (!pill) return;
-
-        state.ledgerPill = pill.dataset.pill;
-        renderLedger();
-    });
-
-    $$('[data-stat-filter]').forEach((tile) => {
-        tile.addEventListener('click', () => {
-            // A second click on the tile that is already applied clears it,
-            // so the tiles are a toggle rather than a one-way trip.
-            state.ledgerPill = state.ledgerPill === tile.dataset.statFilter
-                ? 'all'
-                : tile.dataset.statFilter;
-
-            renderLedger();
-        });
-    });
-
-    $('#journal-pills')?.addEventListener('click', (event) => {
-        const pill = event.target.closest('[data-pill]');
-
-        if (!pill) return;
-
-        state.journalPill = pill.dataset.pill;
-        state.journalPage = 1;
-        loadJournal();
-    });
-
-    $('#journal-pager')?.addEventListener('click', (event) => {
-        const button = event.target.closest('[data-page]');
-
-        if (!button || button.disabled) return;
-
-        state.journalPage += button.dataset.page === 'next' ? 1 : -1;
-        loadJournal();
-    });
-
-    /* --- rows --- */
-
-    $('#ledger-body').addEventListener('click', (event) => {
-        const menuButton = event.target.closest('[data-menu]');
-
-        if (menuButton) {
-            event.stopPropagation();
-
-            if (menuButton.getAttribute('aria-expanded') === 'true') closeMenus();
-            else openMenu(menuButton, menuButton.dataset.menu);
-
-            return;
-        }
-
-        const row = event.target.closest('[data-ledger]');
-
-        if (row) openLedgerDrawer(row.dataset.ledger);
-    });
-
-    $('#ledger-body').addEventListener('keydown', (event) => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
-
-        const row = event.target.closest('[data-ledger]');
-
-        if (!row) return;
-
-        event.preventDefault();
-        openLedgerDrawer(row.dataset.ledger);
-    });
-
-    $('#journal-body')?.addEventListener('click', (event) => {
-        const row = event.target.closest('[data-journal]');
-
-        if (row) openJournalDrawer(row.dataset.journal);
-    });
-
-    $('#journal-body')?.addEventListener('keydown', (event) => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
-
-        const row = event.target.closest('[data-journal]');
-
-        if (!row) return;
-
-        event.preventDefault();
-        openJournalDrawer(row.dataset.journal);
-    });
-
-    $('#coa-groups').addEventListener('click', async (event) => {
-        const group = event.target.closest('[data-group]');
-        const edit = event.target.closest('[data-edit]');
-        const addTo = event.target.closest('[data-add-to]');
-        const ledger = event.target.closest('[data-ledger]');
-
-        if (edit) {
-            const { data } = await auth.call(`/accounts/${edit.dataset.edit}`);
-
-            openForm(data);
-
-            return;
-        }
-
-        if (addTo) {
-            openForm(null, { type: addTo.dataset.addTo });
-
-            return;
-        }
-
-        if (ledger) {
-            openLedgerDrawer(ledger.dataset.ledger);
-
-            return;
-        }
-
-        if (group) {
-            state.collapsed[group.dataset.group] = !state.collapsed[group.dataset.group];
-            renderCoa();
-        }
-    });
-
-    /* --- row menu actions --- */
-
-    document.addEventListener('click', async (event) => {
-        const action = event.target.closest('[data-row-menu] [data-action]');
-
-        if (!action) {
-            closeMenus();
-
-            // A click on the controls *inside* a popover is not a click away
-            // from it — closing there would shut the panel under the select
-            // somebody was reaching for.
-            if (!event.target.closest('#filter-panel, #period-panel')) closePanels();
-
-            return;
-        }
-
-        const { id } = action.dataset;
-        const account = state.accounts.find((row) => String(row.id) === String(id));
-
-        closeMenus();
-
-        if (!account) return;
-
-        if (action.dataset.action === 'open') openLedgerDrawer(id);
-        if (action.dataset.action === 'statement') downloadStatement(account);
-
-        if (action.dataset.action === 'edit') {
-            const { data } = await auth.call(`/accounts/${id}`);
-
-            openForm(data);
-        }
-
-        if (action.dataset.action === 'archive') toggleArchived(id, account.name, true);
-        if (action.dataset.action === 'restore') toggleArchived(id, account.name, false);
-    });
-
-    window.addEventListener('scroll', closeMenus, { passive: true, capture: true });
-    window.addEventListener('resize', closeMenus, { passive: true });
-
-    /* --- drawer footer actions --- */
-
-    $('#ledger-drawer-edit').addEventListener('click', async () => {
-        if (!openLedgerAccount) return;
-
-        const { data } = await auth.call(`/accounts/${openLedgerAccount.id}`);
-
-        hideModal('#ledger-drawer');
-        openForm(data);
-    });
-
-    $('#ledger-drawer-statement').addEventListener('click', () => {
-        if (openLedgerAccount) downloadStatement(openLedgerAccount);
-    });
-
-    $('#account-form').addEventListener('submit', submitForm);
-
-    $('#account-type').addEventListener('change', (event) => {
-        applyTypeHints(event.target.value, { suggest: true });
-    });
-
-    renderFilterCount();
+    const rows = visibleAccounts();
+
+    if (!rows.length) {
+        toast('Nothing to export on this view.', 'info');
+
+        return;
+    }
+
+    const withBalance = state.canLedger && state.trial !== null;
+
+    downloadCsv(`chart-of-accounts-${stamp()}.csv`, [
+        [
+            'Code', 'Name', 'Type', 'Normal balance',
+            ...(withBalance ? ['Balance', 'Side'] : []),
+            'Status', 'System', 'Last updated',
+        ],
+        ...rows.map((account) => {
+            const balance = balanceOf(account);
+
+            return [
+                account.code,
+                account.name,
+                typeLabel(account),
+                account.normal_balance === 'debit' ? 'Debit' : 'Credit',
+                ...(withBalance ? [balance.amount, balance.side === 'debit' ? 'Dr' : 'Cr'] : []),
+                account.is_active ? 'Active' : 'Archived',
+                account.is_system ? 'Yes' : 'No',
+                account.updated_at ?? '',
+            ];
+        }),
+    ]);
+}
+
+/** Totals included, because a trial balance without them is only a list. */
+function exportTrialBalance() {
+    if (state.trial === null) {
+        toast('The trial balance has not been read, so there is nothing to export.', 'info');
+
+        return;
+    }
+
+    const meta = state.trial.meta;
+
+    downloadCsv(`trial-balance-${stamp()}.csv`, [
+        ['Code', 'Name', 'Type', 'Debits', 'Credits', 'Balance', 'Side'],
+        ...state.trial.data.map((row) => [
+            row.account.code,
+            row.account.name,
+            row.account.type_label,
+            row.debit,
+            row.credit,
+            row.balance,
+            row.balance_side === 'debit' ? 'Dr' : 'Cr',
+        ]),
+        ['', 'Totals', '', meta.totals.debit, meta.totals.credit, '', ''],
+        ['', 'Balances', '', meta.balances.debit, meta.balances.credit, '', ''],
+    ]);
 }
 
 /**
- * One account's ledger as a CSV, fetched in full rather than from the ten rows
- * the drawer happens to be showing — a statement that stopped at the tenth entry
+ * One account's statement as a CSV — the whole of it, not the ten rows the
+ * drawer happens to be showing. A statement that stopped at the tenth entry
  * would be a statement of nothing in particular.
+ *
+ * Walked a page at a time because `per_page` is capped at 200 server-side: the
+ * single oversized request this replaced answered 422, so the control had never
+ * produced a file at all.
  */
 async function downloadStatement(account) {
-    toast('Preparing statement…', 'info');
+    toast('Preparing the statement…', 'info');
+
+    const entries = [];
 
     try {
-        const payload = await auth.call(`/ledger/accounts/${account.id}?per_page=1000`);
+        for (let page = 1; page <= STATEMENT_PAGE_LIMIT; page += 1) {
+            const params = period();
 
-        downloadCsv(`ledger-${account.code}-${new Date().toISOString().slice(0, 10)}.csv`, [
+            params.set('per_page', STATEMENT_PAGE_SIZE);
+            params.set('page', page);
+
+            // Sequential on purpose: the page after this one is only worth
+            // asking for if this one says there is more.
+            // eslint-disable-next-line no-await-in-loop
+            const payload = await auth.call(`/ledger/accounts/${account.id}?${params}`);
+
+            entries.push(...payload.data);
+
+            if (!payload.meta.pagination?.has_more) break;
+
+            if (page === STATEMENT_PAGE_LIMIT) {
+                toast(`This account has more than ${STATEMENT_PAGE_LIMIT * STATEMENT_PAGE_SIZE} entries. `
+                    + 'The file holds the oldest of them — narrow the period for the rest.', 'info');
+            }
+        }
+
+        downloadCsv(`ledger-${account.code}-${stamp()}.csv`, [
             ['Date', 'Transaction', 'Particulars', 'Debit', 'Credit', 'Running balance'],
-            ...payload.data.map((entry) => [
+            ...entries.map((entry) => [
                 entry.date,
                 `#${entry.transaction_id}`,
                 entry.transaction?.notes || entry.memo || 'Journal entry',
@@ -1698,4 +1402,267 @@ async function downloadStatement(account) {
     } catch (error) {
         toast(failureText(error), 'error');
     }
+}
+
+/* -------------------------------------------------------------------------
+ | The two views, and the controls that belong to each
+ | ---------------------------------------------------------------------- */
+
+function setView(view) {
+    if (view === state.view) return;
+
+    state.view = view;
+
+    $$('[data-view]', listRoot).forEach((tab) => {
+        tab.setAttribute('aria-selected', String(tab.dataset.view === view));
+    });
+
+    $$('[data-view-panel]', listRoot).forEach((panel) => {
+        panel.classList.toggle('hidden', panel.dataset.viewPanel !== view);
+    });
+
+    applyViewVisibility();
+}
+
+/** Show the filters that mean something on the open view — see the file header. */
+function applyViewVisibility() {
+    $$('[data-view-for]', listRoot).forEach((element) => {
+        element.classList.toggle('hidden', element.dataset.viewFor !== state.view);
+    });
+}
+
+/* -------------------------------------------------------------------------
+ | Grants
+ |
+ | Removed rather than blanked, exactly as the catalogue does with stock and
+ | Insights does with the wage tile: a balance column full of dashes reads as
+ | "every account is at zero", which is a claim about the books rather than about
+ | the reader's permissions.
+ | ---------------------------------------------------------------------- */
+
+function applyGrantVisibility() {
+    if (state.canLedger) return;
+
+    $$('[data-ledger-only]', root).forEach((element) => element.remove());
+}
+
+/* -------------------------------------------------------------------------
+ | Boot
+ | ---------------------------------------------------------------------- */
+
+export default async function initAccounts() {
+    root = $('[data-module-root="accounts"]');
+
+    // Before `mountWorkspace`, which is what takes both surfaces out of the
+    // document. After it, these lookups would find nothing.
+    formRoot = $('[data-ws-form]', root);
+    listRoot = $('[data-ws-list]', root);
+
+    form = $('#account-form', formRoot);
+
+    state.canLedger = can('READ', 'LEDGER');
+
+    applyGrantVisibility();
+    applyViewVisibility();
+
+    try {
+        await loadTypes();
+    } catch {
+        // Without the metadata the bands and labels fall back to the enum values
+        // already in the markup; everything below still reads.
+    }
+
+    /* --- the form --------------------------------------------------------- */
+
+    form.addEventListener('submit', submitForm);
+
+    form.elements.type.addEventListener('change', async (event) => {
+        const { value } = event.target;
+
+        // The band is on the hint straight away; the free code needs the chart,
+        // which is fetched here the first time somebody actually creates one.
+        applyTypeHints(value);
+
+        await ensureChart();
+
+        // Still the type they chose? A second change while the chart was in
+        // flight must not have its suggestion overwritten by the first.
+        if (form.elements.type.value === value) applyTypeHints(value, { suggest: true });
+    });
+
+    inForm('[data-account-outcome]').addEventListener('click', (event) => {
+        const opener = event.target.closest('[data-outcome-account]');
+
+        if (opener) openDrawer(opener.dataset.outcomeAccount);
+    });
+
+    /* --- the list's controls ---------------------------------------------- */
+
+    inList('[data-account-views]')?.addEventListener('click', (event) => {
+        const tab = event.target.closest('[data-view]');
+
+        if (tab) setView(tab.dataset.view);
+    });
+
+    inList('[data-filter-search]').addEventListener('input', debounce((event) => {
+        state.search = event.target.value.trim();
+
+        // Client-side: the whole chart is already held, and a request per
+        // keystroke for forty rows would be a round trip for a filter.
+        renderChart();
+    }, 250));
+
+    inList('[data-filter-status]').addEventListener('change', (event) => {
+        state.isActive = event.target.value;
+
+        // Client-side, like the search: the whole chart is already held, and it
+        // has to be — see the note in the header about archived codes.
+        renderChart();
+    });
+
+    ['from', 'to'].forEach((field) => {
+        inList(`[data-filter-${field}]`)?.addEventListener('change', (event) => {
+            state[field] = event.target.value;
+            refetch();
+        });
+    });
+
+    inList('[data-clear-period]')?.addEventListener('click', () => {
+        state.from = '';
+        state.to = '';
+        inList('[data-filter-from]').value = '';
+        inList('[data-filter-to]').value = '';
+        load();
+    });
+
+    inList('[data-export]').addEventListener('click', exportCurrentView);
+
+    /* --- the rows on both views ------------------------------------------- */
+
+    const openRow = (event) => {
+        const row = event.target.closest('[data-account]');
+
+        if (row) openDrawer(row.dataset.account);
+    };
+
+    inList('[data-chart-groups]').addEventListener('click', (event) => {
+        const addTo = event.target.closest('[data-add-to]');
+
+        if (addTo) {
+            workspace?.showForm();
+            resetForm({ type: addTo.dataset.addTo });
+            form.elements.name.focus();
+
+            return;
+        }
+
+        const group = event.target.closest('[data-group]');
+
+        if (group) {
+            state.collapsed[group.dataset.group] = !state.collapsed[group.dataset.group];
+            renderChart();
+
+            return;
+        }
+
+        openRow(event);
+    });
+
+    inList('[data-chart-groups]').addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        if (!event.target.closest('[data-account]')) return;
+
+        event.preventDefault();
+        openRow(event);
+    });
+
+    inList('[data-trial-body]')?.addEventListener('click', openRow);
+    inList('[data-trial-body]')?.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        if (!event.target.closest('[data-account]')) return;
+
+        event.preventDefault();
+        openRow(event);
+    });
+
+    /* --- the drawer -------------------------------------------------------- */
+
+    el('[data-drawer-actions]').addEventListener('click', (event) => {
+        const account = state.current;
+
+        if (!account) return;
+
+        if (event.target.closest('[data-edit-account]')) openEdit(account);
+        if (event.target.closest('[data-toggle-archived]')) toggleArchived(account);
+        if (event.target.closest('[data-statement-csv]')) downloadStatement(account);
+    });
+
+    el('[data-drawer-body]').addEventListener('click', (event) => {
+        const pager = event.target.closest('[data-entries-page]');
+
+        if (!pager || pager.disabled) return;
+
+        state.entryPage += pager.dataset.entriesPage === 'next' ? 1 : -1;
+        loadStatement();
+    });
+
+    el('#account-drawer').addEventListener('click', (event) => {
+        if (event.target.closest('[data-account-edit-cancel]')) {
+            closeEdit();
+
+            return;
+        }
+
+        // Beside `ui.js`'s own handler rather than instead of it: it hides the
+        // drawer, and this takes the form back out of it first.
+        if (event.target.closest('[data-modal-close]') || event.target.matches('[data-modal]')) {
+            closeEdit();
+        }
+    });
+
+    /*
+    | Escape closes the drawer through `ui.js`, which knows nothing about the
+    | form standing inside it. Without this the create surface would come back
+    | empty, with nothing on screen saying where its fields went.
+    */
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && editing !== null) closeEdit();
+    });
+
+    /* --- the flow ---------------------------------------------------------- */
+
+    workspace = mountWorkspace(root, {
+        key: 'accounts',
+        title: 'Accounting',
+        formSubtitle: 'Add an account to the chart — an expense head of your own, or anything the seeded '
+            + 'chart does not cover.',
+        /*
+        | The second half is a promise about the trial balance, so it is only
+        | made to somebody who can see one. Telling a caller without READ:LEDGER
+        | that the proof is here would be pointing at the view that was removed
+        | from under them.
+        */
+        listSubtitle: (count) => {
+            const what = count === null ? 'The chart of accounts' : `${count} account${count === 1 ? '' : 's'}`;
+
+            return state.canLedger
+                ? `${what}, and the proof that the books balance.`
+                : `${what} on the chart.`;
+        },
+        createLabel: 'Create account',
+        count: () => state.total,
+        canCreate: can('WRITE', 'ACCOUNTS'),
+        onShowList: load,
+
+        /*
+        | Everything on the list is a copy of the books. `/accounts` announces
+        | `ledger` and so does every posting, a payroll run, an opening balance
+        | and the workshop settings that define the period — see `data-bus.js`,
+        | where the announcement is made so a new write site cannot forget to.
+        */
+        refreshOn: ['ledger'],
+
+        // §2A.8 — back on the form, the type is where the next account starts.
+        onShowForm: () => form.elements.type.focus(),
+    });
 }

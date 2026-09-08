@@ -139,11 +139,42 @@ class WorkAttributionService
     /**
      * What one person got through, and the invoices behind it — M22.
      *
-     * @return array{job_count: int, invoice_value: string}
+     * **One count per invoice**, whatever the person did on it. A fitter who
+     * also wound the motor is one job worth one invoice, not two of each: the
+     * question is how many motors went out, and `transaction_staff` holds a row
+     * per trade rather than per document.
+     *
+     * @return array{job_count: int, invoice_value: string, trades: array<int, array{designation: string, jobs: int}>}
      */
     public function workFor(int $employeeId, ?string $from = null, ?string $to = null): array
     {
         return $this->attributions->workSummaryFor($employeeId, $from, $to);
+    }
+
+    /**
+     * The same, for a roster at once — what the Insights people table reads.
+     *
+     * @param  array<int, int>  $employeeIds
+     * @return array<int, array{job_count: int, invoice_value: string, trades: array<int, array{designation: string, jobs: int}>}>
+     */
+    public function workForMany(array $employeeIds, ?string $from = null, ?string $to = null): array
+    {
+        return $this->attributions->workSummaryForMany($employeeIds, $from, $to);
+    }
+
+    /**
+     * How much of the period's invoicing names anybody at all.
+     *
+     * The context a column of per-person figures cannot supply about itself. A
+     * workshop that fills the pickers in on a third of its invoices has a table
+     * that is right and a picture that is not, and the difference between those
+     * two is invisible without this.
+     *
+     * @return array{credited_invoices: int, credited_value: string, invoices: int}
+     */
+    public function coverage(?string $from = null, ?string $to = null): array
+    {
+        return $this->attributions->attributionCoverage($from, $to);
     }
 
     /**

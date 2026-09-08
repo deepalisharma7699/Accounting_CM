@@ -2,16 +2,21 @@
 
 Who changed what, when — on the records underneath the figures.
 
-**Status:** ✅ done — **card switched off**, awaiting §2A conversion
+**Status:** ✅ done — **card on** since 7 September 2026, §2A.10 read-mostly
 **Depends on:** M2 (tenancy), and everything that owns master data
 **Test:** `php artisan test --filter='Audit'`
 
 > Items and the counterparty modules each read `/audit-logs` for **one record**
-> in their drawer's Activity tab, so per-record history is reachable. The trail
-> *across* the workshop — "what did this user do last Tuesday" — is not, and that
-> is the question this module exists to answer. It is also the whole safeguard on
-> `PATCH /transactions/{id}/staff`, the one write that edits a posted document.
-> See [hidden-modules.md](hidden-modules.md).
+> in their drawer's Activity tab. This module answers the opposite question — the
+> trail *across* the workshop, "what did this user do last Tuesday" — and the two
+> must not become one renderer of the other. It is also the whole safeguard on
+> `PATCH /transactions/{id}/staff`, the one write in this application that edits
+> a posted document, which is why it went on ahead of the rest of C7.
+>
+> **Read-mostly, and the strictest case of it.** `canCreate: false` here is not a
+> permission decision somebody could widen: there is no POST, PATCH or DELETE
+> anywhere in the API group and there cannot be — entries arrive through model
+> events, and the model refuses an UPDATE and a DELETE.
 
 ---
 

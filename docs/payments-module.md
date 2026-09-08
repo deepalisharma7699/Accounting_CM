@@ -1,14 +1,14 @@
 # Payments & Receipts
 
-> **Half of this is reachable, half is not.** Collecting against *one document*
-> works from an enabled card: Sales takes a receipt from the invoice its drawer
-> is open on, Purchase pays a bill the same way, and both send an explicit
-> `allocations` entry. What has no screen is the standalone case — a customer
-> clearing three invoices with one cheque, or paying on account before anything
-> is raised — because that lives in the **Transactions** module, which is
-> switched off. `POST /transactions/{id}/allocate`, which settles a receipt that
-> was already taken, has no caller anywhere. See
-> [hidden-modules.md](hidden-modules.md).
+> **All of this is reachable since C3.** Collecting against *one document* was
+> always on a card: Sales takes a receipt from the invoice its drawer is open on,
+> Purchase pays a bill the same way, and both send an explicit `allocations`
+> entry. What had no screen was the standalone case — a customer clearing three
+> invoices with one cheque, or paying on account before anything is raised — and
+> the **Transactions** card is now on and is exactly that. `POST
+> /transactions/{id}/allocate` and `GET /transactions/{id}/open-bills`, which
+> decide what an already-taken receipt settled, are the drawer of a posted
+> receipt or payment. See **Screens** below.
 
 Money moving. The simplest real transactions in the product, and deliberately
 the first ones with a business document behind them rather than a hand-written
@@ -361,35 +361,95 @@ draft's type actually uses.
 
 ## Screens
 
-`/journal`, now titled **Transactions**.
+The **Transactions** card — key `journal`, converted in C3. Three §2A workspaces
+under one card on the Staff shape: Receipt, Payment and Journal voucher, each
+mounted on its own root, lazily on the first click of its tab. The module opens
+on **Receipt**, which is the one done most, rather than asking which of the
+three.
 
-**Three actions, not one "new transaction" that then asks what kind.** Collecting
+**Three acts, not one "new transaction" that then asks what kind.** Collecting
 from a customer, paying a supplier and writing a correcting voucher are different
-jobs done by different people at different moments — and a receipt is much the
-commonest, so it is one click and the primary button.
+jobs done by different people at different moments.
 
 The settlement form is not the double-entry grid. The person recording the day's
 takings should never have to know which account Sundry Debtors is, which is the
 whole reason posting templates exist. It asks three things: who, when, and how
 the money moved.
 
-* The party picker is **filtered by role**, because the server refuses the
-  mismatch — offering a customer in a payment form would only produce a 422 the
-  user could not have predicted. Filtering is on role *membership*, so a
-  counterparty who is both appears in both lists.
-* One row per tender, added as needed, with a live total in whole paise from the
-  input strings. The page never calls `Number()` on an amount.
+* The party picker is the shared type-ahead, **filtered by role**, because the
+  server refuses the mismatch — offering a customer in a payment form would only
+  produce a 422 the user could not have predicted. Filtering is on role
+  *membership*, so a counterparty who is both appears in both lists. It also
+  states what they already owe, fetched on the pick.
+* The split is `components/payment-rows.js` with `settlesADocument: false`: there
+  is no document total to measure it against, because the split **is** the
+  amount. Amounts are summed in whole paise from the input strings; the page
+  never calls `Number()` on one.
 * The reference field relabels itself per mode and marks itself required for a
   cheque, from `GET /transactions/meta` rather than a hard-coded copy.
-* Draft and record are separate buttons, as everywhere: committing to the ledger
-  is never a side effect of saving.
+* **There is no draft.** Money that has moved is a fact. (The shared bill
+  document still offers one, so Sales and Purchase can park a bill — what C3
+  settled is the settlement screens, not the whole product.)
 
-A draft is edited in the form that produced it — a payment draft opened in the
-double-entry grid would ask the user to choose accounts its template already
-decides, and the server refuses `lines` for it anyway.
+Receipt and Payment are **one implementation rendered twice** —
+`partials/settlement-section.blade.php` included with a `$direction`, and one
+factory in `pages/journal.js` called twice, each closing over its own state. The
+direction decides the endpoint, the role and the wording, and nothing else,
+because the server does not either.
 
-The voucher modal shows the split above the journal lines: "Cheque · 402317",
-which is the part of the record the ledger cannot express on its own.
+### Which invoices the money settled — the drawer
+
+This is the screen M16 built the endpoints for and never gave a caller.
+`GET /transactions/{id}/open-bills` and `POST /transactions/{id}/allocate` are
+reached from the drawer of a posted receipt or payment: the party's open bills,
+oldest first, an amount against each, the unallocated remainder stated plainly,
+and **Apply oldest first** for the common case.
+
+It is drawn from **two lists merged**, and getting that wrong looks right. `due`
+on an open bill is net of every allocation *including this settlement's own*, so
+a bill this receipt has already discharged in full is not open any more and never
+appears in `data` — the rows somebody re-pointing a cheque most wants to change
+would be silently missing. So `openBills` carries the settlement's current
+allocations in its meta as well, and a row's ceiling is what is still owing
+**plus** what this settlement is holding against it. An allocation *replaces* the
+whole set, so the screen sends every row that has an amount on it.
+
+Because the form is cleared the instant a receipt posts (§2A.8), where the money
+went is stated in a line above it — "Applied to INV/26-27/1008", what is left on
+account, and **Change what it settles**, which opens that drawer. A toast is gone
+before somebody has finished reading the amount.
+
+**A settlement cannot be left deliberately unallocated while the party has open
+bills.** An empty `allocations` array means "oldest first" to the server and not
+"allocate nothing" — see `AllocateSettlementRequest` — so the drawer refuses to
+send a cleared grid rather than silently doing the opposite of what it looks
+like. Expressing "this is an advance, do not apply it" would mean the request
+distinguishing an absent key from an empty array, on both the create and the
+allocate paths.
+
+### The voucher
+
+The one surface in the application that writes ledger entries directly, and the
+reason the Insights overview is allowed to disagree with the P&L. Its accounts
+come from `GET /accounts`, never from the template. The two sides are totalled
+live and an unbalanced entry is refused before the round trip — the server
+refuses it too, but finding out on submit means retyping a voucher. Its
+counterparty is optional and the picker is mounted with **no role**: a journal
+does not decide whether its counterparty is a customer or a supplier, so there is
+no position line (`outstanding` has two halves and nothing would say which to
+read) and no "+ Add" (quick-party never asks which role a record is).
+
+The drawer shows the split above the journal lines — "Cheque · 402317", the part
+of the record the ledger cannot express on its own — and offers **Reverse**.
+There is no edit: a posted transaction is immutable, and an allocation is the one
+property of one that can simply be corrected, because it writes no entry at all.
+
+**What this module deliberately does not list.** It was four tabs over every
+transaction. Sales lists invoices and credit notes, Purchase lists bills and
+debit notes, Expenses lists expenses, and Insights' Day Book lists every posted
+document — a fifth copy would have been four screens answering one question
+(§5.1). Each section lists its own kind, asked for by name so the page count
+agrees with the rows on it.
 
 ## Tests
 
@@ -401,7 +461,8 @@ php artisan test --filter='Settlement|PaymentMode|Party|PostingEngine|PagesRende
 | --- | --- |
 | `SettlementPostingTest` | The templates: positions, splits, GST absence, overpayment, the role rule, drafts, reversal, paise, volume, tenancy |
 | `SettlementApiTest` | The HTTP surface, both endpoints, permissions, every refusal as an explanation, draft round-trips |
-| `PagesRenderTest` | The three actions, the settlement form, the type filter |
+| `AllocationTest` | Which invoice a receipt paid, both refusals — and, since C3, what `open-bills` answers with: the party's open bills, what the settlement is already pointed at, and the merge that matters when a bill has been discharged in full |
+| `PagesRenderTest` | The three sections, the settlement section written once and rendered twice, the voucher grid emptied of its chart, and the transaction list that must stay gone |
 
 `tests/Concerns/InteractsWithLedger.php` gained **`payVendor()`** and
 **`receiveFrom()`**, which take the split as

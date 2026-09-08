@@ -34,12 +34,19 @@ use Illuminate\Support\Facades\Log;
  * Workshops differ in how much they record, and refusing a bearing because nobody
  * typed its material would push people into not recording the bearing.
  *
- * ## No price is a stored margin
+ * ## No price here is a cost, and none is a margin
  *
- * `sell_price` is what is charged and `markup_percent` is what was intended.
- * Neither is derived from the other, and **neither is a margin**: the cost comes
- * from M8's weighted average at the moment of sale, so a margin computed here
- * would be stale the next time stock arrived. M9 computes it per line.
+ * `sell_price` is what is charged, `purchase_price` is what the workshop expects
+ * to pay, and `markup_percent` is what was intended. None is derived from another
+ * and **none is a cost**: the cost comes from M8's weighted average at the moment
+ * of sale, so a margin computed here would be stale the next time stock arrived.
+ * M9 computes it per line.
+ *
+ * `purchase_price` is the one that looks like an exception and must not become
+ * one. It exists so a screen can answer "what do we pay for this", and so opening
+ * stock on a variant nobody has ever purchased through this product has a value
+ * to arrive at. It never reaches a valuation and never prefills a purchase line
+ * — see the column's migration for what each of those would break.
  */
 class ItemVariantService
 {
@@ -98,7 +105,7 @@ class ItemVariantService
      |-------------------------------------------------------------------- */
 
     /**
-     * @param  array{attributes?: array<string, mixed>|null, sku?: string|null, label?: string|null, sell_price?: string|float|int|null, markup_percent?: string|float|int|null, reorder_level?: string|float|int|null, is_draft?: bool|null}  $data
+     * @param  array{attributes?: array<string, mixed>|null, sku?: string|null, barcode?: string|null, label?: string|null, sell_price?: string|float|int|null, purchase_price?: string|float|int|null, markup_percent?: string|float|int|null, reorder_level?: string|float|int|null, min_stock?: string|float|int|null, is_draft?: bool|null}  $data
      */
     public function create(Item $item, array $data): ItemVariant
     {
@@ -121,6 +128,7 @@ class ItemVariantService
             'label' => $this->trimmed($data['label'] ?? null),
             'attributes' => $attributes === [] ? null : $attributes,
             'sell_price' => $this->normaliseAmount($data['sell_price'] ?? null),
+            'purchase_price' => $this->normaliseAmount($data['purchase_price'] ?? null),
             'markup_percent' => $this->normaliseRate($data['markup_percent'] ?? null),
             'reorder_level' => $this->normaliseQuantity($item, $data['reorder_level'] ?? null),
             'min_stock' => $this->normaliseQuantity($item, $data['min_stock'] ?? null),
@@ -189,6 +197,12 @@ class ItemVariantService
 
         if (array_key_exists('sell_price', $data)) {
             $fields['sell_price'] = $this->normaliseAmount($data['sell_price']);
+        }
+
+        // What the workshop expects to pay, beside what it charges. Not a cost:
+        // see the class note above and the column's own migration.
+        if (array_key_exists('purchase_price', $data)) {
+            $fields['purchase_price'] = $this->normaliseAmount($data['purchase_price']);
         }
 
         if (array_key_exists('markup_percent', $data)) {
