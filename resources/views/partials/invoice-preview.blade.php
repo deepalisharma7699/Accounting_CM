@@ -1,7 +1,7 @@
 {{--
 | The customer's copy, on screen — the surface a posted sale lands on.
 |
-| ## Why it is in the layout and not in the Sales fragment
+| ## Why it is in the layout and not in a module's fragment
 |
 | It holds the one invoice sheet while somebody is looking at it, and the shell
 | caches a module's root **detached** when another module opens. Declared inside
@@ -11,10 +11,15 @@
 | it is a body child for the whole life of the session, exactly like
 | `#invoice-print` beside it and for the same reason.
 |
+| It is also opened by more than one module now — Sales after a sale posts, Jobs
+| after a repair is billed — which is the second reason it cannot live in either
+| of them.
+|
 | ## There is one sheet, and it is borrowed
 |
-| This drawer renders **no invoice markup of its own.** `pages/sales.js` moves
-| the single node out of `#invoice-print` into `[data-invoice-preview-sheet]`
+| This drawer renders **no invoice markup of its own.**
+| `components/invoice-delivery.js` moves the single node out of `#invoice-print`
+| into `[data-invoice-preview-sheet]`
 | while the preview is open, and puts it back before anything prints — the
 | `adoptForm()` pattern, for the reason `workspace.js` uses it: a second copy of
 | a document is a second document.
@@ -26,9 +31,9 @@
 | around the invoice. One node means the rule stays true by construction rather
 | than by everybody remembering it.
 |
-| The title, the subtitle and the footer are written by `pages/sales.js`: what
-| can still be done to a document depends on what it is, and the grants differ
-| between printing it and publishing it.
+| The title, the subtitle and the footer are written by
+| `components/invoice-delivery.js`: what can still be done to a document depends
+| on what it is, and the grants differ between printing it and publishing it.
 --}}
 <div id="invoice-preview" class="drawer-backdrop hidden" data-modal role="dialog" aria-modal="true"
      aria-labelledby="invoice-preview-title">

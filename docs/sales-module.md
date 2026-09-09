@@ -264,7 +264,8 @@ ordinary posted sale and does come here.
 
 ### One invoice sheet, borrowed
 
-The preview renders **no invoice markup of its own.** `pages/sales.js` moves the
+The preview renders **no invoice markup of its own.**
+`components/invoice-delivery.js` moves the
 single `[data-invoice-document]` node out of `#invoice-print` while the preview
 is open and hands it back before anything prints — the `adoptForm()` pattern from
 `workspace.js`, for the same reason.

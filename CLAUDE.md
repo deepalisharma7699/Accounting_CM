@@ -456,12 +456,14 @@ sheet: the screen token is a hairline a printer drops, and the document came out
 of the preview with no rule on it anywhere.
 
 **There is exactly one sheet in the shell, and a screen that shows it borrows
-it.** A posted sale lands on `#invoice-preview` — the customer's copy, level 2
-over the emptied form, with Print and Share — and that drawer renders no invoice
-markup: `pages/sales.js` moves the one `[data-invoice-document]` node out of
-`#invoice-print` and hands it back on Print, on close, and on `beforeprint` (plus
-the `matchMedia('print')` change, which is what Safari has instead of those
-events). Never mount a second copy of the partial in the shell. The print rule
+it.** A posted sale or a posted workshop bill lands on `#invoice-preview` — the
+customer's copy, level 2 over the emptied form, with Print and Share — and that
+drawer renders no invoice markup:
+[components/invoice-delivery.js](resources/js/components/invoice-delivery.js)
+moves the one `[data-invoice-document]` node out of `#invoice-print` and hands it
+back on Print, on close, and on `beforeprint` (plus the `matchMedia('print')`
+change, which is what Safari has instead of those events). Never mount a second
+copy of the partial in the shell. The print rule
 keeps whichever child of `body` *contains* the document, so a second one under
 `<main>` makes `<main>` worth keeping and every print after that carries the whole
 application around the invoice — with nothing on screen saying so. Both hosts are
@@ -729,11 +731,9 @@ plan for the product — `modified-flow-plan.md` is a historical record and
 The **order** the rest of it runs in is
 [execution-plan.md](docs/execution-plan.md): C6, then C7 — Workshops alone, now
 that History has gone on — then C8 moved up to sit immediately after it, then
-seven open points (P1–P7) — the party statement
-that no screen calls, the invoice delivery Jobs cannot borrow until it is
-extracted out of `pages/sales.js`, the advance receipt, the parked-draft
-worklist, five endpoints nothing reaches, and password reset with invitation and
-mail. **M15, the AI capture agent, is parked** as of 7 September 2026 and is
+seven open points (P1–P7), of which **P2 is done** — the party
+statement that no screen calls, the advance receipt, the parked-draft worklist,
+five endpoints nothing reaches, and password reset with invitation and mail. **M15, the AI capture agent, is parked** as of 7 September 2026 and is
 outside that plan; nothing in it waits on the agent. Four steps
 also *finished* something rather than only re-flowing it: C1 shipped the three
 workshop settings the API accepted and no screen offered, C3 shipped the screen
@@ -885,12 +885,32 @@ raise a workshop bill. The route, `resources/views/bills/new.blade.php` and
 and Purchase cards in the mounted shell with `?party=`, which is a module swap
 and not a document load (§1.1).
 
-One thing the Jobs card deliberately does **not** do yet: hand the customer their
-invoice. `#invoice-preview` is Sales' drawer and about three hundred lines of
-`pages/sales.js`, and borrowing it — which the one-sheet rule above requires of
-the next module that hands a customer a document — means extracting that into a
-component first. A job bill states its number and total above the cleared form
-with a link back to the job; printing it is Sales' screen until then.
+**And the Jobs card hands the customer their invoice, which is P2.**
+`#invoice-preview` was Sales' drawer and about four hundred lines of
+`pages/sales.js`; it is
+[components/invoice-delivery.js](resources/js/components/invoice-delivery.js)
+now — the delivery state, custody of the one sheet, print, the share link, the
+WhatsApp message and revocation — and both modules mount it. A posted job bill
+lands on the same preview a sale does, the line above the cleared form offers
+**Print or share it**, and every invoice ever raised off a repair reopens from a
+row on the job card. The share dialog moved with it, from the Sales fragment to
+`partials/invoice-share-modal.blade.php` in the layout, because the shell caches
+a module's root detached and a dialog inside Sales is not in the page while Jobs
+is open. `#confirm-modal` is `z-index: 60` for the same reason it is level 3:
+below the z-55 share dialog it was asking "Stop sharing this invoice?" from
+underneath the panel that asked it.
+
+**A job's status is about the motor; whether it has been billed is a second
+signal.** `WorkshopJobStatus::Delivered` already says the two do not imply each
+other — a regular customer's pump goes home on Friday against an invoice raised
+at the end of the month — so billing is never folded into the pipeline.
+[JobBillingState](app/Enums/JobBillingState.php) is the other half, derived from
+the invoices that point at the job and the parts that point at their lines, never
+stored: reversing a bill moves it with nothing having to remember. A row reads
+*In progress · Invoiced*, and neither half is a lie. And **Generate bill is
+disabled with the reason on it** rather than left out, which is what it was — a
+job that had had nothing done to it, or one already billed in full, simply had no
+button and nothing said why.
 
 **History went on ahead of C7, and it is the read-mostly rule at its strictest.**
 **History** — key `audit` — is one filtered list and nothing else: no create, no

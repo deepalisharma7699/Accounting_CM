@@ -336,7 +336,7 @@ column somebody has to read past.
 
 Sales opens the customer's copy over the form as soon as a sale posts
 (`#invoice-preview`, level 2, with Print and Share). That drawer renders **no
-invoice markup**: `pages/sales.js` moves the single `[data-invoice-document]`
+invoice markup**: `components/invoice-delivery.js` moves the single `[data-invoice-document]`
 node out of `#invoice-print` while it is open and hands it back before anything
 prints.
 

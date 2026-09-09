@@ -88,7 +88,30 @@
     font-weight: 600;
     white-space: nowrap;
     cursor: pointer;
-    transition: background-color 0.15s, color 0.15s, border-color 0.15s, filter 0.15s;
+    transition: background-color 0.15s, color 0.15s, border-color 0.15s, filter 0.15s, opacity 0.15s;
+
+    /*
+    | A refused control has to look refused.
+    |
+    | Several screens disable a button rather than removing it, because the
+    | reason belongs where the question is asked — a system role that cannot be
+    | edited, a job whose status does not allow a bill, the Previous button on
+    | the first page of a list. Without this they are pixel-identical to the ones
+    | that work, so the only way to find out is to press and have nothing happen.
+    | The variants below set their own `filter` on hover; the extra pseudo-class
+    | here is what outranks them.
+    */
+    &:disabled,
+    &[aria-disabled='true'] {
+        opacity: 0.45;
+        cursor: not-allowed;
+        box-shadow: none;
+    }
+
+    &:disabled:hover,
+    &[aria-disabled='true']:hover {
+        filter: none;
+    }
 }
 
 @utility btn-sm {

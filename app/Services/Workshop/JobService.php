@@ -144,6 +144,7 @@ class JobService
             $total = Money::zero();
             $paid = Money::zero();
             $due = Money::zero();
+            $live = 0;
 
             foreach ($mine as $bill) {
                 $position = $settlements[(int) $bill->id] ?? null;
@@ -155,6 +156,7 @@ class JobService
                     continue;
                 }
 
+                $live++;
                 $total = $total->plus(Money::of($position['total']));
                 $paid = $paid->plus(Money::of($position['paid']));
                 $due = $due->plus(Money::of($position['due']));
@@ -164,7 +166,14 @@ class JobService
                 'total' => $total->amount(),
                 'paid' => $paid->amount(),
                 'due' => $due->amount(),
+                // How many documents this job has produced, reversals included —
+                // the job card lists them all, and a reversal is part of the
+                // record of what happened.
                 'count' => $mine->count(),
+                // How many still stand, which is the different question the
+                // "Invoiced" badge asks: reversing the only bill off a job puts
+                // it back to not billed, with nothing having to remember.
+                'live' => $live,
             ];
         }
     }

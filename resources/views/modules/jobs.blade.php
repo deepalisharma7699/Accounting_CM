@@ -332,7 +332,10 @@
                 </div>
 
                 <div class="flex shrink-0 items-center gap-2">
-                    <span data-drawer-status></span>
+                    {{-- Two of them: where the motor has got to, and whether it
+                         has been invoiced. Neither implies the other. --}}
+                    <span class="flex flex-wrap items-center justify-end gap-1"
+                          data-drawer-status></span>
                     <button type="button" class="btn btn-ghost btn-icon" data-modal-close aria-label="Close">
                         <x-icon name="x" :size="16" />
                     </button>

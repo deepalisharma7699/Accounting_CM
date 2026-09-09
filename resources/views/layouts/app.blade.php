@@ -60,6 +60,12 @@
          page when the shell detached that module. See the partial. --}}
     @include('partials.invoice-preview')
 
+    {{-- Level 3, over the preview or over a module's own drawer — and in the
+         layout for the same reason both of those are: it is opened from Sales
+         and from Jobs, and a dialog declared inside either would not be in the
+         page while the other was open. See the partial. --}}
+    @include('partials.invoice-share-modal')
+
     <div id="toast-host" class="toast-host" aria-live="polite"></div>
 
 </body>

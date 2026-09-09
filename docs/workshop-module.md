@@ -140,6 +140,65 @@ The brief's scenario 10. `WorkshopJobStatus::isBillable()` is true only for
 an invoice whatever parts were optimistically listed on it while the estimate was
 being argued about.
 
+**And the screen says so.** That rule had been enforced in the enum and at the
+endpoint and shown nowhere: the job card simply left **Generate bill** out when
+the status did not allow one, which reads as a product that offers the button
+sometimes and not others for no stated reason. It is painted and **disabled**
+now, with the refusal underneath it — the same judgement the Roles module makes
+about a system role, and for its reason: the answer belongs where the question is
+asked. Three refusals, all of them the server's own:
+
+| Why | What the card says |
+| --- | --- |
+| Cancelled | *`JOB/26-27/41` was cancelled, so there is nothing on it to bill.* |
+| Nothing done yet | *…is received. Move it to in progress before billing it — an invoice now would be charging for work nobody has started.* |
+| Nothing on the card | *Nothing has been written onto this job yet. Add the parts and the labour first.* |
+| Already billed in full | *Everything on `JOB/26-27/41` has already reached an invoice. Add what else was fitted.* |
+
+## Whether it has been invoiced is a second signal
+
+`WorkshopJobStatus` is about the motor. Whether the customer has been charged is
+a different question and the enum says so where `Delivered` is declared: a
+regular customer's pump goes home on Friday against an invoice raised at the end
+of the month, and a job billed in advance sits on the shelf until somebody comes
+for it. Folding one into the other means lying about one of them.
+
+So there is a second, derived state — `App\Enums\JobBillingState`, three cases:
+
+| State | Badge | When |
+| --- | --- | --- |
+| `unbilled` | *(silent)* | Nothing stands against the job. |
+| `part_billed` | **Part billed** (amber) | Invoiced, with work still on the card. |
+| `billed` | **Invoiced** (green) | Everything on the card has reached an invoice. |
+
+It is sent on the resource as `billing_state`, `billing_state_label` and
+`billing_state_tone` — the tone travelling with it so a screen never maps a state
+to a colour — and it is **absent** wherever `billed` is absent, because "nothing
+has been billed" and "nobody asked" are different answers.
+
+`unbilled` paints nothing at all. Most of a bench has not been billed, and a
+badge on every row says nothing.
+
+**Never stored.** `WorkshopJob::billingState()` reads the invoices that point at
+the job and the parts that point at their invoice lines, so reversing a bill
+takes the badge away with nothing having to remember — which is what
+`test_reversing_the_invoice_takes_the_badge_away` holds shut. `billed['live']`
+is the count that drives it: `billed['count']` is every document the job has
+produced, reversals included, because the job card lists them all.
+
+A listing does not load the parts, so the repository counts the unbilled ones in
+a second subquery (`parts as unbilled_parts_count`) and the state falls out of
+that. A detail read has the parts in hand and uses those.
+
+### Handing the customer their invoice
+
+Every posted invoice off a job opens in `#invoice-preview` — the one sheet, with
+**Print** and **Share** — from a row in the job card's own list of them, and a
+bill lands there the moment it posts. None of that is this module's code: it is
+`components/invoice-delivery.js`, which Sales mounts too, and there is exactly one
+invoice sheet in the application for the reason
+[billing-module.md](billing-module.md) records.
+
 ## The pipeline
 
 ```

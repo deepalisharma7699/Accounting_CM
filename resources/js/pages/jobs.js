@@ -1,6 +1,7 @@
 import auth from '../auth-client';
-import { badge, formatQuantity } from '../components/badge';
+import { badge, formatQuantity, lifecycleTone } from '../components/badge';
 import { mountBillDocument } from '../components/bill-document';
+import { bindDelivery, openInvoicePreview } from '../components/invoice-delivery';
 import { mountItemPicker } from '../components/item-picker';
 import { mountPartyPicker } from '../components/party-picker';
 import { openQuickParty } from '../components/quick-party';
@@ -96,6 +97,17 @@ let billing = null;
 /** The job whose card is being corrected, or null. */
 let editing = null;
 
+/**
+ * The last invoice this module posted, so the line above the cleared form can
+ * open it again.
+ *
+ * §2A.8 empties the document the instant it posts, so nothing on screen is
+ * holding it any more — and "Print or share it" a minute later has to be about
+ * the invoice that was raised rather than about whatever the preview happens to
+ * be pointing at.
+ */
+let lastBill = null;
+
 let root = null;
 let formRoot = null;
 let listRoot = null;
@@ -182,6 +194,24 @@ const fingerprint = (lines) => lines.map(lineFingerprint).join('\n');
  */
 const motorOf = (job) => (job.motor && job.motor !== job.job_no ? job.motor : null);
 
+/**
+ * Whether anything has been invoiced off this job — beside the status, never
+ * folded into it.
+ *
+ * The two answer different questions. A job's status is about the motor, and
+ * `WorkshopJobStatus::Delivered` says in as many words that going home and being
+ * billed do not imply each other: a regular customer's pump goes out on Friday
+ * against an invoice raised at the end of the month. So a repair that has been
+ * charged for reads *In progress · Invoiced*, and neither half is a lie.
+ *
+ * Silent while nothing has been billed, which is most of a bench: a badge on
+ * every row says nothing. The word and the colour are the server's, from
+ * `JobBillingState` — never a map from state to colour written here (§38).
+ */
+const billingBadge = (job) => (job.billing_state && job.billing_state !== 'unbilled'
+    ? badge(job.billing_state_label, job.billing_state_tone)
+    : '');
+
 /* -------------------------------------------------------------------------
  | The list
  | ---------------------------------------------------------------------- */
@@ -262,9 +292,12 @@ function renderRow(job) {
                 ${esc(job.complaint)}
             </td>
 
-            <td class="table-cell w-36">
-                ${badge(job.status_label, job.status_tone)}
-                ${job.is_overdue ? badge('Late', 'danger') : ''}
+            <td class="table-cell w-44">
+                <span class="flex flex-wrap items-center gap-1">
+                    ${badge(job.status_label, job.status_tone)}
+                    ${job.is_overdue ? badge('Late', 'danger') : ''}
+                    ${billingBadge(job)}
+                </span>
             </td>
 
             <td class="table-cell w-32 text-right font-mono text-[0.8125rem]">
@@ -353,7 +386,10 @@ async function refreshDrawer(id) {
         el('[data-drawer-subtitle]').textContent =
             `${data.party?.name ?? ''} · received ${formatDate(data.received_date)}`
             + (data.promised_date ? ` · promised ${formatDate(data.promised_date)}` : '');
-        el('[data-drawer-status]').innerHTML = badge(data.status_label, data.status_tone);
+        // Two badges, never one: where the motor has got to and what has been
+        // charged for are different questions — see `billingBadge`.
+        el('[data-drawer-status]').innerHTML =
+            badge(data.status_label, data.status_tone) + billingBadge(data);
 
         el('[data-drawer-body]').innerHTML = renderCard(data);
         paintDrawerActions(data);
@@ -409,10 +445,13 @@ function renderParts(job, mayWrite) {
 
     return `
         <div class="border-b border-border px-6 py-4">
-            <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                 <h3 class="text-sm font-semibold text-foreground">Parts and labour</h3>
                 <span class="text-[0.8125rem] text-muted-foreground">
-                    Not yet billed: <span class="font-mono">${esc(formatMoney(job.unbilled_total ?? '0.00'))}</span>
+                    Not yet billed
+                    <span class="ml-1 font-mono font-semibold text-foreground">
+                        ${esc(formatMoney(job.unbilled_total ?? '0.00'))}
+                    </span>
                 </span>
             </div>
 
@@ -421,70 +460,105 @@ function renderParts(job, mayWrite) {
             </p>
 
             ${parts.length ? `
-                <table class="mt-3 w-full border-collapse text-[0.8125rem]">
-                    <tbody>
-                        ${parts.map((part) => `
-                            <tr class="border-t border-border ${part.is_billed ? 'text-muted-foreground' : ''}">
-                                <td class="px-2 py-2">
-                                    ${esc(part.description)}
-                                    ${part.is_billed ? badge('Billed', 'neutral') : ''}
-                                    ${part.memo ? `<span class="block text-xs text-muted-foreground">${esc(part.memo)}</span>` : ''}
-                                </td>
-                                <td class="px-2 py-2 text-right font-mono">
-                                    ${esc(formatQuantity(part.quantity, part.unit_symbol))}
-                                </td>
-                                <td class="px-2 py-2 text-right font-mono">${esc(formatMoney(part.unit_price))}</td>
-                                <td class="px-2 py-2 text-right font-mono font-semibold">
-                                    ${esc(formatMoney(part.line_total))}
-                                </td>
-                                <td class="px-2 py-2 text-right">
-                                    ${mayWrite && !part.is_billed
-                                        ? `<button type="button" class="btn btn-ghost btn-icon"
-                                                   data-remove-part="${part.id}"
-                                                   aria-label="Remove ${esc(part.description)}">×</button>`
-                                        : ''}
-                                </td>
-                            </tr>`).join('')}
-                    </tbody>
-                </table>`
+                <div class="mt-3 -mx-1 overflow-x-auto">
+                    <table class="w-full min-w-[26rem] border-collapse text-[0.8125rem]">
+                        <thead>
+                            <tr class="border-b border-border text-[0.6875rem] uppercase tracking-wide
+                                       text-muted-foreground">
+                                <th class="px-1 py-1.5 text-left font-semibold">Part or labour</th>
+                                <th class="px-2 py-1.5 text-right font-semibold">Qty</th>
+                                <th class="px-2 py-1.5 text-right font-semibold">Rate</th>
+                                <th class="px-2 py-1.5 text-right font-semibold">Amount</th>
+                                <th class="w-8"><span class="sr-only">Remove</span></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${parts.map((part) => `
+                                <tr class="border-t border-border align-top ${part.is_billed ? 'text-muted-foreground' : ''}">
+                                    <td class="px-1 py-2">
+                                        <span class="inline-flex flex-wrap items-center gap-1.5">
+                                            ${esc(part.description)}
+                                            ${part.is_billed ? badge('Billed', 'neutral') : ''}
+                                        </span>
+                                        ${part.memo ? `<span class="block text-xs text-muted-foreground">${esc(part.memo)}</span>` : ''}
+                                    </td>
+                                    <td class="whitespace-nowrap px-2 py-2 text-right font-mono">
+                                        ${esc(formatQuantity(part.quantity, part.unit_symbol))}
+                                    </td>
+                                    <td class="whitespace-nowrap px-2 py-2 text-right font-mono">
+                                        ${esc(formatMoney(part.unit_price))}
+                                    </td>
+                                    <td class="whitespace-nowrap px-2 py-2 text-right font-mono font-semibold
+                                               text-foreground">
+                                        ${esc(formatMoney(part.line_total))}
+                                    </td>
+                                    <td class="py-2 text-right">
+                                        ${mayWrite && !part.is_billed
+                                            ? `<button type="button" class="btn btn-ghost btn-icon size-7"
+                                                       data-remove-part="${part.id}"
+                                                       aria-label="Remove ${esc(part.description)}">×</button>`
+                                            : ''}
+                                    </td>
+                                </tr>`).join('')}
+                        </tbody>
+                    </table>
+                </div>`
             : '<p class="mt-3 text-[0.8125rem] text-muted-foreground">Nothing on this job yet.</p>'}
 
             ${mayWrite && job.is_open ? `
-                <div class="mt-4 grid gap-3 sm:grid-cols-[1fr_6rem_7rem_auto] sm:items-end" data-part-form>
+                <div class="mt-4 rounded-[10px] border border-border bg-secondary/40 p-3.5" data-part-form>
+                    ${/*
+                        The picker gets a row to itself.
+
+                        It renders a label, a box and a hint, where the two number
+                        fields beside it render a label and a box — so on one grid
+                        row nothing lines up: bottom-aligned, the quantity sat a
+                        line below the search box it belongs to, and top-aligned
+                        the Add button floated above both. Splitting them settles
+                        the alignment and gives the search the whole width of the
+                        drawer, which is what it needs to show a part number, a
+                        price and a stock badge on one result.
+                    */''}
                     <div data-part-picker-host></div>
 
-                    <label class="field">
-                        <span class="field-label">Qty</span>
-                        <input type="text" class="field-input text-right font-mono" inputmode="decimal"
-                               value="1" data-part-quantity>
-                    </label>
+                    <p class="mt-2 min-h-4 text-xs font-medium text-foreground" data-part-chosen></p>
 
-                    <label class="field">
-                        <span class="field-label">Rate</span>
-                        <input type="text" class="field-input text-right font-mono" inputmode="decimal"
-                               placeholder="0.00" data-part-price>
-                    </label>
+                    <div class="mt-2 grid grid-cols-2 items-end gap-3 sm:grid-cols-[7rem_9rem_1fr]">
+                        <label class="field">
+                            <span class="field-label">Qty</span>
+                            <input type="text" class="field-input text-right font-mono" inputmode="decimal"
+                                   value="1" data-part-quantity>
+                        </label>
 
-                    <button type="button" class="btn btn-primary" data-add-part disabled>Add</button>
-                </div>
-                <p class="mt-1 text-xs text-muted-foreground" data-part-chosen></p>` : ''}
+                        <label class="field">
+                            <span class="field-label">Rate</span>
+                            <input type="text" class="field-input text-right font-mono" inputmode="decimal"
+                                   placeholder="0.00" data-part-price>
+                        </label>
+
+                        <button type="button" data-add-part disabled
+                                class="btn btn-primary col-span-2 sm:col-span-1 sm:justify-self-end">
+                            Add to the job
+                        </button>
+                    </div>
+                </div>` : ''}
         </div>`;
 }
 
 function renderEstimate(job, mayWrite) {
     return `
         <div class="border-b border-border px-6 py-4">
-            <div class="flex flex-wrap items-center justify-between gap-2">
+            <div class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                 <h3 class="text-sm font-semibold text-foreground">Estimate</h3>
 
-                <div class="flex items-center gap-2">
+                <span class="flex items-center gap-2">
                     ${job.has_estimate
-                        ? `<span class="font-mono text-[0.8125rem]">${esc(formatMoney(job.estimate_total))}</span>
+                        ? `<span class="font-mono text-[0.8125rem] font-semibold">${esc(formatMoney(job.estimate_total))}</span>
                            ${job.estimate_approved_at
                                 ? badge('Approved', 'success')
                                 : badge('Awaiting approval', 'warning')}`
                         : '<span class="text-[0.8125rem] text-muted-foreground">Not quoted</span>'}
-                </div>
+                </span>
             </div>
 
             <p class="mt-0.5 text-xs text-muted-foreground">
@@ -493,16 +567,30 @@ function renderEstimate(job, mayWrite) {
             </p>
 
             ${job.has_estimate ? `
-                <table class="mt-3 w-full border-collapse text-[0.8125rem]">
-                    <tbody>
-                        ${job.estimate_lines.map((line) => `
-                            <tr class="border-t border-border">
-                                <td class="px-2 py-1.5">${esc(line.description)}</td>
-                                <td class="px-2 py-1.5 text-right font-mono">${esc(line.quantity)}</td>
-                                <td class="px-2 py-1.5 text-right font-mono">${esc(formatMoney(line.unit_price))}</td>
-                            </tr>`).join('')}
-                    </tbody>
-                </table>` : ''}
+                <div class="mt-3 -mx-1 overflow-x-auto">
+                    <table class="w-full min-w-[22rem] border-collapse text-[0.8125rem]">
+                        <thead>
+                            <tr class="border-b border-border text-[0.6875rem] uppercase tracking-wide
+                                       text-muted-foreground">
+                                <th class="px-1 py-1.5 text-left font-semibold">Quoted</th>
+                                <th class="px-2 py-1.5 text-right font-semibold">Qty</th>
+                                <th class="px-2 py-1.5 text-right font-semibold">Rate</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${job.estimate_lines.map((line) => `
+                                <tr class="border-t border-border">
+                                    <td class="px-1 py-1.5">${esc(line.description)}</td>
+                                    <td class="whitespace-nowrap px-2 py-1.5 text-right font-mono">
+                                        ${esc(formatQuantity(line.quantity))}
+                                    </td>
+                                    <td class="whitespace-nowrap px-2 py-1.5 text-right font-mono">
+                                        ${esc(formatMoney(line.unit_price))}
+                                    </td>
+                                </tr>`).join('')}
+                        </tbody>
+                    </table>
+                </div>` : ''}
 
             ${mayWrite && job.is_open ? `
                 <div class="mt-3 flex flex-wrap gap-2">
@@ -521,6 +609,15 @@ function renderEstimate(job, mayWrite) {
         </div>`;
 }
 
+/**
+ * The invoices raised off this repair, and the way back to any of them.
+ *
+ * Each posted row opens the customer's copy in the shared preview — the one
+ * `components/invoice-delivery.js` owns, with Print and Share on it. That is the
+ * same drawer the invoice landed on when it posted, borrowed rather than rebuilt
+ * (§5.1): there is exactly one invoice sheet in this application and a second
+ * copy of it anywhere would put the whole screen on the paper.
+ */
 function renderBills(job) {
     const bills = job.bills ?? [];
 
@@ -530,19 +627,47 @@ function renderBills(job) {
         <div class="px-6 py-4">
             <h3 class="text-sm font-semibold text-foreground">Invoices off this job</h3>
 
-            <table class="mt-3 w-full border-collapse text-[0.8125rem]">
-                <tbody>
-                    ${bills.map((bill) => `
-                        <tr class="border-t border-border">
-                            <td class="px-2 py-1.5 font-mono">${esc(bill.doc_no ?? `#${bill.id}`)}</td>
-                            <td class="px-2 py-1.5">${esc(formatDate(bill.date))}</td>
-                            <td class="px-2 py-1.5">${esc(bill.status_label)}</td>
-                            <td class="px-2 py-1.5 text-right font-mono font-semibold">
-                                ${esc(formatMoney(bill.total))}
-                            </td>
-                        </tr>`).join('')}
-                </tbody>
-            </table>
+            <p class="mt-0.5 text-xs text-muted-foreground">
+                Open one to print it or send the customer a link.
+            </p>
+
+            <div class="mt-3 -mx-1 overflow-x-auto">
+                <table class="w-full min-w-[24rem] border-collapse text-[0.8125rem]">
+                    <thead>
+                        <tr class="border-b border-border text-[0.6875rem] uppercase tracking-wide
+                                   text-muted-foreground">
+                            <th class="px-1 py-1.5 text-left font-semibold">Invoice</th>
+                            <th class="px-2 py-1.5 text-left font-semibold">Date</th>
+                            <th class="px-2 py-1.5 text-left font-semibold">Status</th>
+                            <th class="px-2 py-1.5 text-right font-semibold">Total</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${bills.map((bill) => {
+                            // A draft has no number, no priced lines and no tax,
+                            // and a reversed invoice is one the customer must
+                            // stop being able to open — so neither has a copy to
+                            // hand over. The server refuses both; this only
+                            // decides whether the row is worth offering.
+                            const open = bill.status === 'posted';
+
+                            return `
+                                <tr class="border-t border-border ${open
+                                    ? 'cursor-pointer transition hover:bg-secondary/60'
+                                    : ''}"
+                                    ${open ? `data-open-invoice="${bill.id}" tabindex="0" role="link"
+                                              aria-label="Open ${esc(bill.doc_no ?? `#${bill.id}`)}"` : ''}>
+                                    <td class="px-1 py-1.5 font-mono">${esc(bill.doc_no ?? `#${bill.id}`)}</td>
+                                    <td class="whitespace-nowrap px-2 py-1.5">${esc(formatDate(bill.date))}</td>
+                                    <td class="px-2 py-1.5">${badge(bill.status_label, lifecycleTone(bill.status))}</td>
+                                    <td class="whitespace-nowrap px-2 py-1.5 text-right font-mono font-semibold">
+                                        ${esc(formatMoney(bill.total))}
+                                    </td>
+                                </tr>`;
+                        }).join('')}
+                    </tbody>
+                </table>
+            </div>
 
             <p class="mt-2 text-[0.8125rem] text-muted-foreground">
                 Paid <span class="font-mono">${esc(formatMoney(job.billed?.paid ?? '0.00'))}</span> ·
@@ -552,18 +677,75 @@ function renderBills(job) {
 }
 
 /**
+ * Why this job cannot produce an invoice, or null where it can.
+ *
+ * Three refusals, and all three are the server's rather than this screen's
+ * opinion: `WorkshopJobStatus::isBillable()` decides the first,
+ * `InvalidJobStateException::nothingToBill()` the last, and the wording follows
+ * both so the sentence somebody reads before pressing is the sentence they would
+ * have read after.
+ *
+ * The status one is the point of the whole function. A job that has had nothing
+ * done to it cannot be charged for — an invoice against it would be charging for
+ * an intention — and a cancelled job must never produce one at all, which is the
+ * brief's scenario 10. That rule was already enforced, in the enum and at the
+ * endpoint; what was missing was any sign of it on the screen, because the
+ * control was simply left out and nothing said why. A button that is not there
+ * teaches nobody anything.
+ */
+function whyNotBillable(job) {
+    if (!job.is_billable) {
+        return job.status === 'cancelled'
+            ? `${job.job_no} was cancelled, so there is nothing on it to bill.`
+            : `${job.job_no} is ${job.status_label.toLowerCase()}. Move it to in progress before billing it `
+                + '— an invoice now would be charging for work nobody has started.';
+    }
+
+    const parts = job.parts ?? [];
+
+    if (parts.length === 0) {
+        return 'Nothing has been written onto this job yet. Add the parts and the labour first.';
+    }
+
+    /*
+    | The server's own question, asked the server's way: `unbilledParts()` is
+    | what decides `JOB_NOTHING_TO_BILL`, and a part points at the line that
+    | consumed it. Asking `billing_state` instead would be close but not the
+    | same — reversing a bill takes the badge off the job and deliberately
+    | leaves the parts marked, because they *were* billed, on a document that
+    | was then cancelled. This would have offered a bill that the endpoint would
+    | have refused a moment later.
+    */
+    if (parts.every((part) => part.is_billed)) {
+        return `Everything on ${job.job_no} has already reached an invoice. Add what else was fitted.`;
+    }
+
+    return null;
+}
+
+/**
  * The footer.
  *
  * Raising the invoice needs WRITE:TRANSACTIONS as well as the jobs grant, and
  * the route enforces both — recording a repair and posting to the ledger are
  * different authorities, which is the whole reason M19 has a permission of its
  * own.
+ *
+ * The grant decides whether the control is painted at all; the job's state
+ * decides only whether it can be pressed. Those are different questions and they
+ * are answered differently on purpose — the Roles module's judgement about a
+ * system role, and for its reason: the answer belongs where the question is
+ * asked, and a control that vanishes leaves somebody hunting for it.
  */
 function paintDrawerActions(job) {
     const buttons = [];
 
-    if (job.is_billable && can('WRITE', 'TRANSACTIONS')) {
-        buttons.push('<button type="button" class="btn btn-primary" data-generate-bill>Generate bill</button>');
+    const refusal = can('WRITE', 'TRANSACTIONS') ? whyNotBillable(job) : null;
+
+    if (can('WRITE', 'TRANSACTIONS')) {
+        buttons.push(`
+            <button type="button" class="btn btn-primary" data-generate-bill
+                    ${refusal ? `disabled title="${esc(refusal)}"` : ''}>Generate bill</button>`);
     }
 
     if (can('UPDATE', 'WORKSHOP_JOBS')) {
@@ -575,6 +757,12 @@ function paintDrawerActions(job) {
     // guessing at it.
     if (can('DELETE', 'WORKSHOP_JOBS')) {
         buttons.push('<button type="button" class="btn btn-ghost ml-auto text-rose-600" data-delete-job>Delete</button>');
+    }
+
+    // Below the row rather than in a tooltip only: `title` is a mouse's
+    // affordance and this screen is used on a tablet at a bench.
+    if (refusal) {
+        buttons.push(`<p class="basis-full text-xs text-muted-foreground">${esc(refusal)}</p>`);
     }
 
     el('[data-drawer-actions]').innerHTML = buttons.join('');
@@ -616,6 +804,19 @@ function mountPartPicker() {
 
             if (price && !price.value && choice.price) price.value = choice.price;
         },
+    });
+
+    /*
+    | Bring the form up the panel before anybody types into it.
+    |
+    | The results list is absolutely positioned, so it adds nothing to the
+    | drawer's scroll height — on a long job card, opened where the form
+    | happened to sit, the matches were cut off at the bottom edge with no way
+    | to scroll to them. Centring the form first leaves the whole list inside
+    | the panel, and it happens once, on focus, rather than under the typing.
+    */
+    $('[data-item-input]', host)?.addEventListener('focus', () => {
+        el('[data-part-form]')?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     });
 }
 
@@ -760,6 +961,26 @@ async function destroyJob(job) {
     } catch (error) {
         toast(error.message, 'error');
     }
+}
+
+/**
+ * Hand the customer a copy of one invoice off this job.
+ *
+ * Level 2 over the job card rather than a state of it: it is a different record
+ * — the invoice, not the repair — and `#invoice-preview` is where this
+ * application shows one. The job drawer is left open behind it, so closing the
+ * copy is a step back to the card rather than out of the module.
+ *
+ * The preview is the shared one and it borrows the application's single invoice
+ * sheet; nothing here renders any of that. See
+ * `components/invoice-delivery.js`.
+ */
+function openBill(job, billId) {
+    const bill = (job.bills ?? []).find((row) => String(row.id) === String(billId));
+
+    if (!bill) return;
+
+    openInvoicePreview(bill, { title: `${job.job_no} — the customer’s copy` });
 }
 
 /* -------------------------------------------------------------------------
@@ -1186,6 +1407,7 @@ export default async function initJobs() {
             const job = billing;
 
             billing = null;
+            lastBill = created;
 
             doc.reset();
             doc.party().lock(false);
@@ -1195,15 +1417,42 @@ export default async function initJobs() {
                 <p><strong>${esc(created.doc_no ?? `#${created.id}`)}</strong> raised against
                 ${esc(job?.job_no ?? 'the job')} —
                 <span class="font-mono">${esc(formatMoney(created.total))}</span>.</p>
-                ${job ? `<button type="button" class="mt-1 font-semibold underline" data-outcome-job="${job.id}">
-                    Open the job card
-                </button>` : ''}`);
+                <div class="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+                    <button type="button" class="font-semibold underline" data-outcome-invoice>
+                        Print or share it
+                    </button>
+                    ${job ? `<button type="button" class="font-semibold underline" data-outcome-job="${job.id}">
+                        Open the job card
+                    </button>` : ''}
+                </div>`);
 
             if (job) workspace?.flagNew(job.id);
 
-            jobParty.focus();
             loadMeta();
             refetch();
+
+            /*
+            | And the other half of billing a repair: the customer's copy.
+            |
+            | C4 shipped the post and deliberately stopped here, because the
+            | preview was three hundred lines of `pages/sales.js` and there is
+            | exactly one invoice sheet in this application — borrowing it meant
+            | extracting that first. It is `components/invoice-delivery.js` now,
+            | and this is the module the extraction was for.
+            |
+            | Over the emptied form rather than instead of it, so §2A.8 is
+            | untouched: closing the preview leaves a blank intake form with the
+            | cursor in the customer box, which is where the next motor starts.
+            |
+            | Only for a document there is a copy *of*. A workshop bill cannot be
+            | parked, so this is all but unconditional — but the guard costs
+            | nothing and states the rule.
+            */
+            if (created?.status === 'posted') {
+                openInvoicePreview(created, { onClosed: () => jobParty.focus() });
+            } else {
+                jobParty.focus();
+            }
         },
     });
 
@@ -1261,11 +1510,23 @@ export default async function initJobs() {
     formEl('[data-job-outcome]').addEventListener('click', (event) => {
         const opener = event.target.closest('[data-outcome-job]');
 
-        if (opener) openDrawer(opener.dataset.outcomeJob);
+        if (opener) {
+            openDrawer(opener.dataset.outcomeJob);
+
+            return;
+        }
+
+        // The same drawer the post landed on, about the same document — so
+        // whoever closed it before the customer asked for a copy has a way back
+        // that does not involve finding the invoice on the Sales list.
+        if (event.target.closest('[data-outcome-invoice]') && lastBill) {
+            openInvoicePreview(lastBill, { onClosed: () => jobParty.focus() });
+        }
     });
 
     bindList();
     bindDrawer();
+    bindDelivery();
 
     await loadMeta();
 
@@ -1457,7 +1718,18 @@ function bindDrawer() {
             return jobAction(job.id, 'estimate/apply', 'Estimate copied onto the job.');
         }
 
+        const invoice = event.target.closest('[data-open-invoice]');
+        if (invoice) return openBill(job, invoice.dataset.openInvoice);
+
         return undefined;
+    });
+
+    // Enter on an invoice row, for the same reason the list's rows take it: a
+    // row that is a link with the mouse is a link with the keyboard.
+    el('[data-drawer-body]').addEventListener('keydown', (event) => {
+        const invoice = event.key === 'Enter' ? event.target.closest('[data-open-invoice]') : null;
+
+        if (invoice && state.current) openBill(state.current, invoice.dataset.openInvoice);
     });
 
     el('[data-drawer-actions]').addEventListener('click', (event) => {

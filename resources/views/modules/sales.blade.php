@@ -280,25 +280,3 @@
 
     </div>
 </div>
-
-<div id="sales-share-modal" class="modal-backdrop hidden" data-modal role="dialog" aria-modal="true"
-     aria-labelledby="sales-share-title" style="z-index: 55">
-    <div class="modal-panel max-w-lg">
-
-        <header class="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
-            <div>
-                <h2 class="text-base font-bold text-foreground" id="sales-share-title">Share this invoice</h2>
-                <p class="mt-0.5 text-[0.8125rem] text-muted-foreground" data-share-subtitle></p>
-            </div>
-
-            <button type="button" class="btn btn-ghost btn-icon" data-modal-close aria-label="Close">
-                <x-icon name="x" :size="18" />
-            </button>
-        </header>
-
-        <div class="px-5 py-4" data-share-body></div>
-
-        <footer class="flex flex-wrap gap-2 border-t border-border px-5 py-4" data-share-actions></footer>
-
-    </div>
-</div>

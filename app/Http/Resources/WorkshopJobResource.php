@@ -162,9 +162,41 @@ class WorkshopJobResource extends JsonResource
             | claim the first.
             */
             'billed' => $this->when($this->billed !== null, fn () => $this->billed),
+
+            /*
+            | How much of the job has reached an invoice — {@see JobBillingState}.
+            |
+            | A second signal beside the status, never folded into it: a job's
+            | status is about the motor and this is about the money, and neither
+            | implies the other. Sent with `billed` and absent without it, for the
+            | same reason `billed` is — `unbilled` where nobody asked would be a
+            | claim about the books rather than an admission that none was made.
+            |
+            | The tone travels with it so the badge's colour is decided in the
+            | enum that owns the concept rather than in each screen that paints
+            | one (§38).
+            */
+            'billing_state' => $this->when(
+                $this->billed !== null,
+                fn () => $this->billingState()?->value,
+            ),
+            'billing_state_label' => $this->when(
+                $this->billed !== null,
+                fn () => $this->billingState()?->label(),
+            ),
+            'billing_state_tone' => $this->when(
+                $this->billed !== null,
+                fn () => $this->billingState()?->tone(),
+            ),
             'bills' => $this->whenLoaded('bills', fn () => $this->bills->map(fn ($bill) => [
                 'id' => $bill->id,
                 'doc_no' => $bill->doc_no,
+                // What kind of document it is, so the job card can name it the
+                // way the customer's copy does — "Invoice INV/26-27/12". The
+                // relation already selects the column; printing it from here is
+                // what saves the job card a read of the whole transaction.
+                'type' => $bill->type->value,
+                'type_label' => $bill->type->label(),
                 'date' => $bill->date->toDateString(),
                 'status' => $bill->status->value,
                 'status_label' => $bill->status->label(),

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\JobBillingState;
 use App\Enums\WorkshopJobStatus;
 use App\Models\Concerns\BelongsToTenant;
 use App\Support\Money;
@@ -81,7 +82,7 @@ class WorkshopJob extends Model
      * rather than as zero — "nothing has been billed" and "nobody asked" are
      * different answers.
      *
-     * @var array{total: string, paid: string, due: string, count: int}|null
+     * @var array{total: string, paid: string, due: string, count: int, live: int}|null
      */
     public ?array $billed = null;
 
@@ -169,6 +170,55 @@ class WorkshopJob extends Model
     public function isBillable(): bool
     {
         return $this->status->isBillable();
+    }
+
+    /**
+     * How much of this job has reached an invoice — {@see JobBillingState}.
+     *
+     * Decided here rather than in each screen that renders the badge, for §38's
+     * reason and for §4.4's: the Jobs list, the job card and anything counted off
+     * either have to agree about what "invoiced" means.
+     *
+     * Null where nothing computed {@see $billed}, which a serialiser reports as
+     * absent rather than as `unbilled` — "nothing has been billed" and "nobody
+     * asked" are different answers, and the second one rendered as the first is
+     * a claim about the books.
+     */
+    public function billingState(): ?JobBillingState
+    {
+        if ($this->billed === null) {
+            return null;
+        }
+
+        // `live` rather than `count`: a reversed invoice was cancelled, and a job
+        // whose only bill was reversed has nothing standing against it.
+        if ((int) ($this->billed['live'] ?? 0) === 0) {
+            return JobBillingState::Unbilled;
+        }
+
+        return $this->hasUnbilledParts()
+            ? JobBillingState::PartBilled
+            : JobBillingState::Billed;
+    }
+
+    /**
+     * Whether anything on the card is still to bill.
+     *
+     * Three ways of asking one question, cheapest first: a detail read has the
+     * parts in hand, a listing has them counted by the repository, and anything
+     * else pays for a query rather than answering wrongly.
+     */
+    private function hasUnbilledParts(): bool
+    {
+        if ($this->relationLoaded('parts')) {
+            return $this->unbilledParts()->isNotEmpty();
+        }
+
+        if ($this->unbilled_parts_count !== null) {
+            return (int) $this->unbilled_parts_count > 0;
+        }
+
+        return $this->parts()->unbilled()->exists();
     }
 
     public function isOpen(): bool

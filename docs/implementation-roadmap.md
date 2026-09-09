@@ -1316,14 +1316,19 @@ catalogue row for a motor the workshop deals in: the request accepts it, nothing
 in the application reads it, and a field written by a form and read by nothing is
 a field that goes quietly wrong.
 
-The customer's copy of the invoice is **not** offered here yet. `#invoice-preview`
-— the one sheet, with Print and Share — is Sales' drawer and about three hundred
-lines of `pages/sales.js`; borrowing it, which CLAUDE.md requires of the next
-module that hands a customer a document, means extracting that into a component,
-and that is a refactor of the highest-traffic module in the product rather than a
-part of this step. A job bill states its invoice number and total above the
-cleared form, with a link back to the job card; printing it is Sales' screen
-until the extraction is done.
+The customer's copy of the invoice was **not** offered here at C4.
+`#invoice-preview` — the one sheet, with Print and Share — was Sales' drawer and
+about four hundred lines of `pages/sales.js`; borrowing it, which CLAUDE.md
+requires of the next module that hands a customer a document, meant extracting
+that into a component, and that is a refactor of the highest-traffic module in
+the product rather than a part of this step.
+
+**P2 did the extraction, on 8 September 2026.** It is
+`components/invoice-delivery.js`, both modules mount it, and a posted job bill
+now lands on the same preview a sale does — the line above the cleared form
+carries **Print or share it** beside the link back to the job card, and every
+invoice ever raised off a repair reopens from a row in the job card's own list of
+them.
 
 ---
 

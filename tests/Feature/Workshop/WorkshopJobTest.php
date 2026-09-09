@@ -125,6 +125,23 @@ class WorkshopJobTest extends TestCase
             ->postJson("/api/v1/workshop-jobs/{$jobId}/bill", $body);
     }
 
+    /**
+     * A page of the bench, as a listing serialises it.
+     *
+     * Distinct from {@see show()} on purpose: a listing does not load the parts,
+     * so anything derived from them here is derived from the repository's counts
+     * instead — which is exactly what a badge on a row depends on.
+     *
+     * @return array<string, mixed>
+     */
+    private function index(array $query = []): array
+    {
+        return $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/workshop-jobs?'.http_build_query($query))
+            ->assertOk()
+            ->json();
+    }
+
     private function show(int $jobId): array
     {
         return $this->withHeaders($this->authHeader($this->owner))
@@ -524,6 +541,108 @@ class WorkshopJobTest extends TestCase
         $this->assertSame('7.000', $this->stockPositionOf($this->tenant, $this->bearing)['quantity']);
 
         $this->assertSame(2, $this->show($job['id'])['billed']['count']);
+    }
+
+    /* ---------------------------------------------------------------------
+     | Whether the job has been invoiced
+     |
+     | A second signal beside the status and never folded into it: a job's status
+     | is about the motor and this is about the money. Before it, a repair that
+     | had been charged for looked on the list exactly like one that had not —
+     | the status still read "In progress", because that is where the motor was,
+     | and nothing anywhere said an invoice existed.
+     |-------------------------------------------------------------------- */
+
+    #[Test]
+    public function a_job_says_whether_it_has_been_invoiced(): void
+    {
+        $this->buyBearings('10', '300.00');
+
+        $job = $this->bookIn();
+        $this->advance($job['id'], WorkshopJobStatus::InProgress)->assertOk();
+
+        // Nothing on it yet, and nothing billed.
+        $this->assertSame('unbilled', $this->show($job['id'])['billing_state']);
+
+        $this->addPart($job['id'], [
+            'variant_id' => $this->bearing->id, 'quantity' => '2', 'unit_price' => '450.00',
+        ])->assertCreated();
+        $this->addPart($job['id'], [
+            'variant_id' => $this->labour->id, 'quantity' => '1', 'unit_price' => '1200.00',
+        ])->assertCreated();
+
+        $this->assertSame('unbilled', $this->show($job['id'])['billing_state']);
+
+        $this->bill($job['id'])->assertCreated();
+
+        $billed = $this->show($job['id']);
+
+        $this->assertSame('billed', $billed['billing_state']);
+        $this->assertSame('Invoiced', $billed['billing_state_label']);
+        // The tone travels with it, so a screen never maps a state to a colour.
+        $this->assertSame('success', $billed['billing_state_tone']);
+
+        // The status is untouched. The motor is still on the bench, and saying
+        // otherwise because an invoice exists would be a lie about the workshop.
+        $this->assertSame(WorkshopJobStatus::InProgress->value, $billed['status']);
+
+        // Something more fitted afterwards puts it back to part billed: there is
+        // work on the card the customer has not been charged for.
+        $this->addPart($job['id'], [
+            'variant_id' => $this->bearing->id, 'quantity' => '1', 'unit_price' => '450.00',
+        ])->assertCreated();
+
+        $this->assertSame('part_billed', $this->show($job['id'])['billing_state']);
+    }
+
+    #[Test]
+    public function the_listing_says_it_too_without_loading_every_part(): void
+    {
+        $this->buyBearings('10', '300.00');
+
+        $job = $this->billableJobWithTwoBearings();
+
+        $row = collect($this->index()['data'])->firstWhere('id', $job);
+
+        $this->assertSame('unbilled', $row['billing_state']);
+
+        $this->bill($job)->assertCreated();
+
+        $row = collect($this->index()['data'])->firstWhere('id', $job);
+
+        $this->assertSame('billed', $row['billing_state']);
+        // Derived from a count on the listing rather than from the parts, which a
+        // page of twenty-five jobs does not load — see the repository.
+        $this->assertSame('Invoiced', $row['billing_state_label']);
+    }
+
+    /**
+     * Reversing the only invoice off a job puts it back to not billed.
+     *
+     * Which is the whole reason the state is derived rather than stored: nothing
+     * in the Jobs module knows the invoice was reversed, and nothing has to.
+     */
+    public function test_reversing_the_invoice_takes_the_badge_away(): void
+    {
+        $this->buyBearings('10', '300.00');
+
+        $job = $this->billableJobWithTwoBearings();
+        $bill = $this->bill($job)->assertCreated()->json('data');
+
+        $this->assertSame('billed', $this->show($job)['billing_state']);
+
+        $this->withHeaders($this->authHeader($this->owner))
+            ->postJson("/api/v1/transactions/{$bill['id']}/reverse")
+            ->assertCreated();
+
+        $reread = $this->show($job);
+
+        $this->assertSame('unbilled', $reread['billing_state']);
+        // The document itself stays on the card — the reversal is part of the
+        // record of what happened, and the job lists both halves of the pair.
+        $this->assertSame(1, $reread['billed']['count']);
+        $this->assertSame(0, $reread['billed']['live']);
+        $this->assertSame('0.00', $reread['billed']['total']);
     }
 
     /* ---------------------------------------------------------------------

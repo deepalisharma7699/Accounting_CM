@@ -130,7 +130,7 @@ C8   One workshop day                 1 session
 
 ──── Pass 2 · the open points ──────────────────────────────────
 P1   Party statements                 1–2 sessions
-P2   Invoice delivery, extracted      1–2 sessions
+P2   Invoice delivery, extracted  ✅  1–2 sessions
 P3   The advance receipt              ½ session
 P4   A worklist that shrinks          1 session
 P5   The orphan sweep                 ½ session
@@ -334,23 +334,35 @@ calls the ledger by that name.
 
 ---
 
-## P2 · Invoice delivery, extracted — so Jobs can hand over an invoice
+## P2 · Invoice delivery, extracted — so Jobs can hand over an invoice ✅
 
-**The gap.** A job's invoice cannot be printed or shared from the Jobs card. C4
-raised the bill and deliberately stopped there: `#invoice-preview` is Sales'
-drawer plus roughly 415 lines of `pages/sales.js` — the delivery state, the
-borrow-and-release custody of the one invoice sheet, print, the share link, the
-WhatsApp message, revocation — and the one-sheet rule means the second module
-that hands a customer a document **borrows** that machinery rather than mounting
-a second copy of it.
+**Shipped 8 September 2026.**
 
-**The work.** Lift `pages/sales.js` lines ~1056–1470 into
+**The gap it closed.** A job's invoice could not be printed or shared from the
+Jobs card. C4 raised the bill and deliberately stopped there: `#invoice-preview`
+was Sales' drawer plus roughly 415 lines of `pages/sales.js` — the delivery
+state, the borrow-and-release custody of the one invoice sheet, print, the share
+link, the WhatsApp message, revocation — and the one-sheet rule means the second
+module that hands a customer a document **borrows** that machinery rather than
+mounting a second copy of it.
+
+**What was done.** `pages/sales.js` lines ~1056–1470 are now
 `components/invoice-delivery.js`: `deliver()`, `loadInvoice()`, the sheet custody
-pair, `printInvoice()`, `bindPrintCustody()` and the share dialog. A host passes
-the posted document and what to do on close; the component owns the drawer, the
-sheet and the endpoint. Sales mounts it and loses the code. Jobs mounts it after
-`{job}/bill` posts, and the job bill's "number and total above the cleared form"
-becomes the preview every other posted invoice gets.
+pair, `printInvoice()`, `bindPrintCustody()`, the preview and the share dialog. A
+host passes the posted document and what to do on close; the component owns the
+drawer, the sheet and the endpoint. Sales mounts it and lost the code. Jobs
+mounts it after `{job}/bill` posts, and the job bill's "number and total above
+the cleared form" is now that line *plus* the preview every other posted invoice
+gets — with **Print or share it** on it, and every invoice ever raised off a job
+openable again from the job card's own list.
+
+The share dialog moved with it. It was `#sales-share-modal`, declared in the
+Sales fragment; it is `partials/invoice-share-modal.blade.php` in the layout now,
+beside `#invoice-preview` and `#invoice-print`, because the shell caches a
+module's root **detached** and a dialog inside Sales is not in the page while
+Jobs is open. `#confirm-modal` went to `z-index: 60` in the same change: it is
+level 3 and it was painting *behind* the z-55 share dialog, so "Stop sharing this
+invoice?" was being asked underneath the panel that asked it.
 
 **The three rules that must survive the move**, because each is wrong in a way
 that looks right and each is already written down. The sheet is **one node**,
@@ -368,8 +380,10 @@ busiest module in the product, with no behaviour change to show for it. Do it in
 one sitting, against C8, and verify both hosts print — including a browser print
 taken with the preview open, which is the case the custody pair exists for.
 
-**Done when** a job's invoice prints and shares from the Jobs card, and
-`pages/sales.js` contains no invoice sheet code at all.
+**Verified.** A job's invoice prints and shares from the Jobs card, and
+`pages/sales.js` contains no invoice sheet code at all —
+`test_the_shell_carries_one_invoice_share_dialog_above_the_preview` and
+`test_no_module_fragment_declares_a_share_dialog_of_its_own` hold both shut.
 
 ---
 
@@ -562,7 +576,7 @@ this is in the plan above, and each is a phase rather than a loose end.
 | **C7** | Workshops (History ✅ 7 Sep) | 1 | ⬜ |
 | **C8** | One workshop day | 1 | ⬜ |
 | **P1** | Party statements | 1–2 | ⬜ |
-| **P2** | Invoice delivery, extracted | 1–2 | ⬜ |
+| **P2** | Invoice delivery, extracted | 1–2 | ✅ 8 Sep |
 | **P3** | The advance receipt | ½ | ⬜ |
 | **P4** | A worklist that shrinks | 1 | ⬜ |
 | **P5** | The orphan sweep | ½ | ⬜ |

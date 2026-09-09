@@ -333,7 +333,8 @@ class PagesRenderTest extends TestCase
     /**
      * There is one invoice sheet in the shell, and the preview borrows it.
      *
-     * `pages/sales.js` moves that single node into `#invoice-preview` while
+     * `components/invoice-delivery.js` moves that single node into
+     * `#invoice-preview` while
      * somebody reads a freshly posted invoice, and hands it back before anything
      * prints. The print rule keeps whichever child of `body` *contains* the
      * document and hides every other one, so a second `[data-invoice-document]`
@@ -1649,31 +1650,65 @@ class PagesRenderTest extends TestCase
     }
 
     /**
-     * Sending the customer their invoice — M20's level-3 dialog.
+     * Sending the customer their invoice — M20's level-3 dialog, in the shell.
      *
-     * Declared beside the drawer rather than inside either level-1 surface, for
-     * the reason the drawer is: the workspace's swap between the form and the
-     * list must not be able to detach it with one of them.
+     * It was `#sales-share-modal`, declared in the Sales fragment, for as long as
+     * Sales was the only screen that handed a customer a document. Jobs is the
+     * second, and the shell caches a module's root **detached** — so a dialog
+     * declared inside Sales is not in the page at all while the Jobs card is
+     * open. It is a child of `body` now, beside the preview that opens it and the
+     * sheet they both borrow, and neither module may declare one of its own.
      */
-    public function test_the_sales_module_carries_the_share_dialog_above_the_drawer(): void
+    public function test_the_shell_carries_one_invoice_share_dialog_above_the_preview(): void
     {
-        $html = $this->get('/modules/sales')->assertOk()->getContent();
+        $html = (string) $this->get('/dashboard')->assertOk()->getContent();
 
-        $this->assertStringContainsString('id="sales-share-modal"', (string) $html);
+        $document = new DOMDocument;
 
-        // Level 3 over the drawer's level 2, and below the confirmation's 60 —
+        libxml_use_internal_errors(true);
+        $document->loadHTML($html);
+        libxml_clear_errors();
+
+        $xpath = new DOMXPath($document);
+
+        $this->assertSame(
+            1,
+            $xpath->query('/html/body/*[@id="invoice-share-modal"]')->length,
+            'The share dialog must be a direct child of <body>, or the shell detaches it with a module.',
+        );
+
+        // Level 3 over the preview's level 2, and below the confirmation's 60 —
         // so revoking can put a confirm over this without either disappearing.
         $this->assertMatchesRegularExpression(
-            '/id="sales-share-modal".*?z-index:\s*55/s',
-            (string) $html,
+            '/id="invoice-share-modal".*?z-index:\s*55/s',
+            $html,
         );
 
-        // After both level-1 surfaces, never inside one.
-        $this->assertGreaterThan(
-            strpos((string) $html, 'data-ws-list'),
-            strpos((string) $html, 'id="sales-share-modal"'),
-            'The share dialog must be declared outside the swapped surfaces.',
+        $this->assertMatchesRegularExpression(
+            '/id="confirm-modal".*?z-index:\s*60/s',
+            $html,
+            'The confirmation is level 3 and nothing opens over it (§2.2).',
         );
+    }
+
+    /**
+     * And no module may keep a second one.
+     *
+     * The failure a copy causes is not a visible one: two dialogs, one live link,
+     * and whichever was bound last answers — so this is asserted rather than left
+     * to review. Sales is checked by name because it is where the dialog lived.
+     */
+    public function test_no_module_fragment_declares_a_share_dialog_of_its_own(): void
+    {
+        foreach (['sales', 'jobs'] as $module) {
+            $html = (string) $this->get('/modules/'.$module)->assertOk()->getContent();
+
+            $this->assertStringNotContainsString(
+                'data-share-body',
+                $html,
+                'The '.$module.' fragment must borrow the shared share dialog, never declare one.',
+            );
+        }
     }
 
     /**

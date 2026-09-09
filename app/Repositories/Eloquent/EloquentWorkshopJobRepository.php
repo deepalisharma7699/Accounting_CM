@@ -52,7 +52,13 @@ class EloquentWorkshopJobRepository implements WorkshopJobRepositoryInterface
             // and a detail screen shows the parts, and loading them for a page of
             // twenty-five jobs to render a number is the read that makes a
             // worklist slow.
-            ->withCount('parts')
+            //
+            // The second count is what tells a part-billed job from a finished
+            // one on the listing — `WorkshopJob::billingState()`, which prefers
+            // the loaded parts where a detail read has them and falls back to a
+            // query where neither is there. Both counts are one subquery each,
+            // which is the whole reason the state is not computed row by row.
+            ->withCount(['parts', 'parts as unbilled_parts_count' => fn ($query) => $query->unbilled()])
             ->when(
                 filled($filters['search'] ?? null),
                 fn ($query) => $query->where(function ($query) use ($filters) {
