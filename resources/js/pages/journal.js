@@ -6,7 +6,8 @@ import { can } from '../permissions';
 import { clearModuleParams, moduleParams, registerEscape } from '../shell';
 import {
     $, $$, clearFormErrors, confirmAction, debounce, esc, formatDate, formatMoney,
-    hideModal, isZeroAmount, setSubmitting, showFormErrors, showModal, tableMessage, toast,
+    hideModal, isZeroAmount, setSubmitting, showActionError, showFormErrors, showModal,
+    tableMessage, toast,
 } from '../ui';
 import { mountWorkspace } from '../workspace';
 
@@ -638,7 +639,10 @@ async function saveAllocation(oldestFirst = false) {
     | what it looks like.
     */
     if (!oldestFirst && !rows.length) {
-        toast('Set an amount against at least one bill, or use “Apply oldest first”.', 'error');
+        showActionError(
+            el('[data-alloc-save]'),
+            'Set an amount against at least one bill, or use “Apply oldest first”.'
+        );
 
         return;
     }
@@ -1637,10 +1641,37 @@ async function openSection(key) {
     }
 }
 
-function requestedTab() {
-    const tab = moduleParams().get('tab');
+function requestedTab(params = moduleParams()) {
+    const tab = params.get('tab');
 
     return tab && sections[tab] ? tab : null;
+}
+
+/**
+ * `#journal?tab=receipt` — the section a link asked for.
+ * `#journal?tab=receipt&doc=88` — and the document it was actually after, which
+ * is how a receipt or a voucher picked out of the topbar's search arrives.
+ *
+ * The two are one intent rather than two: the drawer refreshes the list it was
+ * opened from after a write (`drawer.section`), and a document opened without
+ * its section named would point that at whichever tab happened to be up.
+ *
+ * Spent once acted on, or a refresh or a Back would reopen a drawer somebody has
+ * just closed.
+ */
+async function applyDeepLink(params) {
+    const tab = requestedTab(params);
+    const document_ = params.get('doc');
+
+    if (!tab && !document_) return;
+
+    if (tab) await openSection(tab);
+
+    // The drawer fetches by id, so it needs no list behind it — the section is
+    // left on whichever surface it landed on and the document opens over it.
+    if (document_) await openDrawer(document_, tab ?? activeSection);
+
+    clearModuleParams();
 }
 
 /* -------------------------------------------------------------------------
@@ -1718,13 +1749,18 @@ export default async function initJournal() {
 
     /*
     | The section a deep link asked for, or Receipt — the one done most (§2A.5).
-    |
-    | `?tab=` is spent once acted on: surviving a refresh or a Back would reopen
-    | a section somebody has just navigated away from.
+    | `openSection()` is called here rather than left to `applyDeepLink()`,
+    | because a module opened from its own card asked for nothing and must still
+    | land somewhere.
     */
-    const requested = requestedTab();
+    await openSection(requestedTab() ?? 'receipt');
 
-    await openSection(requested ?? 'receipt');
+    await applyDeepLink(moduleParams());
 
-    if (requested) clearModuleParams();
+    /*
+    | Reopening an already-mounted module cannot run this function again, so a
+    | second deep link — a different document out of the topbar's search — is
+    | announced on the root instead.
+    */
+    root.addEventListener('module:params', (event) => applyDeepLink(event.detail));
 }

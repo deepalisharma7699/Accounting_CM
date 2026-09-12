@@ -2,6 +2,7 @@ import auth from '../auth-client';
 import { badge, lifecycleTone } from '../components/badge';
 import { mountPaymentRows } from '../components/payment-rows';
 import { can } from '../permissions';
+import { clearModuleParams, moduleParams } from '../shell';
 import {
     $, clearFormErrors, confirmAction, debounce, esc, formatDate, formatMoney,
     setSubmitting, showFormErrors, showModal, tableMessage, toast,
@@ -680,4 +681,28 @@ export default async function initBills() {
         // The date is kept from the last one; see `resetForm`.
         onShowForm: () => form.elements.account_id.focus(),
     });
+
+    applyDeepLink(moduleParams());
+
+    // Reopening an already-mounted module cannot run this function again, so a
+    // second deep link is announced on the root instead.
+    root.addEventListener('module:params', (event) => applyDeepLink(event.detail));
+}
+
+/**
+ * `#bills?doc=88` — an expense picked out of the topbar's search.
+ *
+ * The drawer fetches the document by id, so the module is left on whichever
+ * surface it landed on and the expense opens over it; nothing loads a list in
+ * order to show one row (§7.2). Spent once acted on, or a refresh or a Back
+ * would reopen a drawer somebody has just closed.
+ */
+function applyDeepLink(params) {
+    const document_ = params.get('doc');
+
+    if (!document_) return;
+
+    openDrawer(document_);
+
+    clearModuleParams();
 }

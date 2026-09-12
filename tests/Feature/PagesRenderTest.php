@@ -228,6 +228,100 @@ class PagesRenderTest extends TestCase
     }
 
     /**
+     * The favourites row is declared empty and holds no card of its own.
+     *
+     * The whole of it is the point: the section is markup with nothing in it, and
+     * resources/js/favourites.js *moves* card nodes into it. The assertion that
+     * matters is the one above — exactly one card per enabled module — and it is
+     * what a second copy rendered here would break. So this checks the host is
+     * present and that nothing has quietly started rendering cards into it.
+     *
+     * Nothing user-specific is in here either. Which cards are starred belongs to
+     * the workshop and arrives in /auth/me; this shell is public, and a workshop's
+     * arrangement baked into it would be one anybody could fetch.
+     */
+    public function test_the_dashboard_declares_an_empty_favourites_row(): void
+    {
+        $content = $this->get('/dashboard')->assertOk()->getContent();
+
+        $this->assertStringContainsString('data-favourites', $content);
+        $this->assertStringContainsString('data-favourites-grid', $content);
+
+        // One star per card, gated on the grant that may rearrange the screen.
+        $this->assertSame(
+            count(Modules::all()),
+            substr_count($content, 'data-star='),
+            'Every card carries exactly one star — no more, and none missing.',
+        );
+
+        // The grid is declared and closed with nothing between the two.
+        $this->assertMatchesRegularExpression(
+            '/data-favourites-grid><\/div>/',
+            preg_replace('/\s+/', '', $content),
+            'The favourites grid is populated by moving cards into it, never by rendering them twice.',
+        );
+    }
+
+    /**
+     * Home opens on a skeleton, and the skeleton is in the document.
+     *
+     * Every card starts hidden and is revealed only once /auth/me confirms the
+     * grant behind it, so for one round trip home is band headings over nothing.
+     * The fix only works if the loading state is the markup's own: anything
+     * JavaScript switches on arrives after the first paint, which is the paint
+     * it exists to prevent.
+     */
+    public function test_home_is_delivered_in_its_loading_state(): void
+    {
+        $html = (string) $this->get('/dashboard')->assertOk()->getContent();
+
+        $document = new DOMDocument;
+        libxml_use_internal_errors(true);
+        $document->loadHTML($html);
+        libxml_clear_errors();
+        $xpath = new DOMXPath($document);
+
+        $this->assertSame(
+            1,
+            $xpath->query('//*[@id="view-home"][@data-home-loading][@aria-busy="true"]')->length,
+            'Home must arrive already in its loading state — shell.js takes it off, and never puts it on.',
+        );
+
+        $this->assertSame(
+            1,
+            $xpath->query('//*[@id="view-home"]/*[@data-home-skeleton]')->length,
+            'The skeleton is a child of #view-home — the CSS that hides its siblings while loading depends on it.',
+        );
+    }
+
+    /**
+     * And the skeleton is not made of cards.
+     *
+     * Three separate things read the grid off `[data-module-card]` — shell.js's
+     * label registry, `permitted()`, and favourites.js recording each band's
+     * order — and every one of them would take a placeholder for a module. This
+     * is what keeps the count in
+     * {@see self::test_the_dashboard_offers_a_card_for_every_enabled_module()}
+     * honest as well.
+     */
+    public function test_the_home_skeleton_declares_no_cards_of_its_own(): void
+    {
+        $document = new DOMDocument;
+        libxml_use_internal_errors(true);
+        $document->loadHTML((string) $this->get('/dashboard')->assertOk()->getContent());
+        libxml_clear_errors();
+        $xpath = new DOMXPath($document);
+
+        foreach (['data-module-card', 'data-open', 'data-star', 'data-module-group'] as $attribute) {
+            $this->assertSame(
+                0,
+                $xpath->query('//*[@data-home-skeleton]//*[@'.$attribute.']')->length,
+                'The home skeleton must carry no '.$attribute.' — it is a shape, not a module.',
+            );
+        }
+    }
+
+    /**
      * A module switched off in config/modules.php is off, not merely unlisted.
      *
      * No card, and no fragment either — a URL somebody kept must not be a way
@@ -262,7 +356,7 @@ class PagesRenderTest extends TestCase
      */
     public static function declaredModules(): array
     {
-        return array_map(fn (string $key) => [$key], array_keys(config('modules.primary', []) + config('modules.admin', [])));
+        return array_map(fn (string $key) => [$key], array_keys(config('modules', [])));
     }
 
     #[DataProvider('declaredModules')]
@@ -438,6 +532,51 @@ class PagesRenderTest extends TestCase
 
         $this->assertSame(1, substr_count($content, 'id="confirm-modal"'));
         $this->assertStringContainsString('id="toast-host"', $content);
+    }
+
+    /**
+     * The global activity bar — one, in the layout, above everything.
+     *
+     * It reports every request `auth.call()` makes, so it has to outlive the
+     * surface that made one: a drawer fetching its record, and the confirm over
+     * that drawer waiting on a delete, are both requests somebody is watching
+     * for, and neither could carry an indicator that survives being closed.
+     *
+     * A body child for that reason, and asserted structurally rather than by
+     * pattern, exactly as the invoice sheet above is. Declared inside `main` it
+     * would scroll away with the module under it, and inside a module it would
+     * be detached with that module by the shell's cache.
+     */
+    public function test_the_shell_mounts_one_global_activity_bar_as_a_child_of_body(): void
+    {
+        $html = (string) $this->get('/dashboard')->assertOk()->getContent();
+
+        // One. Two would be two counters, and whichever finished first would
+        // take its own bar down while the other was still working.
+        $this->assertSame(1, substr_count($html, 'id="global-loader"'));
+
+        $document = new DOMDocument;
+
+        libxml_use_internal_errors(true);
+        $document->loadHTML($html);
+        libxml_clear_errors();
+
+        $xpath = new DOMXPath($document);
+
+        $this->assertSame(
+            1,
+            $xpath->query('/html/body/*[@id="global-loader"]')->length,
+            'The activity bar must be a direct child of <body> — it has to outrank every drawer and modal.',
+        );
+
+        // Idle on arrival, and `hidden` rather than merely transparent: a
+        // progressbar permanently in the accessibility tree reading nothing is
+        // announced to a screen reader on every page it lands on.
+        $this->assertSame(
+            1,
+            $xpath->query('/html/body/*[@id="global-loader"][@hidden]')->length,
+            'The activity bar must start hidden — nothing is loading when the document arrives.',
+        );
     }
 
     public function test_the_one_page_shell_carries_a_sign_out_control(): void
@@ -1931,14 +2070,49 @@ class PagesRenderTest extends TestCase
         $this->assertStringNotContainsString('data-job-body', $form);
 
         // §23's columns.
-        foreach (['Job', 'Customer', 'Motor', 'Complaint', 'Status'] as $column) {
+        foreach (['Job', 'Customer', 'What came in', 'Complaint', 'Status'] as $column) {
             $this->assertStringContainsString('>'.$column.'</th>', $list);
         }
 
-        // Every field of the motor is optional, and the form has to say so: a
-        // pump wheeled in by a driver who does not know its brand still has to
-        // be bookable, or the job card gets written on paper.
+        // Every field describing the thing is optional, and the form has to say
+        // so: a pump wheeled in by a driver who does not know its brand still
+        // has to be bookable, or the job card gets written on paper.
         $this->assertStringContainsString('whatever is known', $form);
+    }
+
+    /**
+     * The bench takes in more than motors, and the markup must not name any kind
+     * of thing.
+     *
+     * `hp` and `phase` were two motor fields under a heading that said "The
+     * motor", which told the counter it had the wrong screen every time a cooler
+     * came in. What is asked now comes from the chosen category's own question
+     * set — `GET /workshop-jobs/meta`, drawn by `components/attribute-fields.js`
+     * — which is the catalogue's vocabulary rule applied one module along: never
+     * a product type in code, and never a list of them rendered into a Blade
+     * template, because a copy in the markup goes stale the moment an admin adds
+     * one.
+     */
+    public function test_the_jobs_intake_form_names_no_kind_of_thing(): void
+    {
+        $form = $this->surfaceMarkup(
+            $this->get('/modules/jobs')->assertOk()->getContent(),
+            'data-ws-form',
+        );
+
+        // The kind, and the host its fields are written into.
+        $this->assertStringContainsString('name="category_id"', $form);
+        $this->assertStringContainsString('data-job-specs', $form);
+
+        // The two that were columns, and the heading that assumed them.
+        $this->assertStringNotContainsString('name="hp"', $form);
+        $this->assertStringNotContainsString('name="phase"', $form);
+        $this->assertStringNotContainsString('3-phase', $form);
+
+        // Nor any other kind: the only option this file writes is the one that
+        // stands for "not answered".
+        $this->assertSame(1, substr_count($form, '<option'));
+        $this->assertStringContainsString('Not sure yet', $form);
     }
 
     /**
@@ -1992,9 +2166,8 @@ class PagesRenderTest extends TestCase
         // against.
         $this->assertSame(1, substr_count($content, 'id="job-form"'));
 
-        // The customer and the date the motor arrived are inline-only: neither
-        // is editable once the job exists, and `UpdateJobRequest` accepts
-        // neither.
+        // The customer and the date it arrived are inline-only: neither is
+        // editable once the job exists, and `UpdateJobRequest` accepts neither.
         $this->assertStringContainsString('data-form-chrome="inline"', $content);
         $this->assertStringContainsString('data-form-chrome="modal"', $content);
     }

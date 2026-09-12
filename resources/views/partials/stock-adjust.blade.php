@@ -35,12 +35,6 @@
 
             <div class="max-h-[55vh] space-y-4 overflow-y-auto px-5 py-4">
 
-                {{-- Anything the server refused that named no field of its own.
-                     Without it a 403 or a 409 would fall through to a toast that
-                     is gone before the dialog is read. --}}
-                <p class="hidden rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-3 text-[0.8125rem] text-rose-700"
-                   data-form-banner role="alert"></p>
-
                 <div class="grid gap-4 sm:grid-cols-2">
                     <label class="field">
                         <span class="field-label">Date</span>

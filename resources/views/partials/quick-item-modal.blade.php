@@ -29,9 +29,6 @@
             </header>
 
             <div class="max-h-[60vh] space-y-4 overflow-y-auto px-5 py-4">
-                <p class="hidden rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-3 text-[0.8125rem] text-rose-700"
-                   data-form-banner role="alert"></p>
-
                 {{-- Hidden when the family already exists and only its
                      specification is missing. --}}
                 <div id="quick-item-fields" class="grid gap-4 sm:grid-cols-2">

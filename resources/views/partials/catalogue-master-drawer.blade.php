@@ -80,9 +80,6 @@
             </div>
 
             <div class="space-y-4 px-6 py-5">
-                <p class="hidden rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-3 text-[0.8125rem] text-rose-700"
-                   data-form-banner role="alert"></p>
-
                 <div>
                     <label for="category-name" class="field-label">Name</label>
                     <input id="category-name" name="name" type="text" class="field-input" required
@@ -206,9 +203,6 @@
             </div>
 
             <div class="space-y-4 px-6 py-5">
-                <p class="hidden rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-3 text-[0.8125rem] text-rose-700"
-                   data-form-banner role="alert"></p>
-
                 <div>
                     <label for="attribute-label" class="field-label">Label</label>
                     <input id="attribute-label" name="label" type="text" class="field-input" required
@@ -333,9 +327,6 @@
             </div>
 
             <div class="space-y-4 px-6 py-5">
-                <p class="hidden rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-3 text-[0.8125rem] text-rose-700"
-                   data-form-banner role="alert"></p>
-
                 <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div>
                         <label for="unit-label" class="field-label">Name</label>
@@ -427,9 +418,6 @@
             </div>
 
             <div class="space-y-4 px-6 py-5">
-                <p class="hidden rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-3 text-[0.8125rem] text-rose-700"
-                   data-form-banner role="alert"></p>
-
                 <div>
                     <label for="brand-name" class="field-label">Name</label>
                     <input id="brand-name" name="name" type="text" class="field-input" required

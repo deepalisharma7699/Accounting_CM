@@ -148,7 +148,7 @@ class TenantService
      * Platform administration of any workshop. Accepts `status`, which is why
      * a workshop owner must never reach it — see {@see updateOwnWorkspace()}.
      *
-     * @param  array{name?: string, gstin?: string|null, address?: string|null, state_code?: string|null, status?: string|null, financial_year_start_month?: int, timezone?: string, books_start_date?: string|null, payment_due_days?: int|null, allow_negative_stock?: bool, round_off_invoices?: bool}  $data
+     * @param  array{name?: string, gstin?: string|null, address?: string|null, state_code?: string|null, status?: string|null, financial_year_start_month?: int, timezone?: string, books_start_date?: string|null, payment_due_days?: int|null, allow_negative_stock?: bool, round_off_invoices?: bool, favourite_modules?: array<int, string>}  $data
      */
     public function update(int $id, array $data): Tenant
     {
@@ -169,6 +169,11 @@ class TenantService
             // application refuses or reports, which is why both are on
             // Tenant::auditAttributes().
             'payment_due_days', 'allow_negative_stock', 'round_off_invoices',
+            // Which module cards sit at the top of the workshop's home screen.
+            // Presentation, and the only field on this list that is: it moves no
+            // figure and refuses nothing, which is why it is also the only one
+            // absent from Tenant::auditAttributes().
+            'favourite_modules',
         ] as $field) {
             if (array_key_exists($field, $data)) {
                 $attributes[$field] = $data[$field];
@@ -254,7 +259,7 @@ class TenantService
      * suspension is a platform decision, and a workshop must not be able to
      * un-suspend itself even if a future caller passes the field through.
      *
-     * @param  array{name?: string, gstin?: string|null, address?: string|null, state_code?: string|null, financial_year_start_month?: int, timezone?: string, books_start_date?: string|null}  $data
+     * @param  array{name?: string, gstin?: string|null, address?: string|null, state_code?: string|null, financial_year_start_month?: int, timezone?: string, books_start_date?: string|null, favourite_modules?: array<int, string>}  $data
      */
     public function updateOwnWorkspace(array $data): Tenant
     {

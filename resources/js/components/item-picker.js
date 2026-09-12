@@ -111,7 +111,7 @@ export async function searchCatalogue(term) {
 
     const [stock, services, bare] = await Promise.allSettled([
         can('READ', 'STOCK')
-            ? auth.call(`/stock?per_page=12&is_active=1&search=${query}`)
+            ? auth.call(`/stock?per_page=12&is_active=1&search=${query}`, { quiet: true })
             : Promise.resolve({ data: [] }),
         /*
         | `is_stock=0`, not `type=service`.
@@ -128,7 +128,7 @@ export async function searchCatalogue(term) {
         | complement of what /stock returns.
         */
         can('READ', 'ITEMS')
-            ? auth.call(`/items?per_page=12&is_stock=0&is_active=1&with_variants=1&search=${query}`)
+            ? auth.call(`/items?per_page=12&is_stock=0&is_active=1&with_variants=1&search=${query}`, { quiet: true })
             : Promise.resolve({ data: [] }),
         /*
         | A stocked family with nothing under it yet, and the only query that
@@ -143,7 +143,7 @@ export async function searchCatalogue(term) {
         | Small on purpose: this is an exception list, not a way to browse.
         */
         can('READ', 'ITEMS')
-            ? auth.call(`/items?per_page=5&is_stock=1&has_variants=0&is_active=1&search=${query}`)
+            ? auth.call(`/items?per_page=5&is_stock=1&has_variants=0&is_active=1&search=${query}`, { quiet: true })
             : Promise.resolve({ data: [] }),
     ]);
 

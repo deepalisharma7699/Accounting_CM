@@ -5,6 +5,8 @@ namespace Tests\Feature\Workshop;
 use App\Enums\PartyRole;
 use App\Enums\SystemAccount;
 use App\Enums\WorkshopJobStatus;
+use App\Models\ItemAttribute;
+use App\Models\ItemCategory;
 use App\Models\ItemVariant;
 use App\Models\Party;
 use App\Models\Tenant;
@@ -55,6 +57,8 @@ class WorkshopJobTest extends TestCase
 
     private Party $customer;
 
+    private ItemCategory $motorKind;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -69,6 +73,14 @@ class WorkshopJobTest extends TestCase
         $this->bearing = $this->variantFor($this->tenant, 'part', sellPrice: '450.00');
         $this->labour = $this->serviceVariantFor($this->tenant, '1200.00');
         $this->customer = $this->party(PartyRole::Customer);
+
+        // Provisioned by the first variant above. The bench takes its vocabulary
+        // from the catalogue rather than owning a second list of kinds, so this
+        // is the same row the Items form draws a motor's fields from.
+        $this->motorKind = $this->actingForTenant(
+            $this->tenant,
+            fn () => ItemCategory::where('code', 'motor')->firstOrFail(),
+        );
     }
 
     private function party(PartyRole ...$roles): Party
@@ -92,9 +104,9 @@ class WorkshopJobTest extends TestCase
         return $this->withHeaders($this->authHeader($this->owner))
             ->postJson('/api/v1/workshop-jobs', array_merge([
                 'party_id' => $this->customer->id,
-                'hp' => '7.5',
+                'category_id' => $this->motorKind->id,
+                'specs' => ['hp' => '7.5', 'phase' => '3'],
                 'brand' => 'Crompton',
-                'phase' => '3-phase',
                 'complaint' => 'Winding burnt, not starting',
             ], $overrides))
             ->assertCreated()
@@ -181,12 +193,253 @@ class WorkshopJobTest extends TestCase
 
         $this->assertSame(WorkshopJobStatus::Received->value, $job['status']);
         $this->assertStringStartsWith('JOB/', $job['job_no']);
-        $this->assertSame('7.5 HP Crompton 3-phase', $job['motor']);
+
+        // What it is, then whose it is. The specification is the category's own
+        // first two fields with the category's own units — never a rating and a
+        // phase this module knows the names of.
+        $this->assertSame('Motor 7.5 HP, 3 ph · Crompton', $job['equipment']);
+        $this->assertSame('Motor', $job['kind_label']);
+        $this->assertEquals(['hp' => '7.5', 'phase' => '3'], $job['specs']);
 
         // The whole point of D1 and D2 in one assertion: booking a motor in is
         // not an accounting event, so nothing at all has reached the books.
         $this->assertSame(0, Transaction::withoutGlobalScopes()->count());
         $this->assertStockAgreesWithInventoryAccount($this->tenant, 'after booking a job in');
+    }
+
+    /* ---------------------------------------------------------------------
+     | What comes in is not always a motor
+     |
+     | The bench used to record `hp` and `phase` as columns, under a heading that
+     | said "The motor" — a product type in the schema and in a Blade template,
+     | which is the failure the catalogue's vocabulary rule already records. Most
+     | of what a motor workshop takes in is a motor; a good deal of it is a
+     | cooler, a table fan or a pump, and now and then it is something nobody
+     | expected. These hold that shut.
+     |-------------------------------------------------------------------- */
+
+    /**
+     * A workshop that starts repairing coolers defines the kind and the bench
+     * asks the right questions — no column, no migration, no deployment.
+     */
+    #[Test]
+    public function anything_the_workshop_defines_a_kind_for_can_be_booked_in(): void
+    {
+        $cooler = $this->kind('Cooler', [
+            ['key' => 'capacity', 'label' => 'Tank capacity', 'data_type' => 'number', 'unit_code' => 'litre'],
+            ['key' => 'body', 'label' => 'Body', 'data_type' => 'dropdown', 'options' => ['Plastic', 'Metal']],
+        ]);
+
+        $job = $this->bookIn([
+            'category_id' => $cooler->id,
+            'specs' => ['capacity' => '65', 'body' => 'Plastic'],
+            'brand' => 'Symphony',
+            'complaint' => 'Pump not lifting water',
+        ]);
+
+        $this->assertSame('Cooler', $job['kind_label']);
+
+        // `assertEquals`, not `assertSame`: MySQL's JSON type normalises an
+        // object's key order, so a stored bag never comes back in the order it
+        // was written. That is the whole reason `resolvedSpecs()` sorts by the
+        // schema instead of trusting the bag — the assertion below is the one
+        // that has to be in order.
+        $this->assertEquals(['capacity' => '65', 'body' => 'Plastic'], $job['specs']);
+
+        // Labelled and unitised from the category that asked, so a job card can
+        // print it without knowing what a cooler is.
+        $this->assertSame(
+            [
+                ['key' => 'capacity', 'label' => 'Tank capacity', 'value' => '65', 'suffix' => 'L'],
+                ['key' => 'body', 'label' => 'Body', 'value' => 'Plastic', 'suffix' => null],
+            ],
+            $job['specs_display'],
+        );
+
+        $this->assertSame('Cooler 65 L, Plastic · Symphony', $job['equipment']);
+    }
+
+    /**
+     * Nothing about the thing is compulsory — its kind included.
+     *
+     * A pump is wheeled in at four in the afternoon by a driver who does not
+     * know what it is, and a form that refused to book it in would be a form
+     * that got a job card written on paper instead.
+     */
+    #[Test]
+    public function something_nobody_can_identify_is_still_booked_in(): void
+    {
+        $job = $this->bookIn([
+            'category_id' => null,
+            'specs' => null,
+            'brand' => null,
+            'complaint' => 'Sparking when switched on',
+        ]);
+
+        $this->assertNull($job['kind_label']);
+        $this->assertSame([], (array) $job['specs']);
+        $this->assertSame([], $job['specs_display']);
+
+        // The job number, because there is nothing else to call it by — and not
+        // an empty string, which would leave a blank cell on the bench.
+        $this->assertSame($job['job_no'], $job['equipment']);
+    }
+
+    /**
+     * A category demanding a rating demands it of a *product*. This is a
+     * physical object that is already on the bench.
+     */
+    #[Test]
+    public function a_kind_that_insists_on_a_field_does_not_insist_here(): void
+    {
+        // `hp`, `phase` and `rpm` are all `is_required` on the seeded Motor
+        // category — an item variant cannot be saved without them.
+        $this->assertNotEmpty($this->actingForTenant(
+            $this->tenant,
+            fn () => $this->motorKind->requiredAttributeKeys(),
+        ));
+
+        $job = $this->bookIn(['specs' => []]);
+
+        $this->assertSame('Motor', $job['kind_label']);
+        $this->assertSame([], (array) $job['specs']);
+        $this->assertSame('Motor · Crompton', $job['equipment']);
+    }
+
+    /**
+     * The bag is filtered to what the kind actually asks about.
+     *
+     * A key no schema explains cannot be labelled, printed or edited back into
+     * the form, so it is dropped rather than stored as something nobody can read.
+     */
+    #[Test]
+    public function a_specification_the_kind_never_asked_for_is_not_kept(): void
+    {
+        $job = $this->bookIn([
+            'specs' => ['hp' => '5', 'colour' => 'Blue', 'lumens' => '900'],
+        ]);
+
+        $this->assertEquals(['hp' => '5'], $job['specs']);
+    }
+
+    /**
+     * Correcting a motor to a cooler cannot leave a motor's answers behind:
+     * `hp` is not a field a cooler has, and a bag its kind cannot read is one
+     * nothing can print.
+     */
+    #[Test]
+    public function changing_the_kind_takes_the_old_specification_with_it(): void
+    {
+        $cooler = $this->kind('Cooler', [
+            ['key' => 'capacity', 'label' => 'Tank capacity', 'data_type' => 'number', 'unit_code' => 'litre'],
+        ]);
+
+        $job = $this->bookIn();
+
+        $corrected = $this->withHeaders($this->authHeader($this->owner))
+            ->patchJson("/api/v1/workshop-jobs/{$job['id']}", [
+                'category_id' => $cooler->id,
+                'specs' => ['capacity' => '65'],
+            ])
+            ->assertOk()
+            ->json('data');
+
+        $this->assertSame('Cooler', $corrected['kind_label']);
+        $this->assertEquals(['capacity' => '65'], $corrected['specs']);
+    }
+
+    /**
+     * The intake form draws its fields from the server, and asks the route the
+     * counter clerk actually holds a grant for.
+     *
+     * Fetching them from `GET /items/meta` would 403 the form for its main user:
+     * booking a motor in needs WORKSHOP_JOBS and nothing says it needs ITEMS.
+     */
+    #[Test]
+    public function the_bench_publishes_the_kinds_it_can_take_in(): void
+    {
+        $benchOnly = User::factory()
+            ->forTenant($this->tenant)
+            ->withRole($this->roleWith([['READ', 'WORKSHOP_JOBS']], 'Bench only'))
+            ->create();
+
+        $kinds = $this->withHeaders($this->authHeader($benchOnly))
+            ->getJson('/api/v1/workshop-jobs/meta')
+            ->assertOk()
+            ->json('data.kinds');
+
+        $labels = array_column($kinds, 'label');
+
+        $this->assertContains('Motor', $labels);
+
+        // Labour is produced at the moment it is sold — nobody wheels an hour
+        // onto a bench — and `holds_stock` already says so, which is why there
+        // is no second flag to keep in step with it.
+        $this->assertNotContains('Service', $labels);
+
+        $motor = collect($kinds)->firstWhere('label', 'Motor');
+
+        $this->assertArrayHasKey('hp', (array) $motor['attributes']);
+        $this->assertSame('Rating', ((array) $motor['attributes'])['hp']['label']);
+    }
+
+    /**
+     * The kind is copied onto the row, so searching finds the coolers without a
+     * join and a renamed category leaves old cards saying what came in.
+     */
+    #[Test]
+    public function the_kind_is_searchable_and_survives_a_rename(): void
+    {
+        $cooler = $this->kind('Cooler');
+
+        $this->bookIn(['category_id' => $cooler->id, 'specs' => null]);
+        $this->bookIn();
+
+        $found = $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/workshop-jobs?search=cooler')
+            ->assertOk()
+            ->json('data');
+
+        $this->assertCount(1, $found);
+        $this->assertSame('Cooler', $found[0]['kind_label']);
+
+        $this->actingForTenant($this->tenant, fn () => $cooler->update(['name' => 'Air cooler']));
+
+        $this->assertSame(
+            'Cooler',
+            $this->withHeaders($this->authHeader($this->owner))
+                ->getJson("/api/v1/workshop-jobs/{$found[0]['id']}")
+                ->json('data.kind_label'),
+        );
+    }
+
+    /**
+     * A kind the workshop defines, with the fields it asks about.
+     *
+     * @param  array<int, array<string, mixed>>  $attributes
+     */
+    private function kind(string $name, array $attributes = []): ItemCategory
+    {
+        return $this->actingForTenant($this->tenant, function () use ($name, $attributes) {
+            $category = ItemCategory::create([
+                'name' => $name,
+                'holds_stock' => true,
+                'uses_sac_code' => false,
+                'default_unit_code' => 'piece',
+                'is_active' => true,
+            ]);
+
+            foreach ($attributes as $order => $attribute) {
+                ItemAttribute::create(array_merge([
+                    'category_id' => $category->id,
+                    'is_required' => false,
+                    'is_active' => true,
+                    'display_order' => $order,
+                ], $attribute));
+            }
+
+            return $category->refresh();
+        });
     }
 
     #[Test]

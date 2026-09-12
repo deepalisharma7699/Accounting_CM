@@ -25,14 +25,6 @@
         <div class="surface p-6 sm:p-7">
             <form id="register-form" novalidate>
 
-                <div id="register-error"
-                     class="mb-5 hidden items-start gap-2.5 rounded-[10px] border border-rose-200 bg-rose-50
-                            px-3.5 py-3 text-[0.8125rem] text-rose-700"
-                     role="alert" aria-live="polite">
-                    <x-icon name="alert-triangle" :size="16" class="mt-px shrink-0" />
-                    <span data-error-message></span>
-                </div>
-
                 {{-- The workshop --}}
                 <p class="mb-3 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
                     Your workshop
@@ -47,7 +39,7 @@
                            class="h-11 w-full rounded-[10px] border border-border bg-card px-3.5 text-sm
                                   text-foreground placeholder:text-muted-foreground focus:border-primary
                                   focus:outline-none focus:ring-2 focus:ring-ring/60">
-                    <p class="mt-1.5 hidden text-xs text-rose-600" data-field-error="workshop_name"></p>
+                    <p class="mt-1.5 hidden text-xs text-rose-600" data-error-for="workshop_name"></p>
                 </div>
 
                 <div class="mb-6">
@@ -62,7 +54,7 @@
                     <p class="mt-1.5 text-xs text-muted-foreground">
                         You can add this later. It sets your state for GST.
                     </p>
-                    <p class="mt-1.5 hidden text-xs text-rose-600" data-field-error="gstin"></p>
+                    <p class="mt-1.5 hidden text-xs text-rose-600" data-error-for="gstin"></p>
                 </div>
 
                 {{-- The owner --}}
@@ -78,7 +70,7 @@
                            class="h-11 w-full rounded-[10px] border border-border bg-card px-3.5 text-sm
                                   text-foreground placeholder:text-muted-foreground focus:border-primary
                                   focus:outline-none focus:ring-2 focus:ring-ring/60">
-                    <p class="mt-1.5 hidden text-xs text-rose-600" data-field-error="name"></p>
+                    <p class="mt-1.5 hidden text-xs text-rose-600" data-error-for="name"></p>
                 </div>
 
                 <div class="mb-4">
@@ -96,7 +88,7 @@
                                       text-foreground placeholder:text-muted-foreground focus:border-primary
                                       focus:outline-none focus:ring-2 focus:ring-ring/60">
                     </div>
-                    <p class="mt-1.5 hidden text-xs text-rose-600" data-field-error="email"></p>
+                    <p class="mt-1.5 hidden text-xs text-rose-600" data-error-for="email"></p>
                 </div>
 
                 <div class="mb-5">
@@ -125,7 +117,7 @@
                     <p class="mt-1.5 text-xs text-muted-foreground">
                         At least 12 characters, with upper and lower case, a number and a symbol.
                     </p>
-                    <p class="mt-1.5 hidden text-xs text-rose-600" data-field-error="password"></p>
+                    <p class="mt-1.5 hidden text-xs text-rose-600" data-error-for="password"></p>
                 </div>
 
                 <div class="mb-5">
@@ -143,7 +135,7 @@
                                       text-foreground placeholder:text-muted-foreground focus:border-primary
                                       focus:outline-none focus:ring-2 focus:ring-ring/60">
                     </div>
-                    <p class="mt-1.5 hidden text-xs text-rose-600" data-field-error="password_confirmation"></p>
+                    <p class="mt-1.5 hidden text-xs text-rose-600" data-error-for="password_confirmation"></p>
                 </div>
 
                 <button type="submit" data-submit

@@ -12,7 +12,7 @@ import { can } from '../permissions';
 import { clearModuleParams, moduleParams } from '../shell';
 import {
     $, $$, confirmAction, debounce, esc, formatDate, formatMoney,
-    hideModal, showFormErrors, showModal, tableMessage, toast,
+    hideModal, showActionError, showFormErrors, showModal, tableMessage, toast,
 } from '../ui';
 import { mountWorkspace } from '../workspace';
 
@@ -616,7 +616,7 @@ async function submitReceipt() {
     const split = drawer.payments.value();
 
     if (split.length === 0) {
-        toast('Say how the money arrived — cash, bank, UPI or cheque.', 'error');
+        showActionError(el('[data-drawer-submit]'), 'Say how the money arrived — cash, bank, UPI or cheque.');
 
         return;
     }
@@ -743,7 +743,7 @@ async function submitReturn() {
         .filter((line) => line.quantity !== '' && Number(line.quantity) > 0);
 
     if (lines.length === 0) {
-        toast('Say which lines came back, and how many of each.', 'error');
+        showActionError(el('[data-drawer-submit]'), 'Say which lines came back, and how many of each.');
 
         return;
     }
@@ -757,7 +757,10 @@ async function submitReturn() {
     });
 
     if (over) {
-        toast('One line is taking back more than was sold. Check the "Left" column.', 'error');
+        showActionError(
+            el('[data-drawer-submit]'),
+            'One line is taking back more than was sold. Check the "Left" column.'
+        );
 
         return;
     }
@@ -1417,20 +1420,32 @@ export default async function initSales() {
 
 /**
  * `#sales?party=12` — "create a sale" from the Customers card.
+ * `#sales?doc=88`   — an invoice picked out of the topbar's search.
  *
  * The intent comes from the shell rather than from `location.search`, because a
  * module's URL is a fragment of the dashboard's now, and this used to be a real
  * navigation to the counter at /bills/new before C4 retired it. It is spent once
  * acted on: surviving a refresh or a Back would put a counterparty back on a
- * document somebody had cleared.
+ * document somebody had cleared, or reopen a drawer they had just closed.
  */
 function applyDeepLink(params) {
     const party = params.get('party');
+    const document_ = params.get('doc');
 
-    if (!party) return;
+    if (!party && !document_) return;
 
-    workspace?.showForm();
-    doc.party().load(party);
+    if (party) {
+        workspace?.showForm();
+        doc.party().load(party);
+    }
+
+    /*
+    | The drawer fetches the document by id, so it needs no list behind it — the
+    | module is left on whichever surface it landed on and the invoice opens over
+    | it. A search that had to load a whole list to show one document would be
+    | the one thing §7.2 asks this not to do.
+    */
+    if (document_) openDrawer(document_);
 
     clearModuleParams();
 }

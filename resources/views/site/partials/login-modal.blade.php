@@ -85,15 +85,6 @@
 
         <form id="login-form" class="mt-6" novalidate>
 
-            {{-- Populated from the API's error envelope: error.error.message --}}
-            <div id="login-error"
-                 class="mb-5 hidden items-start gap-2.5 rounded-[10px] border border-rose-200 bg-rose-50
-                        px-3.5 py-3 text-[0.8125rem] text-rose-700"
-                 role="alert" aria-live="polite">
-                <x-icon name="alert-triangle" :size="16" class="mt-px shrink-0" />
-                <span data-error-message></span>
-            </div>
-
             <div class="mb-4">
                 <label for="email" class="mb-1.5 block text-[0.8125rem] font-semibold text-secondary-foreground">
                     {{ Site::text('login.email') }}
@@ -115,7 +106,7 @@
                                   focus:outline-none focus:ring-2 focus:ring-ring/60">
                 </div>
 
-                <p class="mt-1.5 hidden text-xs text-rose-600" data-field-error="email"></p>
+                <p class="mt-1.5 hidden text-xs text-rose-600" data-error-for="email"></p>
             </div>
 
             <div class="mb-5">
@@ -144,7 +135,7 @@
                     </button>
                 </div>
 
-                <p class="mt-1.5 hidden text-xs text-rose-600" data-field-error="password"></p>
+                <p class="mt-1.5 hidden text-xs text-rose-600" data-error-for="password"></p>
             </div>
 
             <button type="submit" data-submit

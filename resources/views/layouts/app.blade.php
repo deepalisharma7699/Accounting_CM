@@ -9,6 +9,25 @@
 {{-- data-page selects which module resources/js/app.js boots. --}}
 <body class="h-full" data-page="@yield('page', 'dashboard')">
 
+    {{--
+        The global activity bar.
+
+        A body child above everything, so it reports a request made from a
+        module, from a drawer over it and from a confirm over that — all three
+        of which can be waiting on the server, and none of which could carry an
+        indicator that survives being closed.
+
+        Empty markup on purpose: it is driven entirely by resources/js/loader.js,
+        from the request counter inside `auth.call()`. Nothing here decides when
+        it is up, because nothing at a call site should have to.
+
+        `hidden` while idle, so it is out of the accessibility tree rather than
+        being a progressbar permanently reading nought.
+    --}}
+    <div id="global-loader" class="global-loader" role="progressbar" aria-label="Loading" hidden>
+        <span class="global-loader-fill"></span>
+    </div>
+
     {{-- The chrome, mounted once. Nothing below ever replaces it. --}}
     @include('partials.topbar')
 

@@ -36,6 +36,7 @@
  * the moment of the write. See `data-bus.js`.
  */
 
+import { track } from './loader';
 import { applyPermissionGates, can, hasWorkspace } from './permissions';
 import { $, $$, esc, toast } from './ui';
 
@@ -132,6 +133,29 @@ function paintEmptyHome() {
 }
 
 /**
+ * Take the home skeleton down and show what it stood in for.
+ *
+ * Last, and that is the whole of its correctness. By the time this runs the
+ * grants have been applied, the favourites have been lifted out of their bands,
+ * a band left with nothing visible under it has hidden its own heading, and
+ * `paintEmptyHome()` above has decided whether there is anything here at all —
+ * so the grid is revealed in its finished state rather than assembling itself in
+ * front of somebody.
+ *
+ * `aria-busy` goes with it. It is on `#view-home` rather than on the skeleton
+ * because the skeleton is `aria-hidden` — there is nothing in it to announce,
+ * and the fact worth announcing is that this region is not ready yet.
+ */
+function revealHome() {
+    const home = $('#view-home');
+
+    if (!home) return;
+
+    delete home.dataset.homeLoading;
+    home.removeAttribute('aria-busy');
+}
+
+/**
  * May this session open that module?
  *
  * The cards are gated already, so this only matters for a URL somebody typed or
@@ -148,6 +172,20 @@ function permitted(key) {
 
     return (!grant || can(action, resource))
         && (wrapper.dataset.requiresWorkspace === undefined || hasWorkspace());
+}
+
+/**
+ * The same question {@link openModule} asks itself, exported so that a caller
+ * can decline to *offer* what it would refuse.
+ *
+ * The topbar's search uses it: a document whose module is switched off, or whose
+ * card this session may not see, is dropped from the results rather than listed
+ * and then met with "that module is not available" on the click. Asked of the
+ * shell rather than answered a second time, or the two could disagree about the
+ * same card (§4.4).
+ */
+export function canOpenModule(key) {
+    return Boolean(PAGES[key]) && permitted(key);
 }
 
 /* -------------------------------------------------------------------------
@@ -263,10 +301,19 @@ async function mount(key) {
 
     host.innerHTML = busyState(key);
 
-    const response = await fetch(`/modules/${key}`, {
+    /*
+    | The one request in the application that does not go through
+    | `auth.call()` — it asks for markup, not for JSON — so it is the one place
+    | the activity bar has to be raised by hand. `track()` and not a bare pair,
+    | because a module that 404s must still take the bar down.
+    |
+    | The skeleton below is not made redundant by it: the bar says the server is
+    | busy, the skeleton says this region is what is arriving.
+    */
+    const response = await track(fetch(`/modules/${key}`, {
         headers: { Accept: 'text/html' },
         credentials: 'same-origin',
-    });
+    }));
 
     if (!response.ok) {
         throw new Error(
@@ -418,6 +465,7 @@ export function initShell() {
     baseTitle = document.title;
     readRegistry();
     paintEmptyHome();
+    revealHome();
 
     document.addEventListener('click', (event) => {
         // closest(), not matches(): a card wraps an icon and two spans, so a
@@ -513,6 +561,10 @@ export function initShell() {
 
         if ($('[data-modal]:not(.hidden)')) return;
         if ($('[data-user-menu-panel]:not(.hidden)')) return;
+        // The search results, for the same reason as the menu above: while the
+        // panel is up it is the innermost thing on screen, and `search.js` takes
+        // the one step of closing it.
+        if ($('[data-search-panel]:not(.hidden)')) return;
 
         if (escapeHandlers.get(current)?.()) return;
 

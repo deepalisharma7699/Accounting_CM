@@ -271,9 +271,6 @@
             </div>
 
             <div class="space-y-4" data-form-body>
-                <p class="hidden rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-3 text-[0.8125rem] text-rose-700"
-                   data-form-banner role="alert"></p>
-
                 <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div>
                         <label for="user-name" class="field-label">Full name <span class="req">*</span></label>

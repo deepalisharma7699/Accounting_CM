@@ -86,9 +86,6 @@
                     </div>
                 </header>
 
-                <p class="hidden rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-3
-                          text-[0.8125rem] text-rose-700" data-form-banner role="alert"></p>
-
                 {{-- Shown when the account being edited is one the posting engine
                      resolves by key. Its locked controls are disabled with this
                      as their reason rather than hidden: the answer belongs where

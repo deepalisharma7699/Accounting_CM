@@ -147,6 +147,63 @@ and refetches when it is next looked at. Never a refresh button, never a poll,
 never a reload, and never a per-module notification: writes announce themselves
 from `auth-client` so a new one cannot forget to.
 
+3.8 **Saying that a request is in flight is not a per-screen decision.** The
+global activity bar ([loader.js](resources/js/loader.js), mounted once in the
+layout) is raised by `auth.call()` around every request, for the reason §3.7's
+announcement is made there: the failure is a *missing* indicator, and a
+convention that each call site remembers to raise one fails silently, one site
+at a time — which is exactly how it had failed, with about forty indicators
+across a hundred and seventy-odd call sites and nothing at all on a drawer
+fetching a record, a picker searching or a component loading its options. Two
+timers keep it honest: nothing is painted for 250ms, so a fast request never
+flashes, and once painted it stays 400ms, so one finishing at 260ms does not
+flicker. It **counts** rather than toggling, because overlapping requests are
+normal. Pass `quiet: true` **only** for a call debounced against typing — the
+bill's price preview and the pickers' search, which already report themselves
+where the eye is. Never reach for it to tidy a screen up: it removes the only
+signal that a request exists. The per-surface loaders stay — `setSubmitting`
+still disables the button that was pressed, because "the server is busy" and
+"this button is why" are different things to say, and the second is what stops
+a double post.
+
+3.9 **The bar is not enough on the way in, and home is where that shows.** Every
+card starts `hidden` and is revealed only once `/auth/me` confirms the grant
+behind it (§6.2), so for one round trip the grid is band headings over nothing —
+and a heading with no cards under it does not read as "loading", it reads as
+"this workshop has no modules". So `#view-home` is **delivered** carrying
+`data-home-loading` and `aria-busy`, and
+[partials/home-skeleton.blade.php](resources/views/partials/home-skeleton.blade.php)
+stands in for the whole region until `shell.js`'s `revealHome()` takes it off.
+Three parts of it are load-bearing. The state is in the **markup**, never
+switched on by JavaScript, because anything added after the first paint arrives
+after the flash it exists to prevent. The **headings go too**, and the CSS says
+"everything that is not the skeleton" rather than listing the sections to hide —
+a list is a thing to keep extending, and the band somebody adds next would be
+the one still flashing. And the reveal is **last**, after the gating pass, after
+favourites has lifted its cards out and after `paintEmptyHome()`, so the grid
+appears finished instead of assembling itself. A skeleton carries **no
+`data-module-card`, `data-open`, `data-star` or `data-module-group`**: the label
+registry, `permitted()` and favourites' band ordering all read the grid off
+those, and a placeholder wearing one is a module to every one of them.
+
+3.10 **Saying yes and saying no is one convention, and it is not a per-screen
+decision either.** A refusal appears in exactly two places: on the field the
+server named, and on a banner **at the submit control that was pressed** — plus
+the same sentence in the floating alert, **top right**. A success is the alert
+alone. Nothing else. `showFormErrors`, `showFormMessage` and `showActionError`
+in [ui.js](resources/js/ui.js) are the whole of it, and the banner is **placed
+by them**, never declared in a template.
+
+The banner used to be a `<p data-form-banner>` hand-written at the **top** of
+each form, which is the one place it cannot work: every save in a §2A workspace
+is pressed at the bottom of a long form, so a refused expense, job card or
+product answered a screenful above the button and the screen did not move at
+all. Somebody presses again. Nineteen of those slots existed and they had
+already drifted to four different sets of classes; they are gone, and a new form
+inherits the convention by doing nothing. Do not put one back into a template,
+do not add a second appearance for an error, and do not answer a failed write
+with a toast alone — that is the state this replaced.
+
 ## 4. Business logic
 
 4.1 The existing business logic outranks any UI change. Never alter it to make
@@ -299,10 +356,132 @@ stock it does not have. The one thing it must never treat as a write is a
 **read-only POST**: `transactions/preview` runs on a debounce as somebody types,
 and announcing on it refetched every line's position every few keystrokes.
 
+**A refusal is shown where the button is, and the alert moved to the top right.**
+[ui.js](resources/js/ui.js) is the only thing in this application that says how
+something went, and §3.10 is why it is only one thing. Three parts of the fix are
+load-bearing.
+
+The banner is **placed rather than declared**. `reportRefusal()` finds the
+*visible* submit — the same lookup `setSubmitting()` makes, because a form
+adopted into a dialog carries a footer for each chrome and only one is on
+screen — and appends the banner **inside that footer row**, which is what makes
+one class enough for every surface: a drawer's footer carries its own
+`px-5 py-4` and a level-1 footer carries none, so a banner dropped in beside the
+buttons is inset correctly on both where a sibling underneath would run edge to
+edge. `.form-banner` takes a whole line of that row (`flex-basis: 100%`) and the
+row is made to wrap, because a footer written for two buttons had no reason to
+have said so itself. It is re-placed on **every** call, or a form edited in a
+dialog would answer in the level-1 footer nobody is looking at.
+
+A 422's own message is **"The given data was invalid."**, which is not something
+to show anybody standing at a counter — so `summarise()` builds the sentence from
+what was actually wrong. A field message the form has **no slot for** wins over
+everything, because that is the one that would otherwise be displayed nowhere at
+all and refuse somebody with no reason anywhere on the screen.
+
+And marking the field had been **silently broken wherever two controls share a
+name**. `form.elements[name]` answers with a RadioNodeList, which has no
+`setAttribute`, and the guard read `if (input && input.setAttribute)` — so the
+expense form, whose own `amount` shares a name with the amount on every payment
+row, never once painted the red border `.field-input[aria-invalid='true']` exists
+for. `errorInput()` resolves it from the slot's own field block, which is the
+only thing in the form that knows which control a message is about.
+
+Two smaller things went with it. The alert is **top right and under the topbar**,
+not over it — it answers something the user just did, and covering the search box
+and the account menu to say so takes away the next thing they were going to
+press; an error stays 6s where a success stays 3.2s, and clicking one dismisses
+it. And the sign-in dialog and the sign-up page were converted off their own
+banner and their own `data-field-error` hooks onto `data-error-for` and
+`showFormErrors`, so a wrong password now lands exactly where a rejected expense
+does.
+
+**Home has a favourites row, and it is the same cards.** Nineteen cards no
+longer fit a viewport, so a workshop stars the few it opens every day and they
+are lifted to a group above the rest —
+[favourites.js](resources/js/favourites.js) **moves** the card nodes rather than
+copying them, and a group left with nothing visible under it hides its own
+heading. There is still exactly one node per module, which is what `shell.js`'s
+label registry and `permitted()` both assume and what
+`test_the_dashboard_offers_a_card_for_every_enabled_module` holds shut. This is
+not a second navigation and it is not the start of one (§1.2): no sidebar, no
+menu, no per-user layout engine — one more group, made of the cards that were
+already there.
+
+The list belongs to the **workshop**, in `tenants.favourite_modules`, written by
+`PUT /workspace/favourites` under `UPDATE:WORKSPACE`. Three parts of it are wrong
+in ways that look right. It is a **`PUT`**, because unstarring the last card
+sends `[]` and that has to mean "none" rather than "unchanged". It is **its own
+route**, not a field on `PATCH /workspace`, because that path announces `ledger`
+— rightly, the financial year decides what every held report means — and a star
+would otherwise mark every statement and every Insights panel stale on each
+click; `data-bus.js` lists it **ahead** of `/workspace`, first match wins. And
+**reading it needs no grant**: it rides in the `tenant` block of `/auth/me`,
+which home already fetches, so it costs no request and a clerk holding no
+`READ:WORKSPACE` still gets the screen their owner arranged. What each person
+sees of the one list narrows to their own grants for free, because only a card
+the permission pass left visible is ever lifted. See
+[tenancy-module.md](docs/tenancy-module.md).
+
+**The topbar's search is a way in, and every module owes it a deep link.**
+[search.js](resources/js/search.js) is the one box that is not over a list: it
+answers the question somebody at the counter actually has, where the caller
+quoting a number does not know which module it belongs to. Picking a result
+**opens the record where the record lives** — `#customers?party=12`,
+`#sales?doc=88`, `#items?item=30`, `#jobs?job=41` — so it renders nothing a
+module already renders (§5.1). That is the convention a new module inherits: a
+module holding records answers `?<noun>=<id>` by opening its own drawer, from
+`moduleParams()` on first mount *and* from `module:params` on every reopen,
+spending the intent with `clearModuleParams()`. A drawer that fetches by id
+opens over whatever surface the module landed on; one that reads its row out of
+a held list — Items, Customers, Vendors — **awaits `showList()` first**, which is
+also the right surface to leave somebody on.
+
+Four things in it are load-bearing. There is **no `/search` endpoint**: it fans
+out to the four modules' own index endpoints, because each already refuses what
+this session may not see and a fifth reader of the same question is a fifth
+place to get that wrong (§6.1). The groups are **fixed slots** — four responses
+settle in whatever order the network decides, and a panel built in arrival order
+would reshuffle under the pointer and open whatever Enter had just been pushed
+onto. It offers **nothing it cannot open**, through the shell's own
+`canOpenModule()` rather than a second copy of that judgement. And it passes
+**`quiet: true`**, which is the third and last legitimate use of that flag
+(§3.8): debounced against typing, and reporting itself in the panel where the
+eye already is.
+
 **The registry.** [config/modules.php](config/modules.php) is the single source
 of truth for which modules exist, what grant each needs, and which are switched
 on. [Modules.php](app/Support/Modules.php) reads it, and is the whitelist the
 fragment route checks — a module switched off has no card *and* no fragment.
+
+**A module says which band it is in, and the file is flat.** The registry used
+to be two nested arrays, `primary` and `admin`, so the grouping *was* the shape
+of the file and moving a card between bands meant moving its whole entry and its
+comments. It is one list now and each module carries a `group`; `Modules::BANDS`
+owns the five bands, their order and their headings, and the Blade calls
+`groupLabel()` instead of deciding one with a ternary that named two. Five bands
+of three or four — work & selling, buying & stock, money & books, people, setup
+& history — replaced two of twelve and six, and that is the whole of why the
+grid reads as sorted: a heading over twelve cards says nothing about any of
+them. A module given a band that does not exist gets no card at all, which is
+caught rather than silent — `test_the_dashboard_offers_a_card_for_every_enabled_module`
+counts one card per enabled module.
+
+**A card's colour is one token pair, spent in three places.** `tone` is a single
+`tone-*` class declaring `--tone-bg` and `--tone-fg` on the *card*, where it was
+two Tailwind classes on the chip. The card is a tinted band across its head
+carrying the chip and the name, with the description beneath it on white, so the
+colour has to reach the card's background, the chip and the title — and a colour
+class can only paint the element it sits on. Three details in it are
+load-bearing. `--band` sets the band's height **and** where the gradient is cut,
+so there is one figure rather than two that can disagree. The card declares
+`padding: 0` because it is a `<button>`, and one that names no padding takes the
+browser's own, which insets the band from three edges. And `.card-star` is
+centred in that band while `.card-title` holds `padding-right` clear of it —
+under `(hover: none)` every star is permanently visible, so a long label would
+otherwise run underneath one for good. `skel-card` mirrors the same band and
+body, for the reason it mirrored the old card: it is there so the page settles
+rather than jumps.
 
 **A detached surface is not in `document`.** §2A.2 keeps exactly one of the form
 and the list attached, so `document.querySelector` finds nothing in the other —
@@ -836,12 +1015,49 @@ the timezone and `books_start_date` define the period every statement is measure
 over, so saving that screen makes a held report wrong without a figure having
 moved.
 
-**C4 is done, and there is no page shell left.** **Jobs** is the bench — receive
-a motor, move it along, write parts onto it, quote, get the quotation approved,
-bill it — and it is the workshop's actual trade, which nobody could reach at all
-until now. The create form takes a motor in, the bench is behind "Show list", and
-a job opens in a drawer carrying the pipeline, the parts, the estimate and
-Generate bill.
+**C4 is done, and there is no page shell left.** **Jobs** is the bench — take
+something in, move it along, write parts onto it, quote, get the quotation
+approved, bill it — and it is the workshop's actual trade, which nobody could
+reach at all until now. The create form books something in, the bench is behind
+"Show list", and a job opens in a drawer carrying the pipeline, the parts, the
+estimate and Generate bill.
+
+**What comes in is not always a motor, and the bench stopped assuming it was.**
+`workshop_jobs` had `hp` and `phase` as columns and the intake form asked for
+them under a heading that said "The motor" — a product type in a schema and in a
+Blade template, which is the failure the catalogue's vocabulary rule already
+records against `ItemType` and against a typed brand. It cost a real workshop
+something every week: a cooler, a table fan or a mixer came in and the only
+fields on offer were two that mean nothing about any of them. Those columns are
+**gone**; a job now carries `category_id`, a **copied** `kind_label` and a
+`specs` bag keyed by attribute, and the intake form asks what the chosen kind is
+described by. Never put a product type back into this schema, this template or
+`pages/jobs.js`.
+
+The kinds are the **catalogue's own** `item_categories` and `item_attributes` —
+never a `job_categories` table, which would be a second master, a second schema
+resolver and a second admin screen answering one question (§4.4, §5.1). So a
+workshop that starts repairing coolers adds a category from the Items card and
+the bench asks the right questions with no deployment, which is the catalogue
+module's acceptance criterion one module along.
+[components/attribute-fields.js](resources/js/components/attribute-fields.js) is
+the one renderer for both forms; add a third reader, not a third copy.
+
+Four parts of it are load-bearing. The list is published by
+**`GET /workshop-jobs/meta`** and not fetched from `/items/meta`: that route is
+behind `READ:ITEMS` and this one behind `READ:WORKSHOP_JOBS`, and the person
+booking a motor in is exactly the person who may hold the second and not the
+first — the trap M22's attribution pickers avoid by riding on
+`/transactions/meta`. **Nothing on the form is required**, the kind included:
+`is_required` says a *product* cannot exist without a rating, and this is a pump
+a driver could not identify that is already on the bench. **The label is copied**
+onto the row like the brand and the model beside it, so a renamed or archived
+category leaves the card still saying what came through the door and
+`search=cooler` finds the coolers without a join. And **the bag reaches no screen
+unresolved** — `{"hp": "7.5"}` needs the category that asked to become "7.5 HP",
+so `JobService` attaches the schema once per page rather than a lookup per row,
+and `equipmentLabel()` prints nothing from it where nobody resolved it. See
+[workshop-module.md](docs/workshop-module.md).
 
 **The bill is a level-1 pane on the create surface, not a state of the drawer.**
 The shared document is a two-column form with a searched item picker, a line

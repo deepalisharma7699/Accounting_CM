@@ -360,13 +360,20 @@ class PublicSiteTest extends TestCase
         | These names are an interface with initLogin() in resources/js/app.js,
         | not styling. Renaming one to match the site's `s-` prefix would leave
         | a dialog that opens, accepts a password and does nothing with it.
+        |
+        | `data-error-for` is the same hook every form behind the sign-in uses,
+        | and it is deliberately not a name of this dialog's own: the refusal is
+        | painted by showFormErrors() in ui.js, which is what makes a wrong
+        | password land where a rejected expense lands. There is no banner
+        | element to assert — ui.js places one at the submit button itself, so
+        | the message cannot end up above the fold of a form nobody scrolled up.
         */
         $response = $this->get('/hi')->assertOk();
 
         foreach ([
             'id="login-modal"', 'data-modal', 'data-login-open', 'id="login-form"',
-            'id="login-error"', 'data-error-message', 'name="email"', 'name="password"',
-            'data-field-error="email"', 'data-field-error="password"',
+            'name="email"', 'name="password"',
+            'data-error-for="email"', 'data-error-for="password"',
             'data-toggle-password', 'data-submit', 'data-spinner', 'data-submit-label',
         ] as $hook) {
             $response->assertSee($hook, escape: false);

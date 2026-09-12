@@ -1,4 +1,7 @@
 import auth from '../auth-client';
+import {
+    collectAttributes, defaultsFor, describeAttributes, renderAttributeFields,
+} from '../components/attribute-fields';
 import { badge, formatQuantity, lifecycleTone } from '../components/badge';
 import { mountBillDocument } from '../components/bill-document';
 import { bindDelivery, openInvoicePreview } from '../components/invoice-delivery';
@@ -17,13 +20,27 @@ import { adoptForm, mountWorkspace } from '../workspace';
  * Jobs — the bench. M19, and the brief's §16 to §18 and §23. C4.
  *
  * ```
- * card → RECEIVE A MOTOR           ← always lands here (§2A.1, §2A.5)
+ * card → BOOK SOMETHING IN         ← always lands here (§2A.1, §2A.5)
  *      → "Show list (12)"          → what is on the bench
  *      → row → drawer (level 2)    → the pipeline, the parts, the estimate
  *                                  → Correct the card (a state of the drawer)
  *                                  → Generate bill → the document, at level 1
  *                                  → confirm (level 3)
  * ```
+ *
+ * ## What comes in is not always a motor
+ *
+ * Most of it is; a good deal of it is a cooler, a table fan or a pump. So the
+ * intake form asks **what kind of thing** arrived and then draws whatever that
+ * kind is described by, from `GET /workshop-jobs/meta`. Nothing about motors is
+ * written in this file — no HP, no phase, no list of kinds — for the reason the
+ * catalogue's vocabulary rule already gives: a product type in code is a product
+ * type a workshop cannot change, and a copy of the list in a screen goes stale
+ * the moment an admin adds one.
+ *
+ * The fields themselves are `components/attribute-fields.js`, which is also what
+ * the Items create form draws its specification with. One renderer, one set of
+ * data types, one "blank is absent" rule (§4.4).
  *
  * ## The one thing this screen has to keep saying
  *
@@ -80,6 +97,17 @@ const state = {
 
     statuses: [],
     counts: {},
+
+    /*
+    | What can be booked in, and what each kind asks about — the workshop's own
+    | categories, from the server.
+    |
+    | Held for the life of the module and refreshed with the rest of the meta,
+    | because the intake form redraws its fields on every change of the Kind
+    | select and a fetch per change would be a request per keystroke of somebody
+    | making up their mind.
+    */
+    kinds: [],
 
     // The job the drawer is showing, kept so an action can re-read it without a
     // second lookup of which row was clicked.
@@ -184,15 +212,18 @@ function lineFingerprint(line) {
 const fingerprint = (lines) => lines.map(lineFingerprint).join('\n');
 
 /**
- * What the motor is, where anything about it is known.
+ * What came in, where anything about it is known.
  *
- * `motorLabel()` falls back to the job number when the plate said nothing and
- * nobody typed anything — which is right for a Motor column and wrong beside the
+ * `equipmentLabel()` falls back to the job number when the plate said nothing
+ * and nobody typed anything — which is right for a column and wrong beside the
  * number itself, where it reads "JOB/26-27/1006 — JOB/26-27/1006". A pump
  * wheeled in by a driver who knew none of it is a job this form accepts on
  * purpose, so this is the ordinary case rather than an edge one.
  */
-const motorOf = (job) => (job.motor && job.motor !== job.job_no ? job.motor : null);
+const equipmentOf = (job) => (job.equipment && job.equipment !== job.job_no ? job.equipment : null);
+
+/** The kind's published question set, or an empty one. */
+const kindMeta = (id) => state.kinds.find((kind) => String(kind.value) === String(id ?? '')) ?? null;
 
 /**
  * Whether anything has been invoiced off this job — beside the status, never
@@ -252,7 +283,7 @@ function refetch() {
 function render(rows, meta) {
     listEl('[data-job-body]').innerHTML = rows.length
         ? rows.map(renderRow).join('')
-        : tableMessage(7, 'Nothing here. Book a motor in and it will appear on the bench.');
+        : tableMessage(7, 'Nothing here. Book something in and it will appear on the bench.');
 
     const pagination = meta?.pagination ?? {};
 
@@ -271,7 +302,7 @@ function render(rows, meta) {
 }
 
 function renderRow(job) {
-    // §2A.8 — a motor booked in while the list was detached carries the flash
+    // §2A.8 — something booked in while the list was detached carries the flash
     // whenever the list is next looked at, not at a moment nobody was watching.
     const flash = workspace?.isNew(job.id) ? ' row-new' : '';
 
@@ -286,7 +317,7 @@ function renderRow(job) {
 
             <td class="table-cell text-[0.8125rem]">${esc(job.party?.name ?? '—')}</td>
 
-            <td class="table-cell text-[0.8125rem]">${esc(job.motor)}</td>
+            <td class="table-cell text-[0.8125rem]">${esc(job.equipment)}</td>
 
             <td class="table-cell max-w-xs truncate text-[0.8125rem] text-muted-foreground">
                 ${esc(job.complaint)}
@@ -325,12 +356,15 @@ async function loadMeta() {
 
         state.statuses = data.statuses ?? [];
         state.counts = data.counts ?? {};
+        state.kinds = data.kinds ?? [];
     } catch {
         state.statuses = [];
         state.counts = {};
+        state.kinds = [];
     }
 
     renderTabs();
+    renderKinds();
 }
 
 function renderTabs() {
@@ -380,8 +414,8 @@ async function refreshDrawer(id) {
 
         state.current = data;
 
-        el('#job-drawer-title').textContent = motorOf(data)
-            ? `${data.job_no} — ${motorOf(data)}`
+        el('#job-drawer-title').textContent = equipmentOf(data)
+            ? `${data.job_no} — ${equipmentOf(data)}`
             : data.job_no;
         el('[data-drawer-subtitle]').textContent =
             `${data.party?.name ?? ''} · received ${formatDate(data.received_date)}`
@@ -407,6 +441,7 @@ function renderCard(job) {
     return `
         ${renderPipeline(job, mayWrite)}
         ${renderComplaint(job)}
+        ${renderSpecification(job)}
         ${renderParts(job, mayWrite)}
         ${renderEstimate(job, mayWrite)}
         ${renderBills(job)}`;
@@ -437,6 +472,45 @@ function renderComplaint(job) {
                 ? `<p class="mt-2 text-xs text-muted-foreground">Serial ${esc(job.serial_no)}</p>`
                 : ''}
             ${job.notes ? `<p class="mt-2 text-[0.8125rem] text-muted-foreground">${esc(job.notes)}</p>` : ''}
+        </div>`;
+}
+
+/**
+ * What came in, and what its kind recorded about it.
+ *
+ * Printed from `specs_display`, which the server resolved through the category
+ * that asked — never from the raw bag, which is `{"hp": "7.5"}` and would put
+ * JSON keys on a job card. A job whose kind was never chosen has nothing to
+ * print, and the block is absent rather than empty: a heading over "—" claims
+ * somebody looked and found nothing.
+ */
+function renderSpecification(job) {
+    const specs = job.specs_display ?? [];
+
+    const identity = [
+        job.kind_label ? ['Kind', job.kind_label] : null,
+        job.brand ? ['Brand', job.brand] : null,
+        job.model ? ['Model', job.model] : null,
+    ].filter(Boolean);
+
+    const rows = [
+        ...identity,
+        ...specs.map((spec) => [spec.label, `${spec.value}${spec.suffix ? ` ${spec.suffix}` : ''}`]),
+    ];
+
+    if (!rows.length) return '';
+
+    return `
+        <div class="border-b border-border px-6 py-4">
+            <h3 class="text-sm font-semibold text-foreground">What came in</h3>
+
+            <dl class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 text-[0.8125rem] sm:grid-cols-3">
+                ${rows.map(([label, value]) => `
+                    <div>
+                        <dt class="text-xs text-muted-foreground">${esc(label)}</dt>
+                        <dd class="text-secondary-foreground">${esc(value)}</dd>
+                    </div>`).join('')}
+            </dl>
         </div>`;
 }
 
@@ -984,7 +1058,7 @@ function openBill(job, billId) {
 }
 
 /* -------------------------------------------------------------------------
- | Booking a motor in, and correcting the card
+ | Booking something in, and correcting the card
  |
  | One form node for both. `adoptForm()` moves it between the level-1 pane and
  | the drawer, and the blocks marked `data-form-chrome` decide which frame is
@@ -992,24 +1066,140 @@ function openBill(job, billId) {
  | is editable once the job exists and `UpdateJobRequest` accepts neither.
  | ---------------------------------------------------------------------- */
 
-function resetForm() {
+/**
+ * The Kind select, from the workshop's own categories.
+ *
+ * Written here rather than into the Blade template, for the reason the
+ * catalogue records: a list of product kinds in the markup is a list that goes
+ * stale the moment an admin adds one. The choice already made survives the
+ * repaint, because `loadMeta()` runs again after every booking (§2A.8 clears
+ * the form, and the counts have moved) and re-selecting nothing would silently
+ * unset the kind the operator picked for the *next* one.
+ */
+function renderKinds() {
+    if (!form) return;
+
+    const select = form.elements.category_id;
+    const chosen = select.value;
+
+    select.innerHTML = `
+        <option value="">Not sure yet</option>
+        ${state.kinds.map((kind) => `
+            <option value="${esc(kind.value)}">${esc(kind.label)}</option>`).join('')}`;
+
+    select.value = chosen;
+
+    // A workshop with no categories at all cannot answer the question, so it is
+    // not asked one — and is told where the answer comes from, because "Kind"
+    // with one empty option reads as a broken control rather than an empty
+    // master.
+    select.disabled = state.kinds.length === 0;
+
+    paintSpecFields();
+}
+
+/**
+ * The fields the chosen kind asks about.
+ *
+ * Values already typed survive the repaint, which matters for the same reason it
+ * does on the Items form: this runs again after every booking, and wiping the
+ * boxes would cost the operator a specification they had half finished. What
+ * sits underneath them differs by frame — a new job falls back to the kind's own
+ * declared defaults, and one being corrected falls back to what it recorded,
+ * never to a default that would refill a box somebody deliberately emptied.
+ */
+function paintSpecFields() {
+    const host = formOrDrawer('[data-job-specs]');
+    const section = formOrDrawer('[data-job-specs-section]');
+
+    if (!host || !section) return;
+
+    const kind = kindMeta(form.elements.category_id.value);
+    const schema = kind?.attributes ?? {};
+
+    section.classList.toggle('hidden', !kind || Object.keys(schema).length === 0);
+
+    const hint = formOrDrawer('[data-job-kind-hint]');
+
+    if (hint) {
+        hint.textContent = state.kinds.length === 0
+            ? 'No kinds defined yet — add a category from the Items card.'
+            : (kind ? `Asks for ${describeAttributes(schema, 'nothing in particular')}.` : '');
+    }
+
+    if (!kind) {
+        host.innerHTML = '';
+
+        return;
+    }
+
+    const held = editing ? (specsOf(state.current) ?? {}) : defaultsFor(schema);
+
+    renderAttributeFields(host, schema, { ...held, ...collectAttributes(host) }, 'job-spec', {
+        // Nothing on this form is compulsory, whatever the category demands of a
+        // *product*: a motor whose plate nobody could read is still on the bench,
+        // and a form that refused it is a form that got a job card written on
+        // paper instead.
+        requiredMarks: false,
+        empty: 'This kind records no specification fields.',
+    });
+}
+
+/** What a job recorded, but only where the kind on the form is still its own. */
+function specsOf(job) {
+    if (!job) return null;
+
+    return String(job.category_id ?? '') === String(form.elements.category_id.value)
+        ? (job.specs ?? {})
+        : {};
+}
+
+/**
+ * Find a node on the form wherever the form currently is.
+ *
+ * `adoptForm()` moves the whole node into the drawer for an edit, so a lookup
+ * scoped to the level-1 pane finds nothing exactly when the card is being
+ * corrected. Scoped to the form itself, which works attached or detached — the
+ * rule CLAUDE.md records about a detached surface.
+ */
+const formOrDrawer = (selector) => $(selector, form);
+
+/**
+ * Empty the form for the next one.
+ *
+ * `keepKind` is the counter's case and not a nicety: three motors come off one
+ * pickup, and §2A.8 clears the form the instant each is booked. Re-picking
+ * "Motor" three times is the friction that ends in a paper job card — the same
+ * argument that keeps every field here optional. It is *not* kept when the form
+ * comes back from an edit, where the kind on it belongs to somebody else's job.
+ */
+function resetForm({ keepKind = false } = {}) {
+    const kind = form.elements.category_id.value;
+
     clearFormErrors(form);
     form.reset();
+
+    if (keepKind) form.elements.category_id.value = kind;
+
     form.elements.received_date.value = new Date().toISOString().slice(0, 10);
     jobParty.set(null);
+    paintSpecFields();
 }
 
 function fillForm(job) {
     clearFormErrors(form);
 
     form.elements.complaint.value = job.complaint ?? '';
-    form.elements.hp.value = job.hp ?? '';
-    form.elements.phase.value = job.phase ?? '';
+    form.elements.category_id.value = job.category_id ?? '';
     form.elements.brand.value = job.brand ?? '';
     form.elements.model.value = job.model ?? '';
     form.elements.serial_no.value = job.serial_no ?? '';
     form.elements.promised_date.value = job.promised_date ?? '';
     form.elements.notes.value = job.notes ?? '';
+
+    // After the select, and after `editing` is set — the fields drawn are the
+    // chosen kind's, and what fills them is what this job recorded.
+    paintSpecFields();
 }
 
 function openEdit(job) {
@@ -1066,8 +1256,12 @@ async function submitForm(event) {
             await auth.call(`/workshop-jobs/${editingId}`, {
                 method: 'PATCH',
                 body: {
-                    hp: form.elements.hp.value.trim() || null,
-                    phase: form.elements.phase.value || null,
+                    // The kind and its answers always travel together: the
+                    // server filters the bag against whichever category the job
+                    // ends up under, so sending one without the other would
+                    // clear a specification nobody meant to clear.
+                    category_id: form.elements.category_id.value || null,
+                    specs: collectAttributes(formOrDrawer('[data-job-specs]')),
                     brand: form.elements.brand.value.trim() || null,
                     model: form.elements.model.value.trim() || null,
                     serial_no: form.elements.serial_no.value.trim() || null,
@@ -1091,8 +1285,8 @@ async function submitForm(event) {
             body: {
                 party_id: jobParty?.id() ?? null,
                 complaint: form.elements.complaint.value.trim(),
-                hp: form.elements.hp.value.trim() || null,
-                phase: form.elements.phase.value || null,
+                category_id: form.elements.category_id.value || null,
+                specs: collectAttributes(formOrDrawer('[data-job-specs]')),
                 brand: form.elements.brand.value.trim() || null,
                 model: form.elements.model.value.trim() || null,
                 serial_no: form.elements.serial_no.value.trim() || null,
@@ -1110,11 +1304,11 @@ async function submitForm(event) {
         */
         const created = response.data;
 
-        const motor = motorOf(created);
+        const equipment = equipmentOf(created);
 
-        resetForm();
+        resetForm({ keepKind: true });
         paintOutcome(`
-            <p><strong>${esc(created.job_no)}</strong> is on the bench${motor ? ` — ${esc(motor)}` : ''}.
+            <p><strong>${esc(created.job_no)}</strong> is on the bench${equipment ? ` — ${esc(equipment)}` : ''}.
             Write the number on the casing.</p>
             <button type="button" class="mt-1 font-semibold underline" data-outcome-job="${created.id}">
                 Open the job card
@@ -1193,14 +1387,14 @@ function paintFormSubtitle() {
     if (!sub || workspace?.mode() === 'list') return;
 
     if (!billing) {
-        sub.textContent = 'Take a motor in. A job number is issued straight away, '
+        sub.textContent = 'Take something in. A job number is issued straight away, '
             + 'so there is something to write on the casing.';
 
         return;
     }
 
-    sub.textContent = billing.motor
-        ? `Billing ${billing.job_no} — ${billing.motor}.`
+    sub.textContent = billing.equipment
+        ? `Billing ${billing.job_no} — ${billing.equipment}.`
         : `Billing ${billing.job_no}.`;
 }
 
@@ -1292,12 +1486,12 @@ async function loadBill(job) {
     billing = {
         id: job.id,
         job_no: meta.job.job_no,
-        motor: motorOf(meta.job),
+        equipment: equipmentOf(meta.job),
         baseline: fingerprint(doc.lines()),
     };
 
     const customer = state.current?.party?.name;
-    const named = billing.motor ? `${billing.job_no} — ${billing.motor}` : billing.job_no;
+    const named = billing.equipment ? `${billing.job_no} — ${billing.equipment}` : billing.job_no;
 
     formEl('[data-job-bill-title]').textContent = customer
         ? `Billing ${named}, for ${customer}.`
@@ -1505,6 +1699,10 @@ export default async function initJobs() {
     form.elements.received_date.value = new Date().toISOString().slice(0, 10);
     form.addEventListener('submit', submitForm);
 
+    // Whatever the kind asks, asked. Bound to the node rather than the pane,
+    // because the same select goes into the drawer for an edit.
+    form.elements.category_id.addEventListener('change', paintSpecFields);
+
     formEl('[data-job-bill-cancel]').addEventListener('click', cancelBill);
 
     formEl('[data-job-outcome]').addEventListener('click', (event) => {
@@ -1535,11 +1733,11 @@ export default async function initJobs() {
     workspace = mountWorkspace(root, {
         key: 'jobs',
         title: 'Jobs',
-        formSubtitle: 'Take a motor in. A job number is issued straight away, so there is something to write on the casing.',
+        formSubtitle: 'Take something in. A job number is issued straight away, so there is something to write on the casing.',
         listSubtitle: (count) => (count === null
             ? 'What is on the bench, what it is waiting for, and what is ready to go home.'
             : `${count} job${count === 1 ? '' : 's'}, newest first.`),
-        createLabel: 'Book a motor in',
+        createLabel: 'Book something in',
         count: () => state.total,
         canCreate: canWrite,
         onShowList: load,

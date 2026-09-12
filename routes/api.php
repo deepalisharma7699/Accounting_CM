@@ -156,6 +156,23 @@ Route::prefix('v1')->group(function () {
             ->middleware('permission:UPDATE,WORKSPACE');
 
         /*
+        | Which module cards sit at the top of the workshop's home screen.
+        |
+        | Same authority as the settings above — this is the workshop's own home
+        | screen — and its own route rather than a field on the PATCH, because
+        | starring a card must not tell the data bus that the ledger moved. The
+        | reasoning is in UpdateFavouriteModulesRequest and the matching row in
+        | resources/js/data-bus.js.
+        |
+        | Reading them needs nothing: they ride in the `tenant` block of
+        | /auth/me, which every signed-in session already fetches on boot. A
+        | clerk holds no READ:WORKSPACE and still has to be able to see the home
+        | screen their owner arranged.
+        */
+        Route::put('workspace/favourites', [WorkspaceController::class, 'favourites'])
+            ->middleware('permission:UPDATE,WORKSPACE');
+
+        /*
         | Tenant (workshop) administration — a platform surface, not a
         | workshop one. TENANTS grants authority *over* tenants, so only the
         | ADMIN system role holds it; a workshop owner has no route in here.

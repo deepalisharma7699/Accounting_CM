@@ -2,7 +2,7 @@
     Jobs — the bench. M19, and the brief's §16 to §18 and §23. C4.
 
     ```
-    card → RECEIVE A MOTOR            ← always lands here (§2A.1, §2A.5)
+    card → BOOK SOMETHING IN          ← always lands here (§2A.1, §2A.5)
          → "Show list (12)"           → what is on the bench
          → row → drawer (level 2)     → the pipeline, the parts, the estimate
                                       → Generate bill → the document, at level 1
@@ -15,7 +15,7 @@
     is a two-column form with a searched item picker, a line table, a payment
     split and a sticky totals panel; §2.1 calls a list with filters and forms
     inside a dialog a scroll trap, and this is the same animal. So the form
-    surface holds **two panes** — booking a motor in, and billing one — with
+    surface holds **two panes** — booking something in, and billing one — with
     exactly one shown, the same judgement §2A.2 makes one level up about the form
     and the list.
 
@@ -33,6 +33,23 @@
     invoice posts. That is decision D2, and the invariant everything in M8 rests
     on is that stock only ever moves through a posted transaction.
 
+    ## What comes in is not always a motor
+
+    Most of it is. A good deal of it is a cooler, a table fan or a pump, and now
+    and then it is something nobody expected. So the intake form asks **what kind
+    of thing** came in and then asks what *that* kind is described by — the
+    catalogue's own `item_categories` and `item_attributes`, published by
+    `GET /workshop-jobs/meta` and drawn by `components/attribute-fields.js`, the
+    same renderer the Items create form uses.
+
+    There is deliberately **no HP box and no Phase select in this file**, and
+    there must not be one again. They were two motor fields under a heading that
+    said "The motor", which told the counter it had the wrong screen every time a
+    cooler came in — the same failure the catalogue's vocabulary rule already
+    records against a hard-coded product type and a typed brand. A workshop that
+    starts repairing something new adds a category from the Items card, and the
+    bench asks the right questions with no deployment.
+
     ## What is not here
 
     **No quick "create a new item" on the job card's part picker.** The one
@@ -43,7 +60,7 @@
     is one click away, and the picker says so.
 
     **No `item_id` on the intake form.** The column exists and the request
-    accepts it — the catalogue row for a motor the workshop *deals in* — but
+    accepts it — the catalogue row for an exact product the workshop *sells* — but
     nothing in the application reads it, and a field written by a form and read
     by nothing is a field that goes wrong quietly. The free text beside it is the
     record of what actually came through the door, which is the question the
@@ -56,7 +73,7 @@
     <div data-ws-form>
 
         {{-- ------------------------------------------------------------------
-             Pane 1 — booking a motor in.
+             Pane 1 — booking something in.
              ------------------------------------------------------------------ --}}
         <div data-job-intake>
 
@@ -80,21 +97,18 @@
                         <div>
                             <h3 class="text-sm font-bold text-foreground">Correct the job card</h3>
                             <p class="mt-0.5 text-[0.8125rem] text-muted-foreground">
-                                The motor, the complaint and when it was promised. Whose it is and when it
-                                arrived are what the job was opened on, and are not edited here.
+                                What came in, the complaint and when it was promised. Whose it is and
+                                when it arrived are what the job was opened on, and are not edited here.
                             </p>
                         </div>
                     </header>
 
-                    <p class="hidden rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-3
-                              text-[0.8125rem] text-rose-700" data-form-banner role="alert"></p>
-
                     <section class="surface p-5 sm:p-6">
-                        {{-- Whose motor it is, and when it arrived: both are
-                             settled when the job is opened, so neither travels
-                             into the drawer with the rest of the fields. --}}
+                        {{-- Whose it is, and when it arrived: both are settled
+                             when the job is opened, so neither travels into the
+                             drawer with the rest of the fields. --}}
                         <div data-form-chrome="inline">
-                            <h3 class="text-sm font-bold text-foreground">Whose motor, and when it came in</h3>
+                            <h3 class="text-sm font-bold text-foreground">Whose it is, and when it came in</h3>
                             <p class="mt-1 text-[0.8125rem] text-muted-foreground">
                                 A job number is issued straight away, so there is something to write on the
                                 casing before it goes on the bench.
@@ -119,32 +133,44 @@
                         </label>
                     </section>
 
-                    {{-- The motor, and every field of it optional. A pump is
-                         wheeled in at four in the afternoon by a driver who does
-                         not know its brand, and a form that refused to book it in
-                         would be a form that got a job card written on paper
-                         instead. --}}
+                    {{-- What came in, and every field of it optional — its kind
+                         included. A pump is wheeled in at four in the afternoon
+                         by a driver who does not know its brand, and a form that
+                         refused to book it in would be a form that got a job card
+                         written on paper instead.
+
+                         There is no HP box and no Phase select here any more, and
+                         there must not be again: a workshop takes in coolers,
+                         fans and pumps as well as motors, and two fields that
+                         mean nothing about any of them told the counter it had
+                         the wrong screen. What is asked comes from the chosen
+                         kind's own question set, published by
+                         GET /workshop-jobs/meta and drawn by
+                         components/attribute-fields.js. --}}
                     <section class="surface p-5 sm:p-6">
                         <h3 class="text-sm font-bold text-foreground">
-                            The motor <span class="font-normal text-muted-foreground">(whatever is known)</span>
+                            What came in <span class="font-normal text-muted-foreground">(whatever is known)</span>
                         </h3>
+                        <p class="mt-1 text-[0.8125rem] text-muted-foreground">
+                            A motor most days, a cooler or a fan the rest of the time. Say which and the
+                            form asks what that kind is described by.
+                        </p>
 
                         <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                            {{-- Written from the server's category list. Never a
+                                 list of kinds in this template: a copy in the
+                                 markup goes stale the moment an admin adds one,
+                                 which is the failure the catalogue was rebuilt to
+                                 remove. --}}
                             <label class="field">
-                                <span class="field-label">Rating (HP)</span>
-                                <input type="text" name="hp" class="field-input" maxlength="20"
-                                       placeholder="7.5" autocomplete="off">
-                                <span class="field-error hidden" data-error-for="hp"></span>
-                            </label>
-
-                            <label class="field">
-                                <span class="field-label">Phase</span>
-                                <select name="phase" class="field-input">
-                                    <option value="">Not known</option>
-                                    <option value="1-phase">1-phase</option>
-                                    <option value="3-phase">3-phase</option>
+                                <span class="field-label">
+                                    Kind <span class="font-normal text-muted-foreground">(optional)</span>
+                                </span>
+                                <select name="category_id" class="field-input" data-job-kind>
+                                    <option value="">Not sure yet</option>
                                 </select>
-                                <span class="field-error hidden" data-error-for="phase"></span>
+                                <span class="mt-1.5 block text-xs text-muted-foreground" data-job-kind-hint></span>
+                                <span class="field-error hidden" data-error-for="category_id"></span>
                             </label>
 
                             <label class="field">
@@ -161,19 +187,37 @@
                                 <span class="field-error hidden" data-error-for="model"></span>
                             </label>
 
-                            <label class="field sm:col-span-2">
+                            <label class="field">
                                 <span class="field-label">Serial number</span>
                                 <input type="text" name="serial_no" class="field-input font-mono" maxlength="60"
                                        autocomplete="off">
                                 <span class="mt-1.5 block text-xs text-muted-foreground">
-                                    The one field that identifies this motor rather than its kind — and the
+                                    The one field that identifies this one rather than its kind — and the
                                     one a customer quotes down the phone.
                                 </span>
                                 <span class="field-error hidden" data-error-for="serial_no"></span>
                             </label>
                         </div>
 
-                        <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                        {{-- What the chosen kind asks about. Empty and hidden
+                             until there is a kind, because the questions belong
+                             to it: a motor is described by a rating and a phase,
+                             a lamp by a wattage, and nothing sensible is asked of
+                             a thing nobody has named yet. --}}
+                        <div class="mt-5 hidden border-t border-border pt-5" data-job-specs-section>
+                            <h4 class="text-[0.8125rem] font-semibold text-foreground">
+                                Its specification
+                                <span class="font-normal text-muted-foreground">(all optional)</span>
+                            </h4>
+                            <p class="mt-1 text-xs text-muted-foreground">
+                                What this kind is described by, from the Category Master. Fill in whatever
+                                the plate says — nothing here is insisted on.
+                            </p>
+
+                            <div class="mt-3 grid gap-4 sm:grid-cols-2" data-job-specs></div>
+                        </div>
+
+                        <div class="mt-5 grid gap-4 border-t border-border pt-5 sm:grid-cols-2">
                             <label class="field">
                                 <span class="field-label">
                                     Promised back <span class="font-normal text-muted-foreground">(optional)</span>
@@ -256,7 +300,7 @@
             <div class="search-pill min-w-56 flex-1">
                 <x-icon name="search" :size="16" />
                 <input type="search" data-job-search class="w-full bg-transparent text-sm outline-none"
-                       placeholder="Job number, customer, serial number or complaint…"
+                       placeholder="Job number, customer, kind, serial number or complaint…"
                        aria-label="Search jobs">
             </div>
 
@@ -278,7 +322,7 @@
                                    tracking-wide text-muted-foreground">
                             <th class="px-4 py-3 font-semibold">Job</th>
                             <th class="px-4 py-3 font-semibold">Customer</th>
-                            <th class="px-4 py-3 font-semibold">Motor</th>
+                            <th class="px-4 py-3 font-semibold">What came in</th>
                             <th class="px-4 py-3 font-semibold">Complaint</th>
                             <th class="px-4 py-3 font-semibold">Status</th>
                             <th class="px-4 py-3 text-right font-semibold">Billed</th>

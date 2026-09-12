@@ -245,12 +245,54 @@ not change retrospectively because someone edited a config file.
 | `timezone` | ✅ | Transaction dates and the day book. Validated against the tz database |
 | `books_start_date` | ✅ | Go-live. Nothing posts before it — that period's closing position arrives as opening balances |
 | `currency` | ❌ | Display only. GST, HSN/SAC and the tax engine are India-specific, so anything but INR would format correctly and compute wrongly |
+| `favourite_modules` | ✅ | Which module cards sit at the top of the home screen. Presentation, and the only setting here that moves no figure and refuses nothing — see below |
 
 `Tenant::financialYearFor()` resolves the year containing a date, and
 `Tenant::acceptsPostingOn()` enforces go-live. Both live on the model so the
 April off-by-one — 10 February 2026 belongs to the year that *opened* on
 1 April 2025 — is computed in exactly one place. `FinancialYearTest` pins it
 down before any report depends on it.
+
+### Favourite modules — the cards at the top of home
+
+Home has one card per module that exists (§1.3), and there are enough of them now
+that the three a counter opens every day sit below the fold behind sixteen it
+does not. `favourite_modules` is the list that lifts them: a `json` column of
+module keys, in the order they are shown, capped at **eight**.
+
+Four decisions in it are worth knowing before changing any of them.
+
+**It belongs to the workshop, not to the user.** One list, set by whoever
+configures the workshop, seen by everybody who signs in to it. What each person
+sees of it narrows to their own grants without being stored per person, because
+`resources/js/favourites.js` only lifts a card the permission pass has left
+visible — so a clerk never heads their screen with a card they cannot open.
+
+**Reading it needs no grant.** It rides in the `tenant` block of `/auth/me`,
+which the dashboard already fetches before it paints anything: the favourites
+cost no second request, and a clerk holding no `READ:WORKSPACE` still gets the
+home screen their owner arranged. Writing it is `UPDATE:WORKSPACE`.
+
+**It is its own route, and a `PUT`.** A `PUT` because the body is the whole list
+— unstarring the last card sends `[]`, which has to be a real answer rather than
+an omission. Its own route because `PATCH /workspace` announces `ledger` on the
+data bus, correctly: the financial year and `books_start_date` decide what every
+held report *means*. Starring a card decides nothing of the sort, and sending it
+down that path would mark every held statement and every Insights panel stale on
+each click. `resources/js/data-bus.js` lists `/workspace/favourites` **ahead** of
+`/workspace` for that reason — first match wins.
+
+**Keys are checked against the registry**, exactly as the fragment route checks
+the key in its URL, and a key for a module that has since been switched off is
+filtered on the way *out* (`Tenant::favouriteModules()`) while the column keeps
+it. `enabled` is a deployment decision that gets reversed, and a workshop should
+not have to re-star a card because one was flipped off for a week.
+
+It is deliberately **absent from `Tenant::auditAttributes()`** — the only
+editable setting here that is. Everything else on that list changes what the
+application refuses, reports or charges; this changes which cards are at the top
+of one screen, and it is changed often enough that a row per star would bury the
+settings whose history somebody actually comes to History to read.
 
 ### GSTIN and state code
 
@@ -270,6 +312,7 @@ Added under `/api/v1`.
 | --- | --- | --- |
 | GET | `/workspace` | `READ:WORKSPACE` |
 | PATCH | `/workspace` | `UPDATE:WORKSPACE` |
+| PUT | `/workspace/favourites` | `UPDATE:WORKSPACE` |
 
 ### Platform administration
 

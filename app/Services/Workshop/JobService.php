@@ -11,12 +11,14 @@ use App\Exceptions\ResourceNotFoundException;
 use App\Exceptions\Workshop\InvalidJobLineException;
 use App\Exceptions\Workshop\InvalidJobStateException;
 use App\Models\Item;
+use App\Models\ItemCategory;
 use App\Models\ItemVariant;
 use App\Models\Party;
 use App\Models\Transaction;
 use App\Models\User;
 use App\Models\WorkshopJob;
 use App\Models\WorkshopJobPart;
+use App\Repositories\Contracts\ItemCategoryRepositoryInterface;
 use App\Repositories\Contracts\ItemRepositoryInterface;
 use App\Repositories\Contracts\ItemVariantRepositoryInterface;
 use App\Repositories\Contracts\PartyRepositoryInterface;
@@ -71,6 +73,7 @@ class JobService
         private readonly WorkshopJobRepositoryInterface $jobs,
         private readonly PartyRepositoryInterface $parties,
         private readonly ItemRepositoryInterface $items,
+        private readonly ItemCategoryRepositoryInterface $categories,
         private readonly ItemVariantRepositoryInterface $variants,
         private readonly TransactionService $transactions,
         private readonly BillService $bills,
@@ -89,7 +92,7 @@ class JobService
     {
         $page = $this->jobs->paginate($filters, $perPage);
 
-        $this->attachBilled(collect($page->items()));
+        $this->decorate(collect($page->items()));
 
         return $page;
     }
@@ -99,7 +102,7 @@ class JobService
         $job = $this->jobs->findWithDetail($id)
             ?? throw new ResourceNotFoundException('Job', $id);
 
-        $this->attachBilled(collect([$job]));
+        $this->decorate(collect([$job]));
 
         return $job;
     }
@@ -110,6 +113,79 @@ class JobService
     public function countsByStatus(): array
     {
         return $this->jobs->countsByStatus();
+    }
+
+    /**
+     * Everything a job carries that is not a column on its row.
+     *
+     * Both halves are attached rather than computed per row, and for one reason:
+     * each needs rows a per-row serialiser cannot see, so asking inside the
+     * resource would be two queries per job of every listing in the module
+     * (§7.2). One call site, so a new read path cannot get one and forget the
+     * other.
+     *
+     * @param  Collection<int, WorkshopJob>  $jobs
+     */
+    private function decorate(Collection $jobs): void
+    {
+        $this->attachBilled($jobs);
+        $this->attachSpecSchema($jobs);
+    }
+
+    /**
+     * Hang the words each job's specification is read in onto the models.
+     *
+     * `specs` is `{"hp": "7.5"}` — the same flat bag a variant stores, and just
+     * as unreadable on its own. What turns it into "Rating 7.5 HP" is the
+     * category that asked, and the labels and units live in `item_attributes`.
+     *
+     * **One query for the page**, over the handful of categories a page of jobs
+     * actually spans, rather than a lookup per row: a bench is mostly motors, so
+     * twenty-five jobs are typically two categories. Resolved through
+     * {@see ItemCategory::attributeSchema()}, which is the same method
+     * `GET /items/meta` publishes to the create form — one definition of what a
+     * kind of thing is described by, read by both (§4.4).
+     *
+     * Inactive attributes are included. An admin switches a field off when it
+     * stops being worth asking about; the jobs that already answered it still
+     * have to be able to say what the answer meant.
+     *
+     * @param  Collection<int, WorkshopJob>  $jobs
+     */
+    private function attachSpecSchema(Collection $jobs): void
+    {
+        $ids = $jobs->pluck('category_id')->filter()->unique()->values();
+
+        if ($ids->isEmpty()) {
+            return;
+        }
+
+        $schemas = [];
+
+        foreach ($ids as $id) {
+            $category = $this->categories->findWithSchema((int) $id);
+
+            if ($category === null) {
+                continue;
+            }
+
+            $order = 0;
+            $schema = [];
+
+            foreach ($category->resolvedAttributes(false) as $attribute) {
+                $schema[$attribute->key] = [
+                    'label' => $attribute->label,
+                    'suffix' => $attribute->suffix(),
+                    'order' => $order++,
+                ];
+            }
+
+            $schemas[(int) $id] = $schema;
+        }
+
+        foreach ($jobs as $job) {
+            $job->specSchema = $schemas[(int) $job->category_id] ?? null;
+        }
     }
 
     /**
@@ -179,11 +255,11 @@ class JobService
     }
 
     /* ---------------------------------------------------------------------
-     | Booking a motor in
+     | Booking something in
      |-------------------------------------------------------------------- */
 
     /**
-     * Book a motor in.
+     * Book something in.
      *
      * The number is taken inside a database transaction, under the same locked
      * counter every invoice number comes from — two motors on two benches
@@ -197,6 +273,7 @@ class JobService
     public function create(array $data, ?User $actor = null): WorkshopJob
     {
         $party = $this->requireCustomer((int) $data['party_id']);
+        $kind = $this->resolveKind($data['category_id'] ?? null);
         $receivedDate = $data['received_date'] ?? now()->toDateString();
 
         $job = DB::transaction(fn () => $this->jobs->create([
@@ -206,11 +283,14 @@ class JobService
             ),
             'party_id' => $party->id,
             'item_id' => $this->resolveItemId($data['item_id'] ?? null),
-            'hp' => $this->trimmed($data['hp'] ?? null),
+            'category_id' => $kind?->id,
+            // Copied, not joined — the migration's reason, and the same one the
+            // brand and the model beside it are copied for.
+            'kind_label' => $kind?->name,
             'brand' => $this->trimmed($data['brand'] ?? null),
             'model' => $this->trimmed($data['model'] ?? null),
             'serial_no' => $this->trimmed($data['serial_no'] ?? null),
-            'phase' => $this->trimmed($data['phase'] ?? null),
+            'specs' => $this->normaliseSpecs($data['specs'] ?? null, $kind),
             'complaint' => trim((string) $data['complaint']),
             'received_date' => $receivedDate,
             'promised_date' => $data['promised_date'] ?? null,
@@ -244,7 +324,7 @@ class JobService
 
         $attributes = [];
 
-        foreach (['hp', 'brand', 'model', 'serial_no', 'phase', 'notes'] as $field) {
+        foreach (['brand', 'model', 'serial_no', 'notes'] as $field) {
             if (array_key_exists($field, $data)) {
                 $attributes[$field] = $this->trimmed($data[$field]);
             }
@@ -252,6 +332,31 @@ class JobService
 
         if (array_key_exists('item_id', $data)) {
             $attributes['item_id'] = $this->resolveItemId($data['item_id']);
+        }
+
+        /*
+        | The kind and its answers move together, always.
+        |
+        | Correcting a job booked in as a motor to a cooler leaves every motor
+        | answer meaningless — `hp` is not a field a cooler has — so `specs` is
+        | filtered against whichever category the job ends up under, and a
+        | request that changes the kind without resending the answers clears
+        | them rather than keeping a bag nothing can read.
+        */
+        $kind = array_key_exists('category_id', $data)
+            ? $this->resolveKind($data['category_id'])
+            : $job->category;
+
+        if (array_key_exists('category_id', $data)) {
+            $attributes['category_id'] = $kind?->id;
+            $attributes['kind_label'] = $kind?->name;
+        }
+
+        if (array_key_exists('specs', $data) || array_key_exists('category_id', $data)) {
+            $attributes['specs'] = $this->normaliseSpecs(
+                $data['specs'] ?? ($kind?->id === $job->category_id ? $job->specs : null),
+                $kind,
+            );
         }
 
         if (array_key_exists('complaint', $data)) {
@@ -549,7 +654,7 @@ class JobService
         return [
             'date' => $date ?? now()->toDateString(),
             'party_id' => (int) $job->party_id,
-            'notes' => sprintf('%s — %s', $job->job_no, $job->motorLabel()),
+            'notes' => sprintf('%s — %s', $job->job_no, $job->equipmentLabel()),
             'items' => $parts->map(fn (WorkshopJobPart $part) => [
                 'item_id' => (int) $part->item_id,
                 'variant_id' => $part->variant_id === null ? null : (int) $part->variant_id,
@@ -760,6 +865,86 @@ class JobService
             ?? throw InvalidJobLineException::unknownItem((int) $itemId);
 
         return (int) $item->id;
+    }
+
+    /**
+     * Which kind of thing came in.
+     *
+     * The catalogue's categories, not a second list of them — see
+     * {@see WorkshopJob::category()}. Held to the ones that can be a physical
+     * object: `holds_stock = false` means, in this application, produced at the
+     * moment it is sold, and nobody wheels an hour of labour onto a bench. That
+     * is a property of the category rather than a flag invented for this module,
+     * which is why there is no `repairable` column to keep in step with it.
+     *
+     * Archived categories are refused for the same reason the brand dropdown
+     * omits them: a category switched off is still the answer on the jobs that
+     * carry it, and must not be the answer to a new one.
+     */
+    private function resolveKind(mixed $categoryId): ?ItemCategory
+    {
+        if ($categoryId === null || $categoryId === '') {
+            return null;
+        }
+
+        $category = $this->categories->findWithSchema((int) $categoryId);
+
+        if ($category === null || ! $category->is_active || ! $category->holds_stock) {
+            throw new ResourceNotFoundException('Item category', (int) $categoryId);
+        }
+
+        return $category;
+    }
+
+    /**
+     * What was recorded about the thing, filtered to what its kind actually asks
+     * about and written in the order the kind asks it.
+     *
+     * Three decisions, and each is the opposite of what the catalogue does to
+     * the same bag on a variant.
+     *
+     * **Nothing is required.** `is_required` on an attribute says a *product*
+     * cannot exist without it — a motor with no rating is not a catalogue entry
+     * anybody could sell. A job is a physical object that is already on the
+     * bench: a pump is wheeled in at four in the afternoon by a driver who knows
+     * none of it, and a form that refused to book it in is a form that gets a job
+     * card written on paper instead. So the intake asks and never insists.
+     *
+     * **Nothing is coerced or checked against the options.** The catalogue
+     * describes what the workshop deals in and can hold its own values to it;
+     * this describes a competitor's forty-year-old unit, and a plate reading a
+     * voltage nobody put in the dropdown is a fact about the object rather than a
+     * mistake to refuse.
+     *
+     * **Keys the kind does not ask about are dropped.** A bag whose keys no
+     * schema explains cannot be labelled, printed or edited — {@see
+     * WorkshopJob::resolvedSpecs()} would have nothing to read it by — so a job
+     * with no kind holds no specification at all. Inactive attributes still
+     * count: an admin switching a field off must not blank it on the next edit
+     * of every job that answered it.
+     *
+     * @param  mixed  $raw
+     * @return array<string, string>|null
+     */
+    private function normaliseSpecs(mixed $raw, ?ItemCategory $kind): ?array
+    {
+        if ($kind === null || ! is_array($raw)) {
+            return null;
+        }
+
+        $specs = [];
+
+        foreach ($kind->resolvedAttributes(false) as $attribute) {
+            $value = $this->trimmed($raw[$attribute->key] ?? null);
+
+            if ($value !== null) {
+                $specs[$attribute->key] = $value;
+            }
+        }
+
+        // Absent rather than an empty object, so "nothing was recorded" reads the
+        // same way it does everywhere else on this row.
+        return $specs === [] ? null : $specs;
     }
 
     /**

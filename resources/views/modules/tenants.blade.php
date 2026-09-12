@@ -67,9 +67,6 @@
             </div>
 
             <div class="max-h-[65vh] space-y-4 overflow-y-auto px-6 py-5">
-                <p class="hidden rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-3 text-[0.8125rem] text-rose-700"
-                   data-form-banner role="alert"></p>
-
                 <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div>
                         <label for="tenant-name" class="field-label">Workshop name</label>

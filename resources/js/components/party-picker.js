@@ -200,7 +200,11 @@ export function mountPartyPicker(host, { role = 'customer', onSelect = () => {},
         try {
             const { data } = await auth.call(
                 `/parties?${roled ? `role=${role}&` : ''}is_active=1&per_page=10`
-                + `&search=${encodeURIComponent(term)}`
+                + `&search=${encodeURIComponent(term)}`,
+                // Debounced against typing — see `quiet` in auth-client. The
+                // dropdown is the feedback here; a bar at the top of the screen
+                // flickering once per keystroke is not.
+                { quiet: true },
             );
 
             state.rows = data;

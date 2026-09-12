@@ -56,7 +56,10 @@ import { mountPaymentRows } from './payment-rows';
 import { mountStaffAttribution } from './staff-attribution';
 import { initQuickItem, openQuickItem } from './quick-item';
 import { initQuickParty, openQuickParty } from './quick-party';
-import { $, $$, debounce, esc, formatMoney, hideModal, isZeroAmount, showModal, toast } from '../ui';
+import {
+    $, $$, clearFormErrors, debounce, esc, formatMoney, hideModal, isZeroAmount,
+    showFormErrors, showModal, toast,
+} from '../ui';
 
 /**
  * Mount the document form into a host that carries the markup from
@@ -845,6 +848,18 @@ export async function mountBillDocument(root, {
                     // the discount on the panel is the discount on the invoice.
                     ...billDiscountPayload(),
                 },
+                /*
+                | Debounced against typing — see `quiet` in auth-client.
+                |
+                | This runs every 350ms through a whole line being entered, and
+                | it is also the one POST in the application that writes nothing,
+                | which is why data-bus already refuses to treat it as a write.
+                | The global bar takes the same exemption for the same reason:
+                | the totals panel says the figures are being worked out, right
+                | where somebody is looking, and a strobe at the top of the
+                | screen adds nothing to that.
+                */
+                quiet: true,
             });
 
             if (!settle()) return;
@@ -1281,7 +1296,7 @@ export async function mountBillDocument(root, {
         if (state.posting) return;
 
         state.posting = true;
-        clearErrors();
+        clearFormErrors(root);
 
         const button = post ? $('[data-confirm-post]') : el('[data-draft]');
         const idle = button.textContent;
@@ -1311,7 +1326,7 @@ export async function mountBillDocument(root, {
             onPosted(response);
         } catch (error) {
             hideModal('#confirm-bill-modal');
-            paintError(error);
+            paintError(error, post);
         } finally {
             state.posting = false;
             button.disabled = false;
@@ -1320,34 +1335,23 @@ export async function mountBillDocument(root, {
     }
 
     /**
-     * Put an API failure where somebody will see it — §27.
+     * Put an API failure where somebody will see it — §3.10.
      *
-     * Field errors go beside the field they are about; everything else becomes a
-     * toast carrying the server's own sentence. The messages are already written
-     * in plain language on the server ("Only 5 PCS available in stock."), so
-     * there is deliberately no translation table here: a second copy of the
-     * wording is a second thing to keep in step, and the copy is what goes stale.
+     * The shared plumbing, not a copy of it: fields are marked where they are, a
+     * banner is painted under the CTA and the same sentence goes to the alert
+     * top right. The messages are already written in plain language on the
+     * server ("Only 5 PCS available in stock."), so there is deliberately no
+     * translation table here — a second copy of the wording is a second thing to
+     * keep in step, and the copy is what goes stale.
+     *
+     * The anchor is named rather than found. This is not a `<form>`, so there is
+     * no `[type=submit]` to look for; and the button actually pressed was
+     * `[data-confirm-post]` on a confirmation this has just closed, which would
+     * put the message on a dialog nobody can see any more. The document's own
+     * Post — or Save draft — is where somebody is looking when it comes back.
      */
-    function paintError(error) {
-        if (error.fields) {
-            Object.entries(error.fields).forEach(([field, messages]) => {
-                const slot = el(`[data-error-for="${field.split('.')[0]}"]`);
-
-                if (slot) {
-                    slot.textContent = messages[0];
-                    slot.classList.remove('hidden');
-                }
-            });
-        }
-
-        toast(error.message, 'error');
-    }
-
-    function clearErrors() {
-        $$('[data-error-for]', root).forEach((slot) => {
-            slot.textContent = '';
-            slot.classList.add('hidden');
-        });
+    function paintError(error, post) {
+        showFormErrors(root, error, el(post ? '[data-post]' : '[data-draft]'));
     }
 
     /* ---------------------------------------------------------------------

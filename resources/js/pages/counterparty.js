@@ -4,7 +4,7 @@ import {
 } from '../components/party-position';
 import { initQuickParty, openQuickParty, quickPartyForm } from '../components/quick-party';
 import { can } from '../permissions';
-import { openModule } from '../shell';
+import { clearModuleParams, moduleParams, openModule } from '../shell';
 import {
     $, $$, confirmAction, debounce, esc, formatDate, formatMoney,
     hideModal, isZeroAmount, showModal, tableMessage, toast,
@@ -1451,6 +1451,44 @@ export function initCounterpartyPage(config) {
         workspace?.refresh();
     }
 
+    /**
+     * `#customers?party=12`, `#vendors?party=12` — a counterparty picked out of
+     * the topbar's search.
+     *
+     * The drawer reads its row out of the loaded list rather than refetching it,
+     * so a link that arrives before the list has ever been asked for has to
+     * bring it up first (§2A.7 fetches it there). That is also the right surface
+     * to land on: closing the drawer leaves somebody on the row they came for
+     * rather than on a blank create form.
+     *
+     * Spent once acted on, or a refresh or a Back would reopen a drawer somebody
+     * has just closed.
+     */
+    async function applyDeepLink(params) {
+        const id = params.get('party');
+
+        if (!id) return;
+
+        clearModuleParams();
+
+        await workspace?.showList();
+
+        /*
+        | The two lists are filtered on role membership server side, so a record
+        | that holds only the other role is legitimately not here — which is the
+        | one case worth naming, because the same search would have offered the
+        | other card. Archived counterparties are held (`is_active` is not sent),
+        | so this is not that.
+        */
+        if (!findParty(id)) {
+            toast(`That record is not on the ${state.config.noun} list.`, 'error');
+
+            return;
+        }
+
+        openDrawer(id);
+    }
+
     function runAction(action, id) {
         if (action === 'open') openDrawer(id);
         if (action === 'statement') openLedger(id);
@@ -1709,5 +1747,11 @@ export function initCounterpartyPage(config) {
                 $('#quick-party-name', formSlot)?.focus();
             },
         });
+
+        await applyDeepLink(moduleParams());
+
+        // Reopening an already-mounted module cannot run this function again, so
+        // a second deep link is announced on the root instead.
+        root.addEventListener('module:params', (event) => applyDeepLink(event.detail));
     };
 }

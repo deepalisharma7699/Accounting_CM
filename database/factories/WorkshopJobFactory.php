@@ -3,6 +3,7 @@
 namespace Database\Factories;
 
 use App\Enums\WorkshopJobStatus;
+use App\Models\ItemCategory;
 use App\Models\Party;
 use App\Models\WorkshopJob;
 use Illuminate\Database\Eloquent\Factories\Factory;
@@ -29,11 +30,22 @@ class WorkshopJobFactory extends Factory
             'job_no' => 'JOB/26-27/'.fake()->unique()->numberBetween(1, 99999),
             'party_id' => Party::factory()->customer(),
             'item_id' => null,
-            'hp' => fake()->randomElement(['1', '2', '5', '7.5', '10']),
+            /*
+            | A motor, because most of a bench is — but named rather than
+            | *categorised*, deliberately. `category_id` stays null so a factory
+            | job costs no catalogue rows, and `kind_label` is the copy a card
+            | prints, which is exactly what the column is for. A test that needs
+            | the questions a kind asks uses ofKind() and supplies one.
+            */
+            'category_id' => null,
+            'kind_label' => 'Motor',
+            'specs' => [
+                'hp' => fake()->randomElement(['1', '2', '5', '7.5', '10']),
+                'phase' => fake()->randomElement(['1', '3']),
+            ],
             'brand' => fake()->randomElement(['Crompton', 'Kirloskar', 'Havells', 'ABB']),
             'model' => fake()->bothify('??-####'),
             'serial_no' => fake()->bothify('SN########'),
-            'phase' => fake()->randomElement(['1-phase', '3-phase']),
             'complaint' => fake()->randomElement([
                 'Winding burnt, not starting',
                 'Humming but not turning',
@@ -66,6 +78,21 @@ class WorkshopJobFactory extends Factory
     public function cancelled(): static
     {
         return $this->withStatus(WorkshopJobStatus::Cancelled);
+    }
+
+    /**
+     * Booked in as a kind the workshop actually defines, with the answers that
+     * kind asks for.
+     *
+     * @param  array<string, string>  $specs
+     */
+    public function ofKind(ItemCategory $category, array $specs = []): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'category_id' => $category->id,
+            'kind_label' => $category->name,
+            'specs' => $specs === [] ? null : $specs,
+        ]);
     }
 
     public function forParty(Party $party): static

@@ -43,16 +43,46 @@
         <span class="crumb-current" data-crumb-module hidden></span>
     </nav>
 
+    {{--
+        The one search box in the application that is not over a list.
+
+        Every module has its own, and each of them can only be asked from inside
+        that module. This one is asked from anywhere and answers with the record
+        rather than with a filtered table: picking a result opens the module that
+        owns it, in the mounted shell, with a deep link that opens its drawer
+        (§1.4). The behaviour is resources/js/search.js.
+
+        `relative` so the results panel can hang off the pill, and the whole
+        thing is one `data-search-root` because a click outside it is what closes
+        the panel.
+    --}}
     <div class="topbar-search">
-        <div class="search-pill">
-            <x-icon name="search" :size="16" />
-            <input type="search"
-                   class="w-full"
-                   placeholder="Search bills, customers, items…"
-                   aria-label="Search"
-                   data-search>
-            <kbd class="hidden rounded-md border border-border bg-card px-1.5 py-0.5 font-sans
-                        text-[0.6875rem] font-medium text-muted-foreground sm:block">⌘K</kbd>
+        <div class="relative" data-search-root>
+            <div class="search-pill">
+                <x-icon name="search" :size="16" />
+                <input type="search"
+                       class="w-full"
+                       placeholder="Search bills, customers, items…"
+                       aria-label="Search"
+                       autocomplete="off"
+                       role="combobox"
+                       aria-expanded="false"
+                       aria-autocomplete="list"
+                       aria-controls="search-results"
+                       data-search>
+                {{-- The glyph is corrected to "Ctrl K" off a Mac by search.js:
+                     a shortcut hint naming a key the keyboard does not have is
+                     worse than no hint. --}}
+                <kbd class="hidden whitespace-nowrap rounded-md border border-border bg-card px-1.5 py-0.5
+                            font-sans text-[0.6875rem] font-medium text-muted-foreground sm:block"
+                     data-search-hint>⌘K</kbd>
+            </div>
+
+            <div id="search-results"
+                 class="search-panel hidden"
+                 role="listbox"
+                 aria-label="Search results"
+                 data-search-panel></div>
         </div>
     </div>
 

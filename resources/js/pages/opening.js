@@ -2,8 +2,8 @@ import auth from '../auth-client';
 import { onChange } from '../data-bus';
 import { can } from '../permissions';
 import {
-    $, confirmAction, esc, formatDate, formatMoney, setSubmitting, showFormErrors,
-    clearFormErrors, tableMessage, toast,
+    $, clearFormErrors, confirmAction, esc, formatDate, formatMoney, setSubmitting,
+    showActionError, showFormErrors, showFormMessage, tableMessage, toast,
 } from '../ui';
 import { mountWorkspace } from '../workspace';
 
@@ -251,7 +251,7 @@ async function preview(event) {
     const body = payload();
 
     if (!body.csv.trim()) {
-        toast('Paste the rows you want to declare first.', 'error');
+        showFormMessage(openingForm, 'Paste the rows you want to declare first.');
 
         return;
     }
@@ -371,7 +371,7 @@ function invalidate() {
 
 async function commit() {
     if (!state.checked || inForm('#opening-csv').value !== state.checkedCsv) {
-        toast('Check the rows again — they have changed since the last look.', 'error');
+        showActionError(inForm('#import-opening'), 'Check the rows again — they have changed since the last look.');
         invalidate();
 
         return;

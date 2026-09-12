@@ -1,10 +1,14 @@
 import auth from '../auth-client';
+import {
+    collectAttributes, defaultsFor, describeAttributes, renderAttributeFields,
+} from '../components/attribute-fields';
 import { formatQuantity } from '../components/badge';
 import {
     averageCostOf, positionStatus, rollUpPositions, statusOfRow, stockStatusBadge,
 } from '../components/stock-position';
 import { can } from '../permissions';
 import { initStockAdjust, openStockAdjust } from '../components/stock-adjust';
+import { clearModuleParams, moduleParams } from '../shell';
 import {
     $, $$, clearFormErrors, confirmAction, debounce, esc, formatDate, formatMoney,
     hideModal, setSubmitting, showFormErrors, showModal, tableMessage, toast,
@@ -1526,7 +1530,7 @@ function applyTypeToForm({ editing }) {
 
     $('#item-type-hint', form).textContent = editing
         ? 'Fixed once the product exists: changing it would reinterpret everything recorded against it.'
-        : (category.description || `Asks for ${describeAttributes(category)}.`);
+        : (category.description || `Asks for ${describeAttributes(category.attributes)}.`);
 
     // What this category asks for, said once above the blocks that ask it.
     const keys = Object.keys(category.attributes ?? {});
@@ -1538,22 +1542,6 @@ function applyTypeToForm({ editing }) {
     // quantity is counted in, and whether its stock boxes apply at all. On an
     // edit there are no blocks, and this does nothing.
     reindexVariants();
-}
-
-/**
- * The pre-filled values a category's fields declare.
- *
- * Applied only on create. Filling defaults into an edit form would quietly
- * rewrite a product that had deliberately been left blank.
- */
-function defaultsFor(schema) {
-    const values = {};
-
-    Object.keys(schema).forEach((key) => {
-        if (schema[key].default !== undefined) values[key] = schema[key].default;
-    });
-
-    return values;
 }
 
 /**
@@ -1592,14 +1580,6 @@ function paintUnitSuffix() {
     $$('[data-uom-suffix]', form).forEach((node) => {
         node.textContent = unit?.symbol ?? '';
     });
-}
-
-function describeAttributes(category) {
-    const keys = Object.keys(category.attributes ?? {});
-
-    return keys.length
-        ? keys.map((key) => category.attributes[key].label.toLowerCase()).join(', ')
-        : 'no specification fields yet';
 }
 
 /* -------------------------------------------------------------------------
@@ -2352,128 +2332,6 @@ async function saveVariantBlock(itemId, block) {
  | ---------------------------------------------------------------------- */
 
 /**
- * Build the specification inputs from the server's schema.
- *
- * **Nothing here is written per category.** The control drawn for each field
- * comes from its declared data type — a select where the values are genuinely
- * fixed, a date picker for a date, a numeric box for a rating — and the labels,
- * units, options and bounds all come from the same payload. Adding "Lumens" to a
- * category is therefore a change to rows in `item_attributes` and to nothing in
- * this file, which is the module's whole acceptance criterion.
- *
- * @param {HTMLElement} host   Where to draw them — a variant block or the variant dialog.
- * @param {object} schema      The category's resolved question set, keyed by field.
- * @param {object} values      Current values, keyed by field.
- * @param {string} prefix      What to build the input ids from. The create form
- *                             draws this set once per variant block, so a fixed
- *                             `attr-hp` would be an id repeated down the page and
- *                             a `<label for>` pointing into somebody else's block.
- */
-function renderAttributeFields(host, schema = {}, values = {}, prefix = 'attr') {
-    const keys = Object.keys(schema);
-
-    if (!keys.length) {
-        host.innerHTML = `
-            <p class="sm:col-span-2 rounded-[10px] border border-border bg-secondary/40 px-3.5 py-2.5
-                      text-[0.8125rem] text-secondary-foreground">
-                This category has no specification fields. Add them under Categories if it should have any.
-            </p>`;
-
-        return;
-    }
-
-    host.innerHTML = keys.map((key) => {
-        const field = schema[key];
-        const value = values[key] ?? '';
-        const suffix = field.suffix
-            ? ` <span class="font-normal text-muted-foreground">(${esc(field.suffix)})</span>`
-            : '';
-
-        const help = field.help
-            ? `<p class="mt-1.5 text-xs text-muted-foreground">${esc(field.help)}</p>`
-            : '';
-
-        return `
-            <div>
-                <label class="field-label" for="${esc(prefix)}-${esc(key)}">
-                    ${esc(field.label)}${suffix}
-                    ${field.required ? '' : '<span class="font-normal text-muted-foreground">(optional)</span>'}
-                </label>
-                ${attributeInput(key, field, value, prefix)}
-                ${help}
-            </div>`;
-    }).join('');
-}
-
-/**
- * The control one field asks for.
- *
- * The data types are the *system's* capability rather than the shop's vocabulary
- * — the set of inputs this function knows how to draw — which is exactly why they
- * stayed an enum on the server while the categories and units became tables.
- */
-function attributeInput(key, field, value, prefix = 'attr') {
-    const id = `${esc(prefix)}-${esc(key)}`;
-    const common = `id="${id}" class="field-input" data-attribute="${esc(key)}"`;
-
-    switch (field.type) {
-        case 'dropdown':
-            return `
-                <select ${common}>
-                    <option value="">Choose…</option>
-                    ${(field.values ?? []).map((option) => `
-                        <option value="${esc(option)}" ${String(option) === String(value) ? 'selected' : ''}>
-                            ${esc(option)}
-                        </option>`).join('')}
-                </select>`;
-
-        case 'boolean':
-            // A select rather than a checkbox, because a checkbox has two states
-            // and this field has three: yes, no, and never answered. A tick box
-            // would record "no" for every field nobody looked at.
-            return `
-                <select ${common}>
-                    <option value="">—</option>
-                    <option value="yes" ${String(value) === 'yes' ? 'selected' : ''}>Yes</option>
-                    <option value="no" ${String(value) === 'no' ? 'selected' : ''}>No</option>
-                </select>`;
-
-        case 'date':
-            return `<input type="date" ${common} value="${esc(value)}">`;
-
-        case 'number':
-        case 'decimal': {
-            const step = field.type === 'number' ? '1' : 'any';
-            const min = field.min !== undefined ? ` min="${esc(field.min)}"` : '';
-            const max = field.max !== undefined ? ` max="${esc(field.max)}"` : '';
-
-            return `<input type="number" step="${step}"${min}${max} inputmode="${
-                field.type === 'number' ? 'numeric' : 'decimal'
-            }" ${common} value="${esc(value)}" autocomplete="off">`;
-        }
-
-        default:
-            return `<input type="text" ${common} value="${esc(value)}" autocomplete="off">`;
-    }
-}
-
-function collectAttributes(host) {
-    const bag = {};
-
-    if (!host) return bag;
-
-    $$('[data-attribute]', host).forEach((input) => {
-        const value = String(input.value ?? '').trim();
-
-        // Blank is absent, not "". A form submits every field it renders, and
-        // storing an untouched box would be noise every reader has to filter out.
-        if (value !== '') bag[input.dataset.attribute] = value;
-    });
-
-    return bag;
-}
-
-/**
  * Correct what is on the shelf under one variant — the shared dialog, level 3
  * over the drawer.
  *
@@ -3221,7 +3079,14 @@ export default async function initItems() {
 
     if (canWrite) await openItemForm();
 
-    workspace = mountWorkspace(itemForm.closest('[data-module-root]'), {
+    /*
+    | Held before the mount, like the two surfaces above. A read-only caller
+    | lands on the list, which detaches the form — and `itemForm.closest()` then
+    | walks up a subtree that no longer reaches the module root.
+    */
+    const moduleRoot = itemForm.closest('[data-module-root]');
+
+    workspace = mountWorkspace(moduleRoot, {
         key: 'items',
         title: 'Items',
         formSubtitle: 'Add an item to the catalogue, or show what is already there.',
@@ -3257,6 +3122,45 @@ export default async function initItems() {
             $('#item-name', itemForm)?.focus();
         },
     });
+
+    await applyDeepLink(moduleParams());
+
+    // Reopening an already-mounted module cannot run this function again, so a
+    // second deep link is announced on the root instead.
+    moduleRoot.addEventListener('module:params', (event) => applyDeepLink(event.detail));
+}
+
+/**
+ * `#items?item=12` — an item picked out of the topbar's search.
+ *
+ * Unlike a bill's drawer, this one reads its row out of the loaded catalogue
+ * rather than refetching it, so a link that arrives before the list has ever
+ * been asked for has to bring it up first (§2A.7 fetches it there). That is also
+ * the right surface to land on: closing the drawer leaves somebody on the row
+ * they came for rather than on a blank create form.
+ *
+ * Spent once acted on, or a refresh or a Back would reopen a drawer somebody has
+ * just closed.
+ */
+async function applyDeepLink(params) {
+    const id = params.get('item');
+
+    if (!id) return;
+
+    clearModuleParams();
+
+    await workspace?.showList();
+
+    // Archived items are in the catalogue this holds — `is_active` is
+    // deliberately not sent — so a miss here means the item has been deleted
+    // since the results were painted. Said rather than swallowed (§3.4).
+    if (!state.items.some((row) => String(row.id) === String(id))) {
+        toast('That item is no longer in the catalogue.', 'error');
+
+        return;
+    }
+
+    await openDrawer(id);
 }
 
 /** The row menu's entries, in one place so the menu markup stays declarative. */

@@ -71,6 +71,10 @@ class EloquentWorkshopJobRepository implements WorkshopJobRepositoryInterface
                         ->orWhere('serial_no', 'like', $term)
                         ->orWhere('brand', 'like', $term)
                         ->orWhere('model', 'like', $term)
+                        // The kind, copied onto the row at intake — so "cooler"
+                        // finds the coolers without a join, which is the whole
+                        // reason the label is copied rather than looked up.
+                        ->orWhere('kind_label', 'like', $term)
                         ->orWhere('complaint', 'like', $term)
                         ->orWhereHas('party', fn ($party) => $party->where('name', 'like', $term)
                             ->orWhere('phone', 'like', $term));

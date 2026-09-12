@@ -12,6 +12,8 @@ use App\Http\Requests\WorkshopJob\StoreJobRequest;
 use App\Http\Requests\WorkshopJob\UpdateJobRequest;
 use App\Http\Requests\WorkshopJob\UpdateJobStatusRequest;
 use App\Http\Resources\TransactionResource;
+use App\Models\ItemCategory;
+use App\Repositories\Contracts\ItemCategoryRepositoryInterface;
 use App\Http\Resources\WorkshopJobResource;
 use App\Services\Accounting\BillService;
 use App\Services\Staff\WorkAttributionService;
@@ -41,6 +43,7 @@ class WorkshopJobController extends Controller
 {
     public function __construct(
         private readonly JobService $jobs,
+        private readonly ItemCategoryRepositoryInterface $categories,
         private readonly BillService $bills,
         private readonly WorkAttributionService $attribution,
     ) {}
@@ -63,10 +66,11 @@ class WorkshopJobController extends Controller
     /**
      * GET /api/v1/workshop-jobs/meta
      *
-     * The statuses, what may follow each, and which of them a bill can be raised
-     * from — so a client builds its pipeline control and its filters from the
+     * The statuses, what may follow each, which of them a bill can be raised
+     * from, and **what kinds of thing this workshop takes in** — so a client
+     * builds its pipeline control, its filters and its intake form from the
      * server's answer rather than from a hard-coded copy that drifts the day a
-     * state is added.
+     * state or a category is added.
      */
     public function meta(): JsonResponse
     {
@@ -75,7 +79,56 @@ class WorkshopJobController extends Controller
             // The tab badges, in the same call. One grouped query rather than a
             // count request per tab — the same shape as `transactions/counts`.
             'counts' => $this->jobs->countsByStatus(),
+            'kinds' => $this->kinds(),
         ]);
+    }
+
+    /**
+     * What can be booked in, and what to ask about each — the catalogue's own
+     * vocabulary, published where the bench can read it.
+     *
+     * ## Why it is here and not fetched from `GET /items/meta`
+     *
+     * Because that route is behind `READ:ITEMS` and this one is behind
+     * `READ:WORKSHOP_JOBS`, and the person booking a motor in is exactly the
+     * person who may hold the second and not the first. Fetching the intake
+     * form's fields from the items route would 403 the form for its main user —
+     * the same trap M22's attribution pickers avoid by riding on
+     * `GET /transactions/meta` rather than on `/staff`.
+     *
+     * ## Why the payload is `/items/meta`'s shape
+     *
+     * Because one renderer draws both — `components/attribute-fields.js` — and a
+     * second shape would be a second contract for it to go stale against (§4.4).
+     *
+     * ## Why `holds_stock` is the filter
+     *
+     * A job is a physical object on a bench. In this application a category that
+     * holds no stock is one whose things are *produced at the moment they are
+     * sold* — an hour of rewinding — and nobody wheels one of those through a
+     * door. That is a property of the category rather than a flag invented for
+     * this module, which is why there is no `repairable` column to keep in step
+     * with it. Everything else a workshop has defined is offered, including
+     * categories it has never stocked a product under: describing what comes in
+     * for repair is exactly what a category is for.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function kinds(): array
+    {
+        return $this->categories->all(['is_active' => true])
+            ->filter(fn (ItemCategory $category) => (bool) $category->holds_stock)
+            ->map(fn (ItemCategory $category) => [
+                'value' => (string) $category->id,
+                'id' => (int) $category->id,
+                'label' => $category->name,
+                'description' => $category->description,
+                // Keyed by attribute, with the label, the data type, the fixed
+                // values where a fixed set exists and the unit to print beside
+                // the box. A subcategory's set already has its parent's folded
+                // in.
+                'attributes' => (object) $category->attributeSchema(),
+            ])->values()->all();
     }
 
     /**
@@ -111,7 +164,7 @@ class WorkshopJobController extends Controller
                 'job' => [
                     'id' => $record->id,
                     'job_no' => $record->job_no,
-                    'motor' => $record->motorLabel(),
+                    'equipment' => $record->equipmentLabel(),
                     'status' => $record->status->value,
                     'is_billable' => $record->isBillable(),
                 ],

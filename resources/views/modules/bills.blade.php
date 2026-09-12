@@ -47,9 +47,6 @@
 
         <form id="expense-form" novalidate class="space-y-4">
 
-            <p class="hidden rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-3 text-[0.8125rem]
-                      text-rose-700" data-form-banner role="alert"></p>
-
             <section class="surface p-5 sm:p-6">
                 <h3 class="text-sm font-bold text-foreground">What was spent</h3>
                 <p class="mt-1 text-[0.8125rem] text-muted-foreground">

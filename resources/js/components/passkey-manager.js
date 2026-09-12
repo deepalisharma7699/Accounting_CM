@@ -66,9 +66,13 @@ export function mountPasskeyManager(root) {
         label.textContent = busy ? busyLabel : idleLabel;
     };
 
+    // The drawer's own line, under the enrol button, plus the alert top right —
+    // the two places every refusal in this application is shown.
     const showError = (message) => {
         error.textContent = message || '';
         error.classList.toggle('hidden', !message);
+
+        if (message) toast(message, 'error');
     };
 
     /* -------------------------------------------------------------------- */

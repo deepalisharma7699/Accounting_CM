@@ -1,9 +1,11 @@
 import auth from './auth-client';
 import { mountPasskeyManager } from './components/passkey-manager';
+import { initFavourites } from './favourites';
 import passkeys from './passkeys';
 import { applyPermissionGates, setGrants, setWorkspace } from './permissions';
+import { focusSearch, initSearch } from './search';
 import { initShell } from './shell';
-import { $, $$, initModals, showModal } from './ui';
+import { $, $$, clearFormErrors, initModals, showFormErrors, showModal, toast } from './ui';
 
 /* -------------------------------------------------------------------------
  | Chrome
@@ -92,7 +94,9 @@ function initChrome() {
     document.addEventListener('keydown', (event) => {
         if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
             event.preventDefault();
-            $('[data-search]')?.focus();
+            // Focus *and* select, so a second press retypes the last term rather
+            // than dropping the caret into the middle of it — see search.js.
+            focusSearch();
         }
 
         // The menu is the innermost thing on screen while it is open, so a press
@@ -103,6 +107,7 @@ function initChrome() {
 
     initLogout();
     initSecurityDrawer();
+    initSearch();
 }
 
 /**
@@ -166,41 +171,23 @@ function initLogout() {
  | ---------------------------------------------------------------------- */
 
 /**
- * Shared plumbing for the two credential forms: field errors, banner, busy
- * state and the password reveal. Only the request and the destination differ.
+ * Shared plumbing for the two credential forms: field errors, busy state and
+ * the password reveal. Only the request and the destination differ.
+ *
+ * The refusal itself is `showFormErrors()` from ui.js, the same call every form
+ * behind the sign-in makes — so a wrong password is reported where a rejected
+ * expense is: marked on the field, stated under the button that was pressed,
+ * and repeated in the alert top right. These two forms used to carry a banner
+ * of their own at the top of the form and a second set of field-error hooks,
+ * which is two conventions for one thing (§4.4).
+ *
+ * The *busy* state stays local. `setSubmitting()` swaps a button's text, and
+ * these two buttons hold a spinner and a label element rather than text.
  */
-function initAuthForm(form, { bannerId, idleLabel, busyLabel, submit, redirectTo }) {
-    const banner = $(bannerId);
+function initAuthForm(form, { idleLabel, busyLabel, submit, redirectTo }) {
     const button = $('[data-submit]', form);
     const spinner = $('[data-spinner]', form);
     const label = $('[data-submit-label]', form);
-
-    const clearErrors = () => {
-        banner.classList.add('hidden');
-        banner.classList.remove('flex');
-        $$('[data-field-error]', form).forEach((el) => {
-            el.textContent = '';
-            el.classList.add('hidden');
-        });
-    };
-
-    const showError = (error) => {
-        // 422 comes back with per-field messages; everything else is a single
-        // human-readable message on the envelope.
-        if (error.fields) {
-            Object.entries(error.fields).forEach(([field, messages]) => {
-                const el = $(`[data-field-error="${field}"]`, form);
-                if (el) {
-                    el.textContent = messages[0];
-                    el.classList.remove('hidden');
-                }
-            });
-        }
-
-        $('[data-error-message]', banner).textContent = error.message;
-        banner.classList.remove('hidden');
-        banner.classList.add('flex');
-    };
 
     const setBusy = (busy) => {
         button.disabled = busy;
@@ -221,7 +208,7 @@ function initAuthForm(form, { bannerId, idleLabel, busyLabel, submit, redirectTo
 
     form.addEventListener('submit', async (event) => {
         event.preventDefault();
-        clearErrors();
+        clearFormErrors(form);
         setBusy(true);
 
         try {
@@ -229,7 +216,7 @@ function initAuthForm(form, { bannerId, idleLabel, busyLabel, submit, redirectTo
 
             window.location.assign(redirectTo);
         } catch (error) {
-            showError(error);
+            showFormErrors(form, error);
             setBusy(false);
         }
     });
@@ -282,9 +269,15 @@ async function initPasskeySignIn(root) {
         label.textContent = busy ? busyLabel : idleLabel;
     };
 
+    // Beneath the button, and in the alert top right — the same two places a
+    // form's refusal is shown. It is deliberately not the password form's
+    // banner: 'that did not work' under a password field, to somebody who never
+    // typed one, reads as 'your password is wrong'.
     const showError = (message) => {
         error.textContent = message;
         error.classList.toggle('hidden', !message);
+
+        if (message) toast(message, 'error');
     };
 
     /** One ceremony, from challenge to session. */
@@ -343,7 +336,6 @@ async function initPasskeySignIn(root) {
 
 function initLogin(form) {
     initAuthForm(form, {
-        bannerId: '#login-error',
         idleLabel: 'Sign in',
         busyLabel: 'Signing in…',
         redirectTo: '/dashboard',
@@ -353,7 +345,6 @@ function initLogin(form) {
 
 function initRegister(form) {
     initAuthForm(form, {
-        bannerId: '#register-error',
         idleLabel: 'Create workshop',
         busyLabel: 'Creating…',
         // Straight to the workspace settings, which is where a new owner has
@@ -413,7 +404,17 @@ async function initAuthenticatedPage() {
     initModals();
 
     // The level-0/level-1 swap, and the only authenticated document there is.
-    if (document.body.dataset.page === 'dashboard') initShell();
+    if (document.body.dataset.page === 'dashboard') {
+        /*
+        | Before initShell(), and after applyPermissionGates() above — both
+        | matter. The gating pass decides which cards are visible, and only a
+        | visible card can be lifted into the favourites row; initShell() then
+        | reads its label registry and paints the empty-home hint off whatever
+        | the grid has ended up looking like.
+        */
+        initFavourites(user);
+        initShell();
+    }
 }
 
 /* -------------------------------------------------------------------------

@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\TenantStatus;
 use App\Models\Concerns\Auditable;
+use App\Support\Modules;
 use Carbon\CarbonImmutable;
 use Database\Factories\TenantFactory;
 use DateTimeInterface;
@@ -34,11 +35,13 @@ use Illuminate\Support\Carbon;
  * @property int|null $payment_due_days
  * @property bool $allow_negative_stock
  * @property bool $round_off_invoices
+ * @property array<int, string>|null $favourite_modules
  */
 #[Fillable([
     'name', 'slug', 'gstin', 'address', 'state_code', 'status',
     'financial_year_start_month', 'timezone', 'currency', 'books_start_date',
     'payment_due_days', 'allow_negative_stock', 'round_off_invoices',
+    'favourite_modules',
 ])]
 class Tenant extends Model
 {
@@ -91,6 +94,14 @@ class Tenant extends Model
             // quotation?" is a question about a date and a setting, and the
             // setting is only answerable from here.
             'round_off_invoices',
+            /*
+            | `favourite_modules` is deliberately *not* on this list. Everything
+            | else here changes what the application refuses, reports or charges;
+            | that one changes which cards sit at the top of one screen and moves
+            | no figure anywhere. It is also changed far more often than any of
+            | these — a trail with a row per star would bury the settings whose
+            | history somebody actually comes here to read.
+            */
         ];
     }
 
@@ -121,7 +132,31 @@ class Tenant extends Model
             'payment_due_days' => 'integer',
             'allow_negative_stock' => 'boolean',
             'round_off_invoices' => 'boolean',
+            'favourite_modules' => 'array',
         ];
+    }
+
+    /**
+     * The cards this workshop wants at the top of its home screen, as a list.
+     *
+     * Null and `[]` are the same answer to every reader, so every reader gets a
+     * list — one place to hold that rather than a `?? []` at each of the screens
+     * and resources that ask.
+     *
+     * Filtered through the registry on the way out, so a key left behind by a
+     * module that has since been switched off stops being published. The column
+     * keeps it: `enabled` is a deployment decision that gets reversed, and a
+     * workshop should not have to re-star a card because one was flipped off for
+     * a week.
+     *
+     * @return array<int, string>
+     */
+    public function favouriteModules(): array
+    {
+        return array_values(array_filter(
+            $this->favourite_modules ?? [],
+            static fn ($key) => is_string($key) && Modules::exists($key),
+        ));
     }
 
     /**

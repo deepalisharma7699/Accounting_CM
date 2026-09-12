@@ -122,6 +122,20 @@ const WRITES = [
     [/^\/accounts(\/|\?|$)/, ['ledger']],
 
     /*
+    | Which cards sit at the top of home. Listed *ahead* of `/workspace` below,
+    | and the order is the whole reason this row exists: first match wins, so
+    | without it a star would take that row and announce that `ledger` had
+    | moved — marking every held statement and every Insights panel stale on
+    | each click, for a change that moves no figure and touches no period.
+    |
+    | Announcing nothing is the right answer rather than a cheap one: this is
+    | the exception the "err towards the false positive" rule above is written
+    | against, because nothing anywhere holds a copy of the favourites but the
+    | home grid that just changed them.
+    */
+    [/^\/workspace\/favourites(\/|\?|$)/, []],
+
+    /*
     | The workshop's own settings. It posts nothing, and it is listed anyway:
     | the financial year and the timezone define the period every statement and
     | every Insights panel is measured over, and `books_start_date` is the day
