@@ -51,25 +51,46 @@ class WorkshopJobResource extends JsonResource
             ]),
 
             /*
-            | The motor.
+            | What came in — a motor, a cooler, a fan, or whatever else was
+            | wheeled through the door.
             |
-            | `motor` is the label a screen prints — "7.5 HP Crompton 3-phase" —
-            | built from whatever was recorded rather than requiring all of it. The
-            | individual fields are sent beside it because an edit form needs them
-            | separately, and because a workshop searching for a serial number
-            | needs the serial number.
+            | `equipment` is the one-line label a screen prints — "Motor 7.5 HP,
+            | 3 ph · Crompton CR-1234" — built from whatever was recorded rather
+            | than requiring all of it. The individual fields travel beside it
+            | because an edit form needs them separately, and because a workshop
+            | searching for a serial number needs the serial number.
             */
-            'motor' => $this->motorLabel(),
+            'equipment' => $this->equipmentLabel(),
             'item_id' => $this->item_id,
             'item' => $this->whenLoaded('item', fn () => $this->item === null ? null : [
                 'id' => $this->item->id,
                 'name' => $this->item->name,
             ]),
-            'hp' => $this->hp,
+
+            /*
+            | Which kind of thing, and what its kind asked about it.
+            |
+            | Three keys over one fact, and each has exactly one reader.
+            | `category_id` is what the intake form's Kind select is set to and
+            | what decides which fields it draws. `kind_label` is the name copied
+            | at intake, which is what a list row prints without a join and what
+            | survives the category being renamed or archived. And `specs` is the
+            | raw bag — the same flat shape `item_variants.attributes` holds — put
+            | back into the form's inputs on an edit.
+            |
+            | `specs_display` is the same bag resolved through the category that
+            | asked: the label, the value and the unit, in the order the form
+            | draws them. Absent where nothing resolved it rather than printed as
+            | JSON keys at a counter — see WorkshopJob::resolvedSpecs().
+            */
+            'category_id' => $this->category_id,
+            'kind_label' => $this->kind_label,
+            'specs' => (object) ($this->specs ?? []),
+            'specs_display' => $this->resolvedSpecs(),
+
             'brand' => $this->brand,
             'model' => $this->model,
             'serial_no' => $this->serial_no,
-            'phase' => $this->phase,
 
             'complaint' => $this->complaint,
             'notes' => $this->notes,
@@ -162,9 +183,41 @@ class WorkshopJobResource extends JsonResource
             | claim the first.
             */
             'billed' => $this->when($this->billed !== null, fn () => $this->billed),
+
+            /*
+            | How much of the job has reached an invoice — {@see JobBillingState}.
+            |
+            | A second signal beside the status, never folded into it: a job's
+            | status is about the motor and this is about the money, and neither
+            | implies the other. Sent with `billed` and absent without it, for the
+            | same reason `billed` is — `unbilled` where nobody asked would be a
+            | claim about the books rather than an admission that none was made.
+            |
+            | The tone travels with it so the badge's colour is decided in the
+            | enum that owns the concept rather than in each screen that paints
+            | one (§38).
+            */
+            'billing_state' => $this->when(
+                $this->billed !== null,
+                fn () => $this->billingState()?->value,
+            ),
+            'billing_state_label' => $this->when(
+                $this->billed !== null,
+                fn () => $this->billingState()?->label(),
+            ),
+            'billing_state_tone' => $this->when(
+                $this->billed !== null,
+                fn () => $this->billingState()?->tone(),
+            ),
             'bills' => $this->whenLoaded('bills', fn () => $this->bills->map(fn ($bill) => [
                 'id' => $bill->id,
                 'doc_no' => $bill->doc_no,
+                // What kind of document it is, so the job card can name it the
+                // way the customer's copy does — "Invoice INV/26-27/12". The
+                // relation already selects the column; printing it from here is
+                // what saves the job card a read of the whole transaction.
+                'type' => $bill->type->value,
+                'type_label' => $bill->type->label(),
                 'date' => $bill->date->toDateString(),
                 'status' => $bill->status->value,
                 'status_label' => $bill->status->label(),

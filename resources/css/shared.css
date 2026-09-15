@@ -88,7 +88,30 @@
     font-weight: 600;
     white-space: nowrap;
     cursor: pointer;
-    transition: background-color 0.15s, color 0.15s, border-color 0.15s, filter 0.15s;
+    transition: background-color 0.15s, color 0.15s, border-color 0.15s, filter 0.15s, opacity 0.15s;
+
+    /*
+    | A refused control has to look refused.
+    |
+    | Several screens disable a button rather than removing it, because the
+    | reason belongs where the question is asked — a system role that cannot be
+    | edited, a job whose status does not allow a bill, the Previous button on
+    | the first page of a list. Without this they are pixel-identical to the ones
+    | that work, so the only way to find out is to press and have nothing happen.
+    | The variants below set their own `filter` on hover; the extra pseudo-class
+    | here is what outranks them.
+    */
+    &:disabled,
+    &[aria-disabled='true'] {
+        opacity: 0.45;
+        cursor: not-allowed;
+        box-shadow: none;
+    }
+
+    &:disabled:hover,
+    &[aria-disabled='true']:hover {
+        filter: none;
+    }
 }
 
 @utility btn-sm {
@@ -192,4 +215,137 @@
     border-radius: var(--radius-card);
     background-color: var(--color-card);
     box-shadow: var(--shadow-raised);
+}
+
+/* =========================================================================
+| Feedback — one convention, everywhere
+|
+| Two surfaces and no third, on both sides of the sign-in, which is why they
+| are here rather than in app.css:
+|
+|   .form-banner   the inline refusal, rendered at the form's own submit
+|                  control. A form that is refused says so where the button
+|                  that was pressed is, not at the top of a page somebody has
+|                  to scroll back up to.
+|
+|   .toast-host    the floating alert, top right, for the outcome of anything —
+|                  a save that worked, a save that did not, a delete, a post.
+|
+| An error uses both. That is deliberate rather than redundant: the banner
+| answers "why did nothing happen when I pressed this", and it is the only one
+| of the two still on screen a minute later; the alert answers "did that go
+| through" for somebody whose eye is somewhere else on a long form. Success
+| needs only the alert, because the form has already cleared itself and the
+| question "what went wrong" is not being asked.
+|
+| Placement is resources/js/ui.js and nothing else writes these classes.
+| ====================================================================== */
+
+/*
+| The inline refusal.
+|
+| `flex-basis: 100%` is load-bearing rather than defensive: this sits inside a
+| wrapping footer row on most forms, and a flex child with no basis would be
+| squeezed onto the same line as the buttons and read as a caption on one of
+| them.
+*/
+@utility form-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    width: 100%;
+    flex-basis: 100%;
+    margin-top: 0.75rem;
+    /* Room left above and below when ui.js scrolls this into view, so a message
+       under a button at the very bottom edge does not land flush against it. */
+    scroll-margin-block: 1.25rem;
+    border-radius: 10px;
+    border: 1px solid var(--color-rose-200);
+    background-color: var(--color-rose-50);
+    padding: 0.6875rem 0.875rem;
+    font-size: 0.8125rem;
+    line-height: 1.45;
+    color: var(--color-rose-700);
+
+    /* Hidden while there is nothing to say. `.hidden` is Tailwind's, and it
+       has to win over the `display: flex` above — which it does not on its
+       own, both being single-class selectors, so it is stated here. */
+    &.hidden { display: none; }
+}
+
+/*
+| The alert stack.
+|
+| Top right, under the topbar rather than over it: the alert is the answer to
+| something the user just did, and covering the search box and the account menu
+| to say so takes away the next thing they were going to press.
+|
+| The application's layout is 56px of topbar; the two documents that carry no
+| topbar — the customer's invoice at /i/{token} and the sign-in — are given the
+| same offset rather than a second figure, because a floating alert 72px down a
+| page is right on both and one number cannot disagree with itself.
+*/
+@utility toast-host {
+    position: fixed;
+    top: calc(var(--spacing-topbar) + 1rem);
+    right: 1rem;
+    z-index: 60;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    width: min(22rem, calc(100vw - 2rem));
+    pointer-events: none;
+
+    @media (width >= 40rem) {
+        right: 1.5rem;
+    }
+}
+
+@utility toast {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.625rem;
+    border-radius: 12px;
+    border: 1px solid var(--color-border);
+    background-color: var(--color-card);
+    padding: 0.75rem 0.875rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    line-height: 1.45;
+    color: var(--color-foreground);
+    box-shadow: var(--shadow-raised);
+    /* The host is inert so it never swallows a click on the topbar beside it;
+       the alerts themselves are not, because clicking one dismisses it. */
+    pointer-events: auto;
+    cursor: pointer;
+    animation: toast-in 0.2s ease-out;
+
+    & svg { flex-shrink: 0; margin-top: 1px; }
+
+    &.is-going {
+        opacity: 0;
+        transform: translateX(0.5rem);
+        transition: opacity 0.25s ease-in, transform 0.25s ease-in;
+    }
+}
+
+@utility toast-success {
+    border-color: var(--color-emerald-200);
+    background-color: var(--color-emerald-50);
+    color: var(--color-emerald-800);
+}
+
+@utility toast-error {
+    border-color: var(--color-rose-200);
+    background-color: var(--color-rose-50);
+    color: var(--color-rose-700);
+}
+
+@keyframes toast-in {
+    from { opacity: 0; transform: translateX(0.75rem); }
+    to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .toast { animation: none; }
 }

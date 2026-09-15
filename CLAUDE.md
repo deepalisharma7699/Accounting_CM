@@ -139,6 +139,71 @@ the browser's `confirm()`.
 3.6 Preserve module state. A search, a filter, an open record, a closed drawer
 must not reset the workspace or refetch what is already held.
 
+3.7 **Held is not the same as stale.** §3.6 and §2A.7 keep a module's rows for
+the life of the tab, so a write in *another* module leaves them wrong. A screen
+that holds a copy of something declares what it is a copy of — `refreshOn` on
+`mountWorkspace`, or `onChange` from [data-bus.js](resources/js/data-bus.js) —
+and refetches when it is next looked at. Never a refresh button, never a poll,
+never a reload, and never a per-module notification: writes announce themselves
+from `auth-client` so a new one cannot forget to.
+
+3.8 **Saying that a request is in flight is not a per-screen decision.** The
+global activity bar ([loader.js](resources/js/loader.js), mounted once in the
+layout) is raised by `auth.call()` around every request, for the reason §3.7's
+announcement is made there: the failure is a *missing* indicator, and a
+convention that each call site remembers to raise one fails silently, one site
+at a time — which is exactly how it had failed, with about forty indicators
+across a hundred and seventy-odd call sites and nothing at all on a drawer
+fetching a record, a picker searching or a component loading its options. Two
+timers keep it honest: nothing is painted for 250ms, so a fast request never
+flashes, and once painted it stays 400ms, so one finishing at 260ms does not
+flicker. It **counts** rather than toggling, because overlapping requests are
+normal. Pass `quiet: true` **only** for a call debounced against typing — the
+bill's price preview and the pickers' search, which already report themselves
+where the eye is. Never reach for it to tidy a screen up: it removes the only
+signal that a request exists. The per-surface loaders stay — `setSubmitting`
+still disables the button that was pressed, because "the server is busy" and
+"this button is why" are different things to say, and the second is what stops
+a double post.
+
+3.9 **The bar is not enough on the way in, and home is where that shows.** Every
+card starts `hidden` and is revealed only once `/auth/me` confirms the grant
+behind it (§6.2), so for one round trip the grid is band headings over nothing —
+and a heading with no cards under it does not read as "loading", it reads as
+"this workshop has no modules". So `#view-home` is **delivered** carrying
+`data-home-loading` and `aria-busy`, and
+[partials/home-skeleton.blade.php](resources/views/partials/home-skeleton.blade.php)
+stands in for the whole region until `shell.js`'s `revealHome()` takes it off.
+Three parts of it are load-bearing. The state is in the **markup**, never
+switched on by JavaScript, because anything added after the first paint arrives
+after the flash it exists to prevent. The **headings go too**, and the CSS says
+"everything that is not the skeleton" rather than listing the sections to hide —
+a list is a thing to keep extending, and the band somebody adds next would be
+the one still flashing. And the reveal is **last**, after the gating pass, after
+favourites has lifted its cards out and after `paintEmptyHome()`, so the grid
+appears finished instead of assembling itself. A skeleton carries **no
+`data-module-card`, `data-open`, `data-star` or `data-module-group`**: the label
+registry, `permitted()` and favourites' band ordering all read the grid off
+those, and a placeholder wearing one is a module to every one of them.
+
+3.10 **Saying yes and saying no is one convention, and it is not a per-screen
+decision either.** A refusal appears in exactly two places: on the field the
+server named, and on a banner **at the submit control that was pressed** — plus
+the same sentence in the floating alert, **top right**. A success is the alert
+alone. Nothing else. `showFormErrors`, `showFormMessage` and `showActionError`
+in [ui.js](resources/js/ui.js) are the whole of it, and the banner is **placed
+by them**, never declared in a template.
+
+The banner used to be a `<p data-form-banner>` hand-written at the **top** of
+each form, which is the one place it cannot work: every save in a §2A workspace
+is pressed at the bottom of a long form, so a refused expense, job card or
+product answered a screenful above the button and the screen did not move at
+all. Somebody presses again. Nineteen of those slots existed and they had
+already drifted to four different sets of classes; they are gone, and a new form
+inherits the convention by doing nothing. Do not put one back into a template,
+do not add a second appearance for an error, and do not answer a failed write
+with a toast alone — that is the state this replaced.
+
 ## 4. Business logic
 
 4.1 The existing business logic outranks any UI change. Never alter it to make
@@ -156,6 +221,17 @@ and movement.
 4.4 One source of truth generally: inventory, sales, purchase, tax, discount
 and payment calculations, validation rules and shared UI behaviour each live in
 exactly one place.
+
+4.5 **A migration that deletes business data does not live in
+`database/migrations`.** Schema changes run by themselves, on every deployment
+and on every fresh database, and that is the point of them. A one-time data
+operation that empties tables must not inherit that: the case nobody plans for is
+restoring a dump taken before it ran and then migrating — which is exactly what a
+recovery is — and it would run a second time, at the moment least able to absorb
+it. Put it in `database/manual/`, which `migrate` does not scan, give it a guard
+that refuses unless it has been asked for explicitly, and document the invocation
+beside it. `database/manual/README.md` is the worked example, and the go-live
+cleanup that prompted the rule sat in the automatic path for two days.
 
 ## 5. Reuse
 
@@ -258,10 +334,154 @@ one level at a time. A module's markup arrives once from `/modules/{key}`, and
 its root is then cached **detached** — so reopening it re-attaches the same node,
 refetches nothing, and runs its `pages/*.js` `default()` exactly once.
 
+**Holding a module alive is also the only way its rows go wrong.** A module's
+data is a snapshot of whenever it was last looked at, and the module that
+invalidates it is usually a different one — post a sale and Stock's shelf is a
+sale out of date, with nothing on screen saying so. Before
+[data-bus.js](resources/js/data-bus.js) the only cure was reloading the page,
+which §3.2 rules out, and one stale figure survived even that: the bill form's
+"4 PCS on hand" is captured when a line is picked and rides in the autosaved
+draft, so a reload restored the same wrong number for up to a week.
+
+Three decisions in it are load-bearing. **The announcement is made in
+`auth-client`**, from one table of paths, because the failure being fixed is a
+*missed* invalidation and a convention that every write site remembers to call
+`announce()` fails in exactly that way — silently, one site at a time. **Nothing
+in the bus fetches**: it marks screens stale, and the refetch waits for
+`module:shown` or the next Show, or a write in one module would be loading
+another module's data (§7.2). And the table is **generous on purpose** — a
+receipt moves no stock but is listed under `transactions` all the same, because
+a false positive costs one refetch and a false negative is a workshop selling
+stock it does not have. The one thing it must never treat as a write is a
+**read-only POST**: `transactions/preview` runs on a debounce as somebody types,
+and announcing on it refetched every line's position every few keystrokes.
+
+**A refusal is shown where the button is, and the alert moved to the top right.**
+[ui.js](resources/js/ui.js) is the only thing in this application that says how
+something went, and §3.10 is why it is only one thing. Three parts of the fix are
+load-bearing.
+
+The banner is **placed rather than declared**. `reportRefusal()` finds the
+*visible* submit — the same lookup `setSubmitting()` makes, because a form
+adopted into a dialog carries a footer for each chrome and only one is on
+screen — and appends the banner **inside that footer row**, which is what makes
+one class enough for every surface: a drawer's footer carries its own
+`px-5 py-4` and a level-1 footer carries none, so a banner dropped in beside the
+buttons is inset correctly on both where a sibling underneath would run edge to
+edge. `.form-banner` takes a whole line of that row (`flex-basis: 100%`) and the
+row is made to wrap, because a footer written for two buttons had no reason to
+have said so itself. It is re-placed on **every** call, or a form edited in a
+dialog would answer in the level-1 footer nobody is looking at.
+
+A 422's own message is **"The given data was invalid."**, which is not something
+to show anybody standing at a counter — so `summarise()` builds the sentence from
+what was actually wrong. A field message the form has **no slot for** wins over
+everything, because that is the one that would otherwise be displayed nowhere at
+all and refuse somebody with no reason anywhere on the screen.
+
+And marking the field had been **silently broken wherever two controls share a
+name**. `form.elements[name]` answers with a RadioNodeList, which has no
+`setAttribute`, and the guard read `if (input && input.setAttribute)` — so the
+expense form, whose own `amount` shares a name with the amount on every payment
+row, never once painted the red border `.field-input[aria-invalid='true']` exists
+for. `errorInput()` resolves it from the slot's own field block, which is the
+only thing in the form that knows which control a message is about.
+
+Two smaller things went with it. The alert is **top right and under the topbar**,
+not over it — it answers something the user just did, and covering the search box
+and the account menu to say so takes away the next thing they were going to
+press; an error stays 6s where a success stays 3.2s, and clicking one dismisses
+it. And the sign-in dialog and the sign-up page were converted off their own
+banner and their own `data-field-error` hooks onto `data-error-for` and
+`showFormErrors`, so a wrong password now lands exactly where a rejected expense
+does.
+
+**Home has a favourites row, and it is the same cards.** Nineteen cards no
+longer fit a viewport, so a workshop stars the few it opens every day and they
+are lifted to a group above the rest —
+[favourites.js](resources/js/favourites.js) **moves** the card nodes rather than
+copying them, and a group left with nothing visible under it hides its own
+heading. There is still exactly one node per module, which is what `shell.js`'s
+label registry and `permitted()` both assume and what
+`test_the_dashboard_offers_a_card_for_every_enabled_module` holds shut. This is
+not a second navigation and it is not the start of one (§1.2): no sidebar, no
+menu, no per-user layout engine — one more group, made of the cards that were
+already there.
+
+The list belongs to the **workshop**, in `tenants.favourite_modules`, written by
+`PUT /workspace/favourites` under `UPDATE:WORKSPACE`. Three parts of it are wrong
+in ways that look right. It is a **`PUT`**, because unstarring the last card
+sends `[]` and that has to mean "none" rather than "unchanged". It is **its own
+route**, not a field on `PATCH /workspace`, because that path announces `ledger`
+— rightly, the financial year decides what every held report means — and a star
+would otherwise mark every statement and every Insights panel stale on each
+click; `data-bus.js` lists it **ahead** of `/workspace`, first match wins. And
+**reading it needs no grant**: it rides in the `tenant` block of `/auth/me`,
+which home already fetches, so it costs no request and a clerk holding no
+`READ:WORKSPACE` still gets the screen their owner arranged. What each person
+sees of the one list narrows to their own grants for free, because only a card
+the permission pass left visible is ever lifted. See
+[tenancy-module.md](docs/tenancy-module.md).
+
+**The topbar's search is a way in, and every module owes it a deep link.**
+[search.js](resources/js/search.js) is the one box that is not over a list: it
+answers the question somebody at the counter actually has, where the caller
+quoting a number does not know which module it belongs to. Picking a result
+**opens the record where the record lives** — `#customers?party=12`,
+`#sales?doc=88`, `#items?item=30`, `#jobs?job=41` — so it renders nothing a
+module already renders (§5.1). That is the convention a new module inherits: a
+module holding records answers `?<noun>=<id>` by opening its own drawer, from
+`moduleParams()` on first mount *and* from `module:params` on every reopen,
+spending the intent with `clearModuleParams()`. A drawer that fetches by id
+opens over whatever surface the module landed on; one that reads its row out of
+a held list — Items, Customers, Vendors — **awaits `showList()` first**, which is
+also the right surface to leave somebody on.
+
+Four things in it are load-bearing. There is **no `/search` endpoint**: it fans
+out to the four modules' own index endpoints, because each already refuses what
+this session may not see and a fifth reader of the same question is a fifth
+place to get that wrong (§6.1). The groups are **fixed slots** — four responses
+settle in whatever order the network decides, and a panel built in arrival order
+would reshuffle under the pointer and open whatever Enter had just been pushed
+onto. It offers **nothing it cannot open**, through the shell's own
+`canOpenModule()` rather than a second copy of that judgement. And it passes
+**`quiet: true`**, which is the third and last legitimate use of that flag
+(§3.8): debounced against typing, and reporting itself in the panel where the
+eye already is.
+
 **The registry.** [config/modules.php](config/modules.php) is the single source
 of truth for which modules exist, what grant each needs, and which are switched
 on. [Modules.php](app/Support/Modules.php) reads it, and is the whitelist the
 fragment route checks — a module switched off has no card *and* no fragment.
+
+**A module says which band it is in, and the file is flat.** The registry used
+to be two nested arrays, `primary` and `admin`, so the grouping *was* the shape
+of the file and moving a card between bands meant moving its whole entry and its
+comments. It is one list now and each module carries a `group`; `Modules::BANDS`
+owns the five bands, their order and their headings, and the Blade calls
+`groupLabel()` instead of deciding one with a ternary that named two. Five bands
+of three or four — work & selling, buying & stock, money & books, people, setup
+& history — replaced two of twelve and six, and that is the whole of why the
+grid reads as sorted: a heading over twelve cards says nothing about any of
+them. A module given a band that does not exist gets no card at all, which is
+caught rather than silent — `test_the_dashboard_offers_a_card_for_every_enabled_module`
+counts one card per enabled module.
+
+**A card's colour is one token pair, spent in three places.** `tone` is a single
+`tone-*` class declaring `--tone-bg` and `--tone-fg` on the *card*, where it was
+two Tailwind classes on the chip. The card is a tinted band across its head
+carrying the chip and the name, with the description beneath it on white, so the
+colour has to reach the card's background, the chip and the title — and a colour
+class can only paint the element it sits on. Three details in it are
+load-bearing. `--band` sets the band's height **and** where the gradient is cut,
+so there is one figure rather than two that can disagree. The card declares
+`padding: 0` because it is a `<button>`, and one that names no padding takes the
+browser's own, which insets the band from three edges. And `.card-star` is
+centred in that band while `.card-title` holds `padding-right` clear of it —
+under `(hover: none)` every star is permanently visible, so a long label would
+otherwise run underneath one for good. `skel-card` mirrors the same band and
+body, for the reason it mirrored the old card: it is there so the page settles
+rather than jumps.
 
 **A detached surface is not in `document`.** §2A.2 keeps exactly one of the form
 and the list attached, so `document.querySelector` finds nothing in the other —
@@ -283,6 +503,36 @@ into a family's, and
 [components/stock-position.js](resources/js/components/stock-position.js) is where
 that is decided — the roll-up, average cost as total value over total quantity,
 worst-wins status, and the badge. Add a third reader, not a third copy (§4.4).
+
+**A variant carries two levels, and the ladder is one list.** `reorder_level` is
+when to order and `min_stock` is when to stop what you are doing and go and get
+some — a shop orders at 20 and panics at 5. At or below the trigger is `is_low`;
+**strictly** under the floor is `is_below_minimum`; both are the server's
+verdicts and a row carries both, never one status a screen has to unpick. Worst
+wins, in one order — `negative → out → below_minimum → low → in_stock` — decided
+in that same file for a family (`positionStatus`) and for a single row
+(`statusOfRow`). Never rank them inline at a caller: it had been done at two, and
+both put `low` ahead of `out`, so a variant sitting at nought reported *Low
+stock* underneath a family row that said *Out of stock* about the same shelf.
+
+**Changing a position is one form, and opening stock is an input rather than a
+column.** Nothing writes a quantity directly — not the Items screen, not Stock,
+not the create form — and
+[components/stock-adjust.js](resources/js/components/stock-adjust.js) with
+[partials/stock-adjust.blade.php](resources/views/partials/stock-adjust.blade.php)
+is the whole of asking a person to change one. Stock mounts it in `count` mode
+and types the difference; Items mounts it in `variant` mode against one variant
+and types **what is on the shelf**, and the component subtracts the position to
+get the difference. Both post `POST /transactions/stock-adjustment` like any
+other document. A host supplies a mode, what the books currently say, and what to
+do afterwards; it must never fork the file.
+
+The two directions are the reason it is one component. "Two fewer than the books
+say" and "two on the shelf" are different figures that post different documents,
+and the conversion between them is arithmetic on a quantity — done in integer
+thousandths, because `12.3 - 4.1` is not `8.2` in a float and `decimal:0,3`
+refuses what comes out. Two copies would be two places the sign, `post: true` and
+the `client_ref` are decided, and the sign is the whole meaning of the document.
 
 **The catalogue's vocabulary is data, not code.** There is no `ItemType` enum and
 no `UnitOfMeasure` enum. What kinds of product exist, what each one records, whose
@@ -306,9 +556,9 @@ stock and the Inventory account together, silently, if it is ever wrong) and
 [partials/bill-document.blade.php](resources/views/partials/bill-document.blade.php)
 are the whole of writing a bill — lines, the server-priced total, the
 confirmation, the payment split, the autosaved draft and the post. Purchase,
-Sales and the counter at `/bills/new` all mount it, and Bills will make four. A
-host supplies a direction, a draft key and what to do after a post; it must
-never fork the file. The direction decides the endpoint, the party's role, and
+Sales and Jobs all mount it, and it is the only way a bill gets written. A host
+supplies a direction, a draft key and what to do after a post; it must never fork
+the file. The direction decides the endpoint, the party's role, and
 whether a line's rate is prefilled — **never on a purchase**, because stock
 arrives at the line's taxable value and that arrival is what recomputes the
 weighted average. There is no average column to correct afterwards.
@@ -324,6 +574,38 @@ wrong in a second copy are not the obvious ones — the banner surviving onto a
 blank document, the correction handle being dropped from the autosaved draft, the
 client reference regenerated per attempt instead of per correction, a correction
 allowed to park as a draft — so it must not be forked either.
+
+**A rate can be quoted with the GST already in it, and the line remembers
+which.** A counter prices both ways — "ten thousand plus tax" for a rewind,
+"eleven eight" for a part with the figure on the box — so a bill line carries a
+toggle beside its rate, prefilled from `items.price_includes_tax` and flippable
+per line. `GstRate::baseWithin()` divides by one-and-the-rate in integer paise
+and `GstBreakdown::within()` takes the tax as **what is left over**, never as a
+second multiplication: two roundings do not reliably land back on the figure
+somebody typed, and a customer handing over a hundred-rupee note for a
+hundred-rupee price is the whole point of the mode. Add a reader, never a second
+copy (§4.4).
+
+This was never only a convenience. **Stock arrives at the taxable value**, and
+that arrival recomputes the weighted average — so a supplier's MRP-inclusive
+rate entered as exclusive carried the shelf inflated by the whole rate,
+permanently, with every later margin wrong and nothing on any screen saying so.
+
+Three parts of it are load-bearing. The **line keeps its own copy** in
+`transaction_lines.price_includes_tax`, because after posting it is
+unrecoverable: ₹100 plus tax and ₹118 inclusive are the same taxable value, the
+same split and the same total, and only `unit_price` differs. `ReturnService`
+pins it exactly as it pins the rate and the intra/inter-state shape, or a credit
+note refunds tax that was never charged and the pair fails to net out on the
+return that reports both. A line that **sends no flag takes the item's default**
+rather than `false`, so a caller that predates the toggle is not silently charged
+tax on top of a price that already had it. And **the customer's invoice prints
+the rate before tax** whichever way it was typed — a tax invoice's rate column
+sits beside a taxable value and has to be the same kind of figure, or the
+recipient's evidence for an input tax credit is a row that does not multiply out.
+There is deliberately no document-level switch and no category default: one bill
+routinely carries a printed-price part and labour quoted before tax. See
+[inclusive-pricing.md](docs/inclusive-pricing.md).
 
 **A sale is corrected on stricter terms than a purchase**, and the posting engine
 is where that is enforced, never the form. A purchase arrives at its own stated
@@ -351,6 +633,24 @@ host either, which is what `body > *:not(#invoice-print)` was until it printed t
 customer's page blank. The print block also redefines `--color-border` on the
 sheet: the screen token is a hairline a printer drops, and the document came out
 of the preview with no rule on it anywhere.
+
+**There is exactly one sheet in the shell, and a screen that shows it borrows
+it.** A posted sale or a posted workshop bill lands on `#invoice-preview` — the
+customer's copy, level 2 over the emptied form, with Print and Share — and that
+drawer renders no invoice markup:
+[components/invoice-delivery.js](resources/js/components/invoice-delivery.js)
+moves the one `[data-invoice-document]` node out of `#invoice-print` and hands it
+back on Print, on close, and on `beforeprint` (plus the `matchMedia('print')`
+change, which is what Safari has instead of those events). Never mount a second
+copy of the partial in the shell. The print rule
+keeps whichever child of `body` *contains* the document, so a second one under
+`<main>` makes `<main>` worth keeping and every print after that carries the whole
+application around the invoice — with nothing on screen saying so. Both hosts are
+**direct children of `<body>`** for the same reason the sheet always was, and the
+preview additionally because the shell caches a module's root detached: declared
+inside a module it would take the document off the page when that module closed.
+The next module to hand a customer a document borrows this drawer; it does not
+build a second one.
 
 Its payload comes from `InvoiceDocumentService`, which builds the customer's
 document from **its own list of fields**. `TransactionResource` carries the cost
@@ -559,12 +859,13 @@ There is **no charting library**, and columns are HTML rather than SVG because a
 SVG `viewBox` scales its text and renders microscopic labels on a phone. See
 [insights-module.md](docs/insights-module.md).
 
-**What is left — ten modules, all of them built.** **Items**, **Stock**,
+**What is left — two modules, both of them built.** **Items**, **Stock**,
 **Purchase**, **Sales**, **Vendors**, **Customers**, **Users**, **Roles**,
-**Staff** and **Insights** have been converted and are on. The other ten —
-**Bills**, **Jobs**, **Transactions** (`journal`), **Accounting** (`accounts`),
-**Ledger**, **Uploads**, **Workshops** (`tenants`), **Settings** (`workspace`),
-**Opening balances** and **History** (`audit`) — are `'enabled' => false`.
+**Staff**, **Insights**, **Settings** (`workspace`), **Opening balances**
+(`opening`), **Expenses** (`bills`), **Transactions** (`journal`), **Jobs**,
+**Accounting** (`accounts`) and **History** (`audit`) have been converted and are
+on. The other two — **Uploads** and **Workshops** (`tenants`) — are
+`'enabled' => false`.
 
 Be clear about what that means, because it is the most misread fact in this
 repository: **none of them is unfinished work.** Each has a complete backend, a
@@ -573,10 +874,10 @@ and feature tests. They are off for one reason only — they still open on a lis
 with a modal create instead of the §2A flow. **Their APIs answer normally**; it
 is the card and the fragment route that are shut, so this is a reachability gap
 in the UI and never a security boundary. What that costs a workshop today — no
-expense entry, no standalone receipt or payment, no job card, no opening
-balances, no audit trail, no workshop settings — is set out module by module in
+photographed bill to keep, no way to provision a workshop, no audit trail — is
+set out module by module in
 [hidden-modules.md](docs/hidden-modules.md). **Read it before converting one**:
-several of them have had part of their job taken over by a card that is already
+some of them have had part of their job taken over by a card that is already
 on, and converting the whole of the old screen would rebuild what Sales,
 Purchase and Insights already do (§5.1).
 
@@ -587,8 +888,368 @@ which asserts the route as well as the markup.
 
 Convert one module at a time, then flip its `enabled` flag. Do not add a page
 route, do not reintroduce a sidebar, and do not regress what already conforms.
-The counter at `/bills/new` is the one remaining page shell; it now drives the
-shared document engine, and it goes away when Bills is converted.
+
+**The card grid is settled, and the conversion is scheduled.** It is not a
+staging post and there is no second navigation coming: every remaining module
+lands on it. The order was **go-live first**, because with Settings and Opening
+balances both off a real workshop could not start using this product at all, and
+with Bills off its P&L has no overheads:
+
+```
+C1  Settings + Opening balances ✅ C5  Accounting + Ledger, merged  ✅
+C2  Bills → expenses only       ✅ C6  Uploads                      ←
+C3  Transactions                ✅ C7  Workshops   (History ✅)
+C4  Jobs                        ✅ C8  One workshop-day test
+```
+
+Each step's shape, its *do not rebuild* list and its checklist are Part E of
+[implementation-roadmap.md](docs/implementation-roadmap.md), which is now the one
+plan for the product — `modified-flow-plan.md` is a historical record and
+`hidden-modules.md` is the standing account of what is unreachable.
+
+The **order** the rest of it runs in is
+[execution-plan.md](docs/execution-plan.md): C6, then C7 — Workshops alone, now
+that History has gone on — then C8 moved up to sit immediately after it, then
+seven open points (P1–P7), of which **P2 is done** — the party
+statement that no screen calls, the advance receipt, the parked-draft worklist,
+five endpoints nothing reaches, and password reset with invitation and mail. **M15, the AI capture agent, is parked** as of 7 September 2026 and is
+outside that plan; nothing in it waits on the agent. Four steps
+also *finished* something rather than only re-flowing it: C1 shipped the three
+workshop settings the API accepted and no screen offered, C3 shipped the screen
+for allocating a receipt after it was taken, C4 shipped a job's edit, its
+delete, and the half of its bill the endpoint had been throwing away, and C5
+shipped the only way a workshop can add an account to its own chart.
+
+**C3 is done, and it is the module that stopped parking work.** **Transactions**
+— key `journal` — is Receipt, Payment and the journal voucher, three §2A
+workspaces under one card on the **Staff** shape: one root each, mounted lazily
+on the first click of a tab, each workspace registering Escape under its own key
+while the module registers `journal`. It opens on Receipt, which is the one done
+most. The four tabs of transaction list it used to carry are **gone rather than
+moved** — Sales, Purchase, Expenses and the Day Book already draw all of them
+(§5.1).
+
+Receipt and Payment are **one implementation rendered twice**: one
+[partials/settlement-section.blade.php](resources/views/partials/settlement-section.blade.php)
+included with a `$direction`, and one factory in
+[pages/journal.js](resources/js/pages/journal.js) called twice, each call closing
+over its own state — `pages/counterparty.js`'s rule, for the reason that file
+records. The direction decides the endpoint, the party's role and the wording and
+nothing else, because the server does not either: `/transactions/receipt` and
+`/transactions/payment` are two routes over one `StoreSettlementRequest`.
+
+**Which invoice a cheque was for is answered after the fact, in the drawer, and
+nothing guesses it.** That closes M16: `GET /transactions/{id}/open-bills` and
+`POST /transactions/{id}/allocate` had been built and tested with no caller
+anywhere. The panel is drawn from **two lists merged**, and this is the part that
+is wrong in a way that looks right — `due` on an open bill is net of every
+allocation *including this settlement's own*, so a bill the receipt has already
+paid off in full is not open any more and is missing from the picker unless the
+allocations already on the settlement are merged in beside it. `openBills` now
+carries them in its meta. A row's ceiling is what is still owing plus what this
+settlement is holding against it, and an allocation **replaces** the whole set,
+so what is sent is every row with an amount on it and not only the ones touched.
+
+A receipt naming no bills is applied oldest first, which is right far more often
+than not and is still a decision — so the form **states what it did** in a line
+above the cleared fields, with a control that opens the drawer to change it.
+§2A.8 clears the form the instant it posts, and a toast is gone before somebody
+has read the amount.
+
+**No settlement and no journal voucher can be parked.** Money that has moved is
+a fact, not a work in progress — the judgement M22 already makes about a payroll
+run — and a parked receipt is a cash box that disagrees with the books for as
+long as nobody authorises it. A draft that predates the conversion is still
+openable and can be posted or discarded from the drawer; this module creates
+none, and neither does a workshop bill.
+
+That is narrower than it was first written down. This paragraph claimed there was
+no "save as draft" left anywhere in the product, and there is: the shared bill
+document still offers it, so **Sales and Purchase can still park a bill**.
+Insights' parked-draft worklist is therefore not yet a set that only shrinks.
+Removing the control from those two is a product decision nobody has taken;
+saying it had already happened was a documentation error.
+
+One refusal is deliberate and worth knowing before somebody "fixes" it: a
+settlement **cannot be left unallocated while the party has open bills**. An
+empty `allocations` array means "oldest first" to the server, not "allocate
+nothing", on the way in as well as afterwards — so the drawer refuses to send a
+cleared grid rather than silently doing the opposite of what it looks like.
+
+C3 also gave [components/party-picker.js](resources/js/components/party-picker.js)
+two things it had never needed. Its ids are **unique per mount**, because this is
+the first module with more than one picker attached at once — a tab swap hides a
+section rather than detaching it, and fixed ids meant a `<label for>` pointing
+into another section. And it takes **`role: null`** for the voucher's optional
+counterparty, which paints no position line and offers no "+ Add": `outstanding`
+has a receivable half and a payable half and nothing would say which to read, and
+quick-party never asks which role a record is — the module it was opened from
+decides, and a journal has not decided.
+
+**C2 is done, and what it deleted matters more than what it built.** The Bills
+module was the whole transaction list; it is now **Expenses** and nothing else,
+because Sales lists invoices and credit notes, Purchase lists bills and debit
+notes, and Insights' Day Book lists every posted document — a fourth copy would
+have been three screens answering one question (§5.1). The key stays `bills`,
+which is the module's address; only the label changed. Two smaller things it
+settled: a **listing does not load ledger entries**, so the expense account is a
+server-side `account_id` filter and never a column — reach for that pattern
+before widening a repository's eager loads; and the expense form now sends a
+**`client_ref`** minted per document and reused on every retry, which every write
+form in this application should, or a request that times out after the server has
+posted puts the same document in the books twice.
+
+**C1 is done, and two of its decisions bind what comes next.** A module with a
+**single record** — Settings is the only one so far — declares **only
+`data-ws-list`** and mounts `canCreate: false`, so the workspace lands on it and
+paints no switch control. Do not add a single-surface mode to
+[workspace.js](resources/js/workspace.js) for the next one. And a module whose
+**context belongs beside the create form** puts it there: Opening balances keeps
+the owner's stake, the go-live date and the trial balance on the *form*, because
+they are what somebody about to declare their whole financial history reads
+before they commit and what they want to see the instant they have. That is also
+why it subscribes to the bus with `onChange` rather than `refreshOn` — `refreshOn`
+refreshes a list when the list is next shown, and tiles on the form would stay
+wrong. `/workspace` announces `ledger` for the same reason: the financial year,
+the timezone and `books_start_date` define the period every statement is measured
+over, so saving that screen makes a held report wrong without a figure having
+moved.
+
+**C4 is done, and there is no page shell left.** **Jobs** is the bench — take
+something in, move it along, write parts onto it, quote, get the quotation
+approved, bill it — and it is the workshop's actual trade, which nobody could
+reach at all until now. The create form books something in, the bench is behind
+"Show list", and a job opens in a drawer carrying the pipeline, the parts, the
+estimate and Generate bill.
+
+**What comes in is not always a motor, and the bench stopped assuming it was.**
+`workshop_jobs` had `hp` and `phase` as columns and the intake form asked for
+them under a heading that said "The motor" — a product type in a schema and in a
+Blade template, which is the failure the catalogue's vocabulary rule already
+records against `ItemType` and against a typed brand. It cost a real workshop
+something every week: a cooler, a table fan or a mixer came in and the only
+fields on offer were two that mean nothing about any of them. Those columns are
+**gone**; a job now carries `category_id`, a **copied** `kind_label` and a
+`specs` bag keyed by attribute, and the intake form asks what the chosen kind is
+described by. Never put a product type back into this schema, this template or
+`pages/jobs.js`.
+
+The kinds are the **catalogue's own** `item_categories` and `item_attributes` —
+never a `job_categories` table, which would be a second master, a second schema
+resolver and a second admin screen answering one question (§4.4, §5.1). So a
+workshop that starts repairing coolers adds a category from the Items card and
+the bench asks the right questions with no deployment, which is the catalogue
+module's acceptance criterion one module along.
+[components/attribute-fields.js](resources/js/components/attribute-fields.js) is
+the one renderer for both forms; add a third reader, not a third copy.
+
+Four parts of it are load-bearing. The list is published by
+**`GET /workshop-jobs/meta`** and not fetched from `/items/meta`: that route is
+behind `READ:ITEMS` and this one behind `READ:WORKSHOP_JOBS`, and the person
+booking a motor in is exactly the person who may hold the second and not the
+first — the trap M22's attribution pickers avoid by riding on
+`/transactions/meta`. **Nothing on the form is required**, the kind included:
+`is_required` says a *product* cannot exist without a rating, and this is a pump
+a driver could not identify that is already on the bench. **The label is copied**
+onto the row like the brand and the model beside it, so a renamed or archived
+category leaves the card still saying what came through the door and
+`search=cooler` finds the coolers without a join. And **the bag reaches no screen
+unresolved** — `{"hp": "7.5"}` needs the category that asked to become "7.5 HP",
+so `JobService` attaches the schema once per page rather than a lookup per row,
+and `equipmentLabel()` prints nothing from it where nobody resolved it. See
+[workshop-module.md](docs/workshop-module.md).
+
+**The bill is a level-1 pane on the create surface, not a state of the drawer.**
+The shared document is a two-column form with a searched item picker, a line
+table, a payment split and a sticky totals panel, and §2.1 calls exactly that
+inside a dialog a scroll trap. So the form surface holds two panes — booking a
+motor in, and billing one — with one shown at a time, which is §2A.2's judgement
+applied one level down.
+
+**The lines are sent only when the operator changed them, and this is the part
+that is wrong in a way that looks right.** `POST {job}/bill` pairs each part with
+the invoice line it became **by position**, and that only holds while the lines
+are the ones `billPayloadFor()` produced — so `JobService::bill()` marks nothing
+at all when the payload carries an `items` key, which the shared document always
+builds. The counter did exactly that, which means **no bill ever raised in this
+product had marked a part as billed**: the same bearings were billable again the
+week after. `pages/jobs.js` fingerprints the lines when they load, as scaled
+integers rather than parsed floats, and omits `items` while they are untouched.
+Where a rate really was argued down the lines are sent, the invoice posts, and
+the parts stay on the job card — the service's deliberate safe way to be wrong,
+and the banner says so before anybody presses post.
+
+The endpoint also had to learn the rest of the document. `BillJobRequest` named
+six keys per line and nothing else, so a line's inclusive-of-tax flag, a
+percentage line discount, a discount on the whole repair and **who did the work**
+were all being dropped on the floor. The last is the one that matters: a rewind
+is the canonical case for M22's attribution, and it was guaranteed to be lost on
+exactly the document it belongs on. `WorkshopJobController::bill()` now syncs the
+attribution inside the same transaction as the posting, as
+`TransactionController::store()` does.
+
+Two more endpoints had no caller anywhere and now do: `PATCH` and `DELETE` on a
+job. Correcting the card is a *state* of the drawer with the create form adopted
+into it (`adoptForm()`, so the fields exist once); the customer and the received
+date are inline-only, because `UpdateJobRequest` accepts neither.
+
+**And the counter is gone.** `/bills/new` was the last page shell in the
+application, kept alive through C2 only because it was the one screen that could
+raise a workshop bill. The route, `resources/views/bills/new.blade.php` and
+`pages/bill-counter.js` are deleted, and the two links that pointed at it —
+"Create sale" on Customers, "Create purchase bill" on Vendors — open the Sales
+and Purchase cards in the mounted shell with `?party=`, which is a module swap
+and not a document load (§1.1).
+
+**And the Jobs card hands the customer their invoice, which is P2.**
+`#invoice-preview` was Sales' drawer and about four hundred lines of
+`pages/sales.js`; it is
+[components/invoice-delivery.js](resources/js/components/invoice-delivery.js)
+now — the delivery state, custody of the one sheet, print, the share link, the
+WhatsApp message and revocation — and both modules mount it. A posted job bill
+lands on the same preview a sale does, the line above the cleared form offers
+**Print or share it**, and every invoice ever raised off a repair reopens from a
+row on the job card. The share dialog moved with it, from the Sales fragment to
+`partials/invoice-share-modal.blade.php` in the layout, because the shell caches
+a module's root detached and a dialog inside Sales is not in the page while Jobs
+is open. `#confirm-modal` is `z-index: 60` for the same reason it is level 3:
+below the z-55 share dialog it was asking "Stop sharing this invoice?" from
+underneath the panel that asked it.
+
+**A job's status is about the motor; whether it has been billed is a second
+signal.** `WorkshopJobStatus::Delivered` already says the two do not imply each
+other — a regular customer's pump goes home on Friday against an invoice raised
+at the end of the month — so billing is never folded into the pipeline.
+[JobBillingState](app/Enums/JobBillingState.php) is the other half, derived from
+the invoices that point at the job and the parts that point at their lines, never
+stored: reversing a bill moves it with nothing having to remember. A row reads
+*In progress · Invoiced*, and neither half is a lie. And **Generate bill is
+disabled with the reason on it** rather than left out, which is what it was — a
+job that had had nothing done to it, or one already billed in full, simply had no
+button and nothing said why.
+
+**History went on ahead of C7, and it is the read-mostly rule at its strictest.**
+**History** — key `audit` — is one filtered list and nothing else: no create, no
+drawer, no detail modal, because an entry *is* its detail. It mounts with
+`canCreate: false` and declares only `data-ws-list`, so the workspace lands on the
+table and paints no switch control — and here that is not a permission decision
+somebody could widen later, because there is no POST, PATCH or DELETE anywhere in
+its API group and there cannot be. Entries arrive through model events and the
+model refuses an UPDATE and a DELETE.
+
+Two things the conversion changed, and the first is wrong in a way that looks
+right. The filter option lists are **rebuilt rather than appended to**: `refreshOn`
+brings the module back for another `loadMeta()` whenever something it is a copy of
+was written, and appending would offer every kind, action and person a second
+time — then a third. The current choice is put back afterwards, or a refresh would
+silently widen the filter somebody is reading through. And `refreshOn` names
+`items`, `parties`, `staff`, `ledger` and `transactions`, but **not `stock`**: a
+stock movement is a posted document's consequence, and a posted document has no
+entry on this trail at all.
+
+**C5 is done, and it is the only step that removed a key.** **Accounting** —
+key `accounts` — now carries what **Ledger** used to. They were one question at
+two zoom levels, and the old code said so itself: this drawer showed ten entries
+because "the full statement is the Ledger screen's job". Two cards would both
+have answered "what does this account stand at", with two period pickers and two
+trial-balance renderers between them (§5.1). So `ledger` is **gone from
+[config/modules.php](config/modules.php)** — do not put it back — and its
+redirect is registered by hand in [web.php](routes/web.php), because the loop
+there declares one per module the registry still names.
+
+It opens on the **account form**, which is the only way in the whole product to
+add an account to a chart: `POST /accounts` has exactly one caller and it is
+[pages/accounts.js](resources/js/pages/accounts.js). Behind "Show list" are
+**two views over one period picker** — the chart, grouped by type, and the trial
+balance with its reconciliation *stated* rather than left to be inferred from two
+columns. A row on either opens the same drawer, and the edit is a **state** of
+that drawer with the create form adopted into it, as Jobs does.
+
+Three of its decisions are load-bearing, and each is wrong in a way that looks
+right. **The search box and the archived select narrow the chart and are hidden
+on the trial balance**: a trial balance's totals come from the server over every
+account with movement, archived ones included, so filtering its rows in the
+browser stops the columns adding up to the figures beneath them. **The chart is
+fetched whole, with `is_active` deliberately unsent** — an archived account still
+owns its code, and asking only for the active ones let the form's next-free-code
+suggestion offer a number the server then refused, a 422 on a field the screen
+had filled in itself. And **the second grant removes rather than blanks**: the
+card is `READ:ACCOUNTS`, every figure on it is `READ:LEDGER`, and without the
+second the balance column, the period picker and the whole trial-balance view are
+taken out of the DOM — a column of dashes is a claim about the books, not about
+the reader.
+
+What it **deleted** matters as much: the Journal Entries tab, its drawer and its
+`READ:TRANSACTIONS` gating are gone rather than moved, because every row of that
+list is on Insights' Day Book. The per-row action menu went with it — a row opens
+the drawer and the drawer holds the actions, which is what every other converted
+module does (§7.4). See [accounting-module.md](docs/accounting-module.md) and
+[ledger-module.md](docs/ledger-module.md).
+
+**Signing in is a passkey first and a password second, and the asymmetry is
+deliberate.** A passkey — fingerprint, face or screen lock — is checked by
+[PasskeyService.php](app/Services/Auth/PasskeyService.php), which does the two
+WebAuthn ceremonies and nothing else. Everything about *starting a session*
+stays in `AuthService::startSession()`, which both ways in call: a second way in
+that skipped it would leave a suspended employee, or a workshop whose account
+was closed, still posting entries with the key they enrolled while they worked
+there. Add a third way in by calling it, never by copying it (§4.4).
+
+Three things in it are load-bearing and each is wrong in a way that looks right.
+The **origin** is the phishing resistance — the browser signs the origin it is
+actually on, and `config('webauthn.origins')` is what refuses a look-alike
+domain — so that list is exact and never a pattern. The assertion is verified
+with a **null user handle**, which is the strict reading and not the lazy one:
+null means "nobody was identified before this began", so the library *requires*
+the device's own handle and compares it, where passing one would be comparing
+the stored record with itself and calling it a check. And `recordFor()`
+**re-applies the live `sign_count`** onto the deserialized credential, because
+the serialized blob's counter is frozen at zero from enrolment — without it the
+clone check compares every assertion against zero, passes all of them, and
+nothing anywhere looks broken.
+
+**A long session is something a passkey earns.** `refresh_tokens.trusted` buys
+90 days instead of 7, and only a passkey sets it: it is bound to one device,
+re-verified at every use and revocable per device, where a password is a secret
+that can be watched or written inside a cupboard door. So there is **no "keep me
+signed in" box** — a box lets somebody trade the whole safety margin for one
+fewer tap on the screen least likely to be read carefully. Rotation **inherits**
+the flag rather than re-deciding it, or every trusted session would quietly
+revert at its first refresh and sign people out a week later with nothing to say
+why.
+
+Enrolment is behind `auth.jwt` and signing in is not, and that split is the
+design: a device registered from the sign-in screen would be a way in that
+anybody who reached that screen could grant themselves. Every refusal answers
+`PASSKEY_REJECTED` with one message for every cause, for the reason the password
+path answers one way for an unknown email and a wrong password. The password is
+**not** being removed — it is the first sign-in on a new device and the recovery
+when every passkey is gone, and there is deliberately no second recovery path,
+because every one of those is a way in for somebody else too. See
+[passkeys.md](docs/passkeys.md).
+
+**The public site is not the application, and §1 does not reach it.** `/`, `/hi`
+and `/services/{slug}` are the shop's own site — outside the sign-in, outside the
+module shell, its own stylesheet and its own page module. Those routes are the
+"public pages" §1.5 allows, and they are ordinary server-rendered pages on
+purpose: a marketing page that needs JavaScript to show its content is a
+marketing page a search engine cannot read.
+
+Two things in it are decisions rather than markup, and both are enforced by
+`tests/Feature/Site`. **A figure nobody has confirmed is not printed** —
+`config/shop.php` carries a `verified` flag beside each one and
+`Site::stats()` drops the unverified along with its label, because the page this
+replaced invented "32+ years" and three testimonials, and a workshop caught
+inventing its own numbers has nothing left to be believed about. The same gate
+withholds the e-mail address, the makes on the counter and the reviews section.
+And **the two languages are one site**: facts live in `config/shop.php`, words in
+`lang/{en,hi}/site.php` key for key, and a key present in one and missing from
+the other fails the build rather than rendering `site.faq.title` into a heading.
+
+The language is in the **path** — `/` and `/hi` — never a cookie, so each has a
+real URL to be shared on WhatsApp and indexed under. Templates read
+`App\Support\Site` and never `config()` or `__()` directly. See
+[public-site.md](docs/public-site.md).
 
 **Sales is Purchase mirrored, and the asymmetry is the whole of it.** A purchase
 arrives at a cost it states; a sale issues at a weighted average that is on no
@@ -628,6 +1289,17 @@ and that is the whole safeguard. See
 It deliberately records **no line grain, no hours and no piece rate**: the moment
 a share of the bill lands in that table it is an input to somebody's pay, and pay
 is computed from a rate and an attendance sheet in one place.
+
+**A row in it is a trade, so anything counted off it counts documents, not
+rows.** Somebody who fitted a motor and wound it is two rows on one invoice, and
+the throughput figures counted the rows — which made a two-trade person read as
+twice as productive as somebody doing identical work and added the same invoice
+into their value twice. De-duplicate the rows, never the aggregate: a
+`sum(distinct total)` collapses two invoices that come to the same amount, which
+on a counter charging ₹500 for a service happens daily. And an invoice naming a
+fitter *and* a winder is whole in **both** their rows, so a per-person column is
+read across and never summed — the workshop's own total belongs beside it, which
+is what `/insights/people`'s `work` block is for.
 
 **Sales deliberately has no quotation, no delivery challan, no recurring invoice
 and no e-invoice.** A quotation and a challan each want their own numbering and

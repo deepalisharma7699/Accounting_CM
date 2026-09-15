@@ -25,8 +25,15 @@
  * - **Nothing is thrown away by a swap.** Both surfaces keep their DOM, so the
  *   half-typed draft and the list's search and filters survive every trip
  *   between them, and back out to the grid and in again (§2A.6, §3.6).
+ *
+ * The fourth is what keeps the third from going stale: a module says what its
+ * rows are a copy of (`refreshOn: ['stock']`) and a write to that anywhere in
+ * the application marks the list behind, to be refetched the next time it is
+ * actually looked at. Never a per-module refresh, never a poll. See
+ * `data-bus.js`.
  */
 
+import { onChange } from './data-bus';
 import { registerEscape } from './shell';
 import { $, esc } from './ui';
 
@@ -44,6 +51,9 @@ import { $, esc } from './ui';
  * @param {boolean} config.canCreate   false for a user without the write grant
  * @param {() => Promise<void>} config.onShowList  run the first time the list is shown
  * @param {() => void} config.onShowForm           run whenever the form is shown
+ * @param {string[]} [config.refreshOn]  the kinds of fact this list is a copy of
+ *        — `['stock']`, `['transactions', 'parties']`. A write to one of them
+ *        anywhere in the application marks this list stale. See `data-bus.js`.
  */
 export function mountWorkspace(root, {
     key,
@@ -55,6 +65,7 @@ export function mountWorkspace(root, {
     canCreate = true,
     onShowList = async () => {},
     onShowForm = () => {},
+    refreshOn = [],
 }) {
     const form = $('[data-ws-form]', root);
     const list = $('[data-ws-list]', root);
@@ -94,6 +105,13 @@ export function mountWorkspace(root, {
     let mode = canCreate ? 'form' : 'list';
     let listLoaded = false;
     let flashId = null;
+
+    /**
+     * Something wrote the kind of fact this list is a copy of, so the rows held
+     * here are behind. Not a reason to fetch — only a reason to fetch *next time
+     * somebody looks*, which is what {@link showList} and `module:shown` do.
+     */
+    let stale = false;
 
     /* --- the heading and its one control --------------------------------- */
 
@@ -146,6 +164,24 @@ export function mountWorkspace(root, {
 
     /* --- the swap --------------------------------------------------------- */
 
+    /** Fetch the rows, and repaint the heading over whatever count they made. */
+    async function loadList() {
+        listLoaded = true;
+        stale = false;
+
+        try {
+            await onShowList();
+        } catch (error) {
+            // The module paints its own error state into the table; this only
+            // has to leave the list reachable so a retry is possible.
+            listLoaded = false;
+
+            throw error;
+        }
+
+        paintHeader();
+    }
+
     async function setMode(next, { animate = true } = {}) {
         if (next === mode && surface.firstChild) return;
 
@@ -169,22 +205,13 @@ export function mountWorkspace(root, {
         /*
         | §2A.7 — the list is fetched on the *first* Show and held from then on.
         | A module only ever used to write never pays for a list at all.
+        |
+        | The second half of the condition is what keeps that from meaning
+        | "held for ever". Something wrote while this module was away, so the
+        | rows are known to be behind, and *this* is the moment they are about to
+        | be looked at.
         */
-        if (!listLoaded) {
-            listLoaded = true;
-
-            try {
-                await onShowList();
-            } catch (error) {
-                // The module paints its own error state into the table; this
-                // only has to leave the list reachable so a retry is possible.
-                listLoaded = false;
-
-                throw error;
-            }
-
-            paintHeader();
-        }
+        if (!listLoaded || stale) await loadList();
 
         /*
         | The flag is spent the moment the list is on screen — whether the row
@@ -192,6 +219,54 @@ export function mountWorkspace(root, {
         | running and the next visit must not repeat it.
         */
         flashId = null;
+    }
+
+    /* --- staying in step with the rest of the application ----------------- */
+
+    /*
+    | §2A.7 holds a list from its first Show, and the shell holds the whole
+    | module alive and detached. Between them, a list that nobody refetches is a
+    | list that is right until some *other* module writes — post a sale and
+    | Stock's shelf is a sale out of date, with nothing on screen saying so and
+    | no cure short of reloading the page, which §3.2 rules out.
+    |
+    | So a module declares what its rows are a copy of and this does the rest.
+    | Marking only: fetching here would mean a write in one module loading
+    | another module's data, which is the thing §7.2 forbids and the reason the
+    | refetch waits for `module:shown` or the next Show.
+    |
+    | A module's *own* write marks it stale too, on top of whatever it already
+    | does after a save (`if (workspace?.hasList()) load()`), so its list can be
+    | fetched once more than it strictly needed. That is deliberate and it is the
+    | cheap side of the trade: the announcement carries a URL, and there is no
+    | honest way to tell "my own write" from "somebody else's" without going back
+    | to per-module bookkeeping — which is precisely the thing that fails
+    | silently. A fetch too many is a wasted request; a fetch too few is a
+    | workshop selling stock it does not have.
+    */
+    if (refreshOn.length) {
+        onChange(refreshOn, () => {
+            stale = true;
+        });
+
+        /*
+        | `module:shown` is dispatched on the *module* root, and Staff mounts four
+        | of these on section roots inside one module (M22) — an event does not
+        | reach a descendant of where it was dispatched, so each section listens
+        | at the module root or never hears anything at all.
+        */
+        const moduleRoot = root.closest('[data-module-root]') ?? root;
+
+        moduleRoot.addEventListener('module:shown', () => {
+            // Only when the table is the thing that just came back on screen.
+            // Stale and on the form, the flag simply waits for the next Show —
+            // rows behind a create form are rows nobody is reading.
+            if (!stale || !listLoaded || mode !== 'list') return;
+
+            // Nothing to hand a rejection to: the module paints its own failure
+            // into the table, exactly as it does for the first load.
+            loadList().catch(() => {});
+        });
     }
 
     /* --- Escape, one level at a time -------------------------------------- */

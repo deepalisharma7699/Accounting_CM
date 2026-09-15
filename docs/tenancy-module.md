@@ -1,15 +1,24 @@
 # Multi-Tenancy Module
 
-> **The isolation is live; both of its screens are switched off.** Tenant
-> scoping is enforced on every query in the application and nothing about that is
-> waiting. What has no card is **Workshops** (the platform's list — provisioning,
-> suspend, reactivate) and **Settings** (a workshop's own record). The second is
-> the one that bites: sign-up takes an *optional* GSTIN, so a workshop that
-> signed up without one cannot add it, and none of them can correct a name, an
-> address, a financial year, a timezone or `books_start_date`. With Opening
-> balances also off, a real workshop cannot go live. See
-> [hidden-modules.md](hidden-modules.md), which also lists three settings the API
-> accepts and the form has never offered.
+> **The isolation is live. Settings is on; Workshops is not.** Tenant scoping is
+> enforced on every query in the application and nothing about that is waiting.
+>
+> **Settings** — a workshop's own record — was converted in C1. It is the one
+> module in the product with a **single record**, so it declares only
+> `data-ws-list` and mounts `canCreate: false`: the workspace lands straight on
+> the form and paints no switch control. Do not add a single-surface mode to
+> `resources/js/workspace.js` for the next one that looks like this.
+>
+> Converting it also *finished* it. `UpdateWorkspaceRequest` had always accepted
+> `payment_due_days`, `allow_negative_stock` and `round_off_invoices`, and no
+> screen offered any of them; all three are on the form now, each saying beside
+> the control what it changes. A caller holding `READ:WORKSPACE` and not
+> `UPDATE:WORKSPACE` gets the fields disabled and **no save control at all** —
+> absent rather than blanked, because a disabled Save asks somebody to work out
+> for themselves why it will not press.
+>
+> **Workshops** (the platform's list — provisioning, suspend, reactivate) is
+> still off, scheduled as C7. See [hidden-modules.md](hidden-modules.md).
 
 Every workshop's books are isolated from every other workshop's. This module is
 the boundary that makes that true, and Step 1 of the Phase 1 build sequence —
@@ -179,10 +188,13 @@ Joining an *existing* workshop is an invitation, issued by its owner through
 `POST /v1/users` — never self-serve, or anyone could type their way into
 someone else's books.
 
-Set `TENANCY_ALLOW_PUBLIC_SIGNUP=false` for sales-led onboarding: registration
-then returns 403 `SIGNUP_DISABLED`, and workshops are created only by a
+`TENANCY_ALLOW_PUBLIC_SIGNUP` is **false by default**: onboarding is sales-led,
+so registration returns 403 `SIGNUP_DISABLED`, `/register` answers 404, the
+sign-in modal offers no sign-up link, and workshops are created only by a
 platform super-admin via `POST /v1/tenants` (which accepts an optional `owner`
-block to do both in one call).
+block to do both in one call). Set it true to re-open self-serve sign-up — one
+switch moves the endpoint, the page and the link together, because a visible
+form whose endpoint refuses is worse than no form.
 
 ## Roles
 
@@ -233,12 +245,54 @@ not change retrospectively because someone edited a config file.
 | `timezone` | ✅ | Transaction dates and the day book. Validated against the tz database |
 | `books_start_date` | ✅ | Go-live. Nothing posts before it — that period's closing position arrives as opening balances |
 | `currency` | ❌ | Display only. GST, HSN/SAC and the tax engine are India-specific, so anything but INR would format correctly and compute wrongly |
+| `favourite_modules` | ✅ | Which module cards sit at the top of the home screen. Presentation, and the only setting here that moves no figure and refuses nothing — see below |
 
 `Tenant::financialYearFor()` resolves the year containing a date, and
 `Tenant::acceptsPostingOn()` enforces go-live. Both live on the model so the
 April off-by-one — 10 February 2026 belongs to the year that *opened* on
 1 April 2025 — is computed in exactly one place. `FinancialYearTest` pins it
 down before any report depends on it.
+
+### Favourite modules — the cards at the top of home
+
+Home has one card per module that exists (§1.3), and there are enough of them now
+that the three a counter opens every day sit below the fold behind sixteen it
+does not. `favourite_modules` is the list that lifts them: a `json` column of
+module keys, in the order they are shown, capped at **eight**.
+
+Four decisions in it are worth knowing before changing any of them.
+
+**It belongs to the workshop, not to the user.** One list, set by whoever
+configures the workshop, seen by everybody who signs in to it. What each person
+sees of it narrows to their own grants without being stored per person, because
+`resources/js/favourites.js` only lifts a card the permission pass has left
+visible — so a clerk never heads their screen with a card they cannot open.
+
+**Reading it needs no grant.** It rides in the `tenant` block of `/auth/me`,
+which the dashboard already fetches before it paints anything: the favourites
+cost no second request, and a clerk holding no `READ:WORKSPACE` still gets the
+home screen their owner arranged. Writing it is `UPDATE:WORKSPACE`.
+
+**It is its own route, and a `PUT`.** A `PUT` because the body is the whole list
+— unstarring the last card sends `[]`, which has to be a real answer rather than
+an omission. Its own route because `PATCH /workspace` announces `ledger` on the
+data bus, correctly: the financial year and `books_start_date` decide what every
+held report *means*. Starring a card decides nothing of the sort, and sending it
+down that path would mark every held statement and every Insights panel stale on
+each click. `resources/js/data-bus.js` lists `/workspace/favourites` **ahead** of
+`/workspace` for that reason — first match wins.
+
+**Keys are checked against the registry**, exactly as the fragment route checks
+the key in its URL, and a key for a module that has since been switched off is
+filtered on the way *out* (`Tenant::favouriteModules()`) while the column keeps
+it. `enabled` is a deployment decision that gets reversed, and a workshop should
+not have to re-star a card because one was flipped off for a week.
+
+It is deliberately **absent from `Tenant::auditAttributes()`** — the only
+editable setting here that is. Everything else on that list changes what the
+application refuses, reports or charges; this changes which cards are at the top
+of one screen, and it is changed often enough that a row per star would bury the
+settings whose history somebody actually comes to History to read.
 
 ### GSTIN and state code
 
@@ -258,6 +312,7 @@ Added under `/api/v1`.
 | --- | --- | --- |
 | GET | `/workspace` | `READ:WORKSPACE` |
 | PATCH | `/workspace` | `UPDATE:WORKSPACE` |
+| PUT | `/workspace/favourites` | `UPDATE:WORKSPACE` |
 
 ### Platform administration
 
@@ -292,7 +347,7 @@ owner account in the same call.
 
 | Path | Who | What |
 | --- | --- | --- |
-| `/register` | Anyone | Sign-up: workshop + owner in one form. **404** when `TENANCY_ALLOW_PUBLIC_SIGNUP=false` — a visible page whose endpoint answers 403 is worse than no page |
+| `/register` | Anyone | Sign-up: workshop + owner in one form. **404 by default** — `TENANCY_ALLOW_PUBLIC_SIGNUP` ships false; a visible page whose endpoint answers 403 is worse than no page |
 | `/workspace` | `READ:WORKSPACE` + membership | The owner's own workshop: identity and book settings. Read-only without `UPDATE` |
 | `/tenants` | `READ:TENANTS` | Platform administration of every workshop |
 

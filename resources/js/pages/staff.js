@@ -4,7 +4,8 @@ import { can } from '../permissions';
 import { clearModuleParams, moduleParams, registerEscape } from '../shell';
 import {
     $, $$, clearFormErrors, confirmAction, debounce, downloadCsv, esc, formatDate,
-    formatMoney, hideModal, setSubmitting, showFormErrors, showModal, tableMessage, toast,
+    formatMoney, hideModal, setSubmitting, showActionError, showFormErrors, showFormMessage,
+    showModal, tableMessage, toast,
 } from '../ui';
 import { adoptForm, mountWorkspace } from '../workspace';
 
@@ -954,6 +955,11 @@ function payslipHistory(payslips) {
  * the bearings, because the document does not separate the labour from the
  * parts. Showing both is what stops either being taken for a measure of effort.
  *
+ * Both count an invoice **once**, whatever the person did on it. `staff` holds
+ * a row per trade, so a fitter who also wound the motor was two rows on one
+ * document and scored two jobs and twice the value — which is also why this
+ * figure used to disagree with the number of rows listed beneath it.
+ *
  * ## Why this is not next to the pay
  *
  * Because it is not an input to it. Payroll computes from a rate and an
@@ -1528,7 +1534,7 @@ async function postPayroll() {
     const totals = sheetTotals();
 
     if (Number(totals.gross) <= 0) {
-        toast('There is nothing to post for this month.', 'error');
+        showActionError(inForm('payroll', '#payroll-post'), 'There is nothing to post for this month.');
 
         return;
     }
@@ -1908,7 +1914,7 @@ async function submitAdvance(event) {
     const total = advancePayments.total();
 
     if (!split.length) {
-        toast('Enter how much is being handed over.', 'error');
+        showFormMessage(advanceForm, 'Enter how much is being handed over.');
 
         return;
     }
@@ -2199,7 +2205,7 @@ async function submitDesignation(event) {
     const name = input.value.trim();
 
     if (name.length < 2) {
-        toast('Give the designation a name.', 'error');
+        showFormMessage(form, 'Give the designation a name.');
 
         return;
     }

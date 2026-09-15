@@ -612,6 +612,130 @@ class WorkAttributionTest extends TestCase
         $this->assertSame('1180.00', $report['meta']['summary']['invoice_value']);
         $this->assertCount(2, $report['data']);
         $this->assertSame(['Fitter'], $report['data'][0]['trades']);
+
+        // Which benches the two jobs were done at. The figure the job count used
+        // to be conflated with, reported as itself.
+        $this->assertSame(
+            [['designation' => 'Fitter', 'jobs' => 2]],
+            $report['meta']['summary']['trades'],
+        );
+    }
+
+    #[Test]
+    public function one_person_on_two_trades_of_one_invoice_is_one_job(): void
+    {
+        /*
+        | Ramesh fitted the motor and wound it — one document, two rows in
+        | `transaction_staff`, because the unique index is per trade.
+        |
+        | This counted the rows, so the ₹1,180 invoice was reported as two jobs
+        | worth ₹2,360: a throughput figure that made a two-trade person look
+        | twice as productive as a one-trade person doing identical work, and a
+        | money figure that was not a rounding error but revenue the workshop
+        | never billed. In a small shop one person covering two benches is the
+        | ordinary case rather than the edge one.
+        */
+        $this->postSale([
+            ['designation_id' => $this->fitter->id, 'employee_id' => $this->ramesh->id],
+            ['designation_id' => $this->winder->id, 'employee_id' => $this->ramesh->id],
+        ]);
+
+        $report = $this->withHeaders($this->authHeader($this->owner))
+            ->getJson("/api/v1/staff/{$this->ramesh->id}/work")
+            ->assertOk()
+            ->json();
+
+        $summary = $report['meta']['summary'];
+
+        $this->assertSame(1, $summary['job_count']);
+        $this->assertSame('708.00', $summary['invoice_value']);
+
+        // Both trades are still reported — the information the double count was
+        // accidentally carrying, said where it is true.
+        $this->assertEqualsCanonicalizing(
+            [['designation' => 'Fitter', 'jobs' => 1], ['designation' => 'Winder', 'jobs' => 1]],
+            $summary['trades'],
+        );
+
+        // And the count now agrees with the list beneath it. The drawer prints
+        // "showing N of {job_count}", which read as a discrepancy for as long as
+        // the two were counting different things.
+        $this->assertCount(1, $report['data']);
+        $this->assertSame(1, $report['meta']['pagination']['total']);
+        $this->assertEqualsCanonicalizing(['Fitter', 'Winder'], $report['data'][0]['trades']);
+    }
+
+    #[Test]
+    public function two_invoices_that_come_to_the_same_amount_are_both_counted(): void
+    {
+        /*
+        | The trap in fixing the above by de-duplicating the aggregate instead of
+        | the rows: `sum(distinct total)` would report ₹708 here. Two services at
+        | the same price on one day is a counter's routine, not a coincidence.
+        */
+        $this->postSale([['designation_id' => $this->fitter->id, 'employee_id' => $this->ramesh->id]]);
+        $this->postSale([['designation_id' => $this->fitter->id, 'employee_id' => $this->ramesh->id]]);
+
+        $summary = $this->withHeaders($this->authHeader($this->owner))
+            ->getJson("/api/v1/staff/{$this->ramesh->id}/work")
+            ->assertOk()
+            ->json('meta.summary');
+
+        $this->assertSame(2, $summary['job_count']);
+        $this->assertSame('1416.00', $summary['invoice_value']);
+    }
+
+    #[Test]
+    public function the_insights_people_table_counts_invoices_and_says_what_it_does_not_add_up_to(): void
+    {
+        // One motor, both benches, Ramesh on each.
+        $this->postSale([
+            ['designation_id' => $this->fitter->id, 'employee_id' => $this->ramesh->id],
+            ['designation_id' => $this->winder->id, 'employee_id' => $this->ramesh->id],
+        ]);
+
+        // One motor shared: Ramesh fitted it, Sunil wound it.
+        $this->postSale([
+            ['designation_id' => $this->fitter->id, 'employee_id' => $this->ramesh->id],
+            ['designation_id' => $this->winder->id, 'employee_id' => $this->sunil->id],
+        ]);
+
+        // And one nobody was named on.
+        $this->postSale();
+
+        $panel = $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/insights/people?period=all')
+            ->assertOk()
+            ->json('data');
+
+        $rows = collect($panel['people'])->keyBy('employee_id');
+
+        // Two documents, not the three rows of `transaction_staff` behind them.
+        $this->assertSame(2, $rows[$this->ramesh->id]['work_jobs']);
+        $this->assertSame('1416.00', $rows[$this->ramesh->id]['work_value']);
+        $this->assertEqualsCanonicalizing(
+            [['designation' => 'Fitter', 'jobs' => 2], ['designation' => 'Winder', 'jobs' => 1]],
+            $rows[$this->ramesh->id]['work_trades'],
+        );
+
+        $this->assertSame(1, $rows[$this->sunil->id]['work_jobs']);
+        $this->assertSame('708.00', $rows[$this->sunil->id]['work_value']);
+
+        /*
+        | The second shared motor is whole in both their rows, so the column
+        | comes to ₹2,124 against ₹1,416 actually invoiced to somebody. Neither
+        | of them did a stated share of it and the schema records none — so the
+        | coverage figure states the workshop's own total beside the table rather
+        | than leaving a reader to sum the column and arrive at a number that is
+        | not any quantity of anything.
+        */
+        $this->assertSame(2, $panel['work']['credited_invoices']);
+        $this->assertSame('1416.00', $panel['work']['credited_value']);
+
+        // And the denominator: the third sale names nobody, which is the
+        // difference between a quiet bench and pickers nobody filled in.
+        $this->assertSame(3, $panel['work']['invoices']);
+        $this->assertSame('66.67', $panel['work']['share_of_invoices']);
     }
 
     #[Test]

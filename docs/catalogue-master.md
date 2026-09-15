@@ -142,6 +142,29 @@ column cannot disagree with itself.
 
 ---
 
+## The bench reads the same vocabulary
+
+Categories and attributes are not only the catalogue's. A workshop job records
+**what came in** as a `category_id` and a bag of answers keyed by the same
+attributes — so a shop that starts repairing coolers adds a Cooler category here
+and the Jobs intake form asks what a cooler is described by, with no column, no
+migration and no deployment. `GET /workshop-jobs/meta` publishes the same
+`attributes` shape `GET /items/meta` does, and
+`components/attribute-fields.js` draws both.
+
+Two things differ on that side, and both follow from what a job *is*. A job is a
+physical object already on the bench, so **nothing is required** there whatever
+`is_required` says — that flag is about a product that cannot exist without a
+rating, not about a pump a driver could not identify. And **nothing is coerced or
+held to a dropdown's options**: the catalogue describes what the shop deals in
+and may hold its own values to it, while a job describes a competitor's
+forty-year-old unit. See [workshop-module.md](workshop-module.md).
+
+The one thing that must not follow is a second vocabulary. There is no
+`job_categories` table and no `job_attributes` table, and adding either would be
+two masters, two schema resolvers and two admin screens answering one question
+(§4.4, §5.1).
+
 ## Why `data_type` stayed an enum
 
 Categories and units became tables because they are the **business's** vocabulary

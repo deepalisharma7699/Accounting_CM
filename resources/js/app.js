@@ -1,7 +1,11 @@
 import auth from './auth-client';
+import { mountPasskeyManager } from './components/passkey-manager';
+import { initFavourites } from './favourites';
+import passkeys from './passkeys';
 import { applyPermissionGates, setGrants, setWorkspace } from './permissions';
+import { focusSearch, initSearch } from './search';
 import { initShell } from './shell';
-import { $, $$, initModals, toast } from './ui';
+import { $, $$, clearFormErrors, initModals, showFormErrors, showModal, toast } from './ui';
 
 /* -------------------------------------------------------------------------
  | Chrome
@@ -90,7 +94,9 @@ function initChrome() {
     document.addEventListener('keydown', (event) => {
         if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
             event.preventDefault();
-            $('[data-search]')?.focus();
+            // Focus *and* select, so a second press retypes the last term rather
+            // than dropping the caret into the middle of it — see search.js.
+            focusSearch();
         }
 
         // The menu is the innermost thing on screen while it is open, so a press
@@ -100,6 +106,33 @@ function initChrome() {
     });
 
     initLogout();
+    initSecurityDrawer();
+    initSearch();
+}
+
+/**
+ * "Sign-in security" in the account menu, and the drawer behind it.
+ *
+ * The manager is mounted once — the drawer lives in the layout and never
+ * unmounts — and its `open()` is what fetches the list, so a session that never
+ * opens this screen never asks for it (§7.2).
+ *
+ * Delegated from the document for the same reason initLogout() is: the chrome
+ * hydrates after the markup lands, and a click that arrives first should still
+ * work.
+ */
+function initSecurityDrawer() {
+    const manager = mountPasskeyManager(document);
+
+    if (!manager) return;
+
+    document.addEventListener('click', (event) => {
+        // closest(), not matches(): the control wraps an <svg>.
+        if (!event.target.closest('[data-security-open]')) return;
+
+        manager.open();
+        showModal('#security-drawer');
+    });
 }
 
 /**
@@ -138,41 +171,23 @@ function initLogout() {
  | ---------------------------------------------------------------------- */
 
 /**
- * Shared plumbing for the two credential forms: field errors, banner, busy
- * state and the password reveal. Only the request and the destination differ.
+ * Shared plumbing for the two credential forms: field errors, busy state and
+ * the password reveal. Only the request and the destination differ.
+ *
+ * The refusal itself is `showFormErrors()` from ui.js, the same call every form
+ * behind the sign-in makes — so a wrong password is reported where a rejected
+ * expense is: marked on the field, stated under the button that was pressed,
+ * and repeated in the alert top right. These two forms used to carry a banner
+ * of their own at the top of the form and a second set of field-error hooks,
+ * which is two conventions for one thing (§4.4).
+ *
+ * The *busy* state stays local. `setSubmitting()` swaps a button's text, and
+ * these two buttons hold a spinner and a label element rather than text.
  */
-function initAuthForm(form, { bannerId, idleLabel, busyLabel, submit, redirectTo }) {
-    const banner = $(bannerId);
+function initAuthForm(form, { idleLabel, busyLabel, submit, redirectTo }) {
     const button = $('[data-submit]', form);
     const spinner = $('[data-spinner]', form);
     const label = $('[data-submit-label]', form);
-
-    const clearErrors = () => {
-        banner.classList.add('hidden');
-        banner.classList.remove('flex');
-        $$('[data-field-error]', form).forEach((el) => {
-            el.textContent = '';
-            el.classList.add('hidden');
-        });
-    };
-
-    const showError = (error) => {
-        // 422 comes back with per-field messages; everything else is a single
-        // human-readable message on the envelope.
-        if (error.fields) {
-            Object.entries(error.fields).forEach(([field, messages]) => {
-                const el = $(`[data-field-error="${field}"]`, form);
-                if (el) {
-                    el.textContent = messages[0];
-                    el.classList.remove('hidden');
-                }
-            });
-        }
-
-        $('[data-error-message]', banner).textContent = error.message;
-        banner.classList.remove('hidden');
-        banner.classList.add('flex');
-    };
 
     const setBusy = (busy) => {
         button.disabled = busy;
@@ -193,7 +208,7 @@ function initAuthForm(form, { bannerId, idleLabel, busyLabel, submit, redirectTo
 
     form.addEventListener('submit', async (event) => {
         event.preventDefault();
-        clearErrors();
+        clearFormErrors(form);
         setBusy(true);
 
         try {
@@ -201,15 +216,126 @@ function initAuthForm(form, { bannerId, idleLabel, busyLabel, submit, redirectTo
 
             window.location.assign(redirectTo);
         } catch (error) {
-            showError(error);
+            showFormErrors(form, error);
             setBusy(false);
         }
     });
 }
 
+/* -------------------------------------------------------------------------
+ | Signing in with a passkey
+ | ---------------------------------------------------------------------- */
+
+/**
+ * The passkey half of the sign-in dialog.
+ *
+ * Two ways in, both ending in the same two API calls: a challenge, and the
+ * assertion the device signs it with.
+ *
+ *   the button    — an explicit tap, which opens the browser's account picker.
+ *   autofill      — `mediation: 'conditional'`, which puts the same passkeys
+ *                   inside the email field's own autofill list. It is armed on
+ *                   load and waits, invisibly, until somebody focuses the
+ *                   field. This is the smoothest path there is: no button, no
+ *                   dialog, and nothing typed.
+ *
+ * The block starts hidden and is revealed only once the browser has confirmed
+ * it can perform a ceremony at all. A fingerprint button on a machine with no
+ * authenticator is a dead end on the one screen nobody can get past.
+ *
+ * Only one WebAuthn request may be in flight at a time, so the conditional one
+ * is aborted before the explicit one starts — without that, tapping the button
+ * while autofill is armed rejects with an unhelpful InvalidStateError.
+ */
+async function initPasskeySignIn(root) {
+    const panel = $('#passkey-signin', root);
+    const button = $('[data-passkey-signin]', root);
+
+    if (!panel || !button || !passkeys.isSupported()) return;
+
+    const spinner = $('[data-passkey-spinner]', button);
+    const icon = $('[data-passkey-icon]', button);
+    const label = $('[data-passkey-label]', button);
+    const error = $('[data-passkey-error]', root);
+    const idleLabel = label.textContent;
+    const busyLabel = label.dataset.busy || 'Waiting for your device…';
+
+    let conditional = null;
+
+    const setBusy = (busy) => {
+        button.disabled = busy;
+        spinner.classList.toggle('hidden', !busy);
+        icon.classList.toggle('hidden', busy);
+        label.textContent = busy ? busyLabel : idleLabel;
+    };
+
+    // Beneath the button, and in the alert top right — the same two places a
+    // form's refusal is shown. It is deliberately not the password form's
+    // banner: 'that did not work' under a password field, to somebody who never
+    // typed one, reads as 'your password is wrong'.
+    const showError = (message) => {
+        error.textContent = message;
+        error.classList.toggle('hidden', !message);
+
+        if (message) toast(message, 'error');
+    };
+
+    /** One ceremony, from challenge to session. */
+    const signIn = async (options) => {
+        const { state, options: publicKey } = await auth.passkeyLoginOptions();
+
+        const credential = await passkeys.get(publicKey, options);
+
+        await auth.passkeyLogin(state, credential);
+
+        window.location.assign('/dashboard');
+    };
+
+    button.addEventListener('click', async () => {
+        showError('');
+
+        // Stand the autofill request down first: the browser allows one.
+        conditional?.abort();
+        conditional = null;
+
+        setBusy(true);
+
+        try {
+            await signIn();
+        } catch (err) {
+            // Closing the sheet is a decision, not a failure. Saying "that
+            // passkey could not be verified" to somebody who chose to type
+            // their password instead is answering a question they did not ask.
+            if (!passkeys.wasDismissed(err)) {
+                showError(err.message || 'That did not work. Try your password instead.');
+            }
+
+            setBusy(false);
+        }
+    });
+
+    // Reveal it now the browser has agreed it can do this at all.
+    panel.classList.remove('hidden');
+
+    if (!(await passkeys.hasConditionalMediation())) return;
+
+    conditional = new AbortController();
+
+    try {
+        await signIn({ signal: conditional.signal, mediation: 'conditional' });
+    } catch {
+        /*
+         * Silent by design. This request was never asked for — it sits waiting
+         * on the off-chance the field is focused — so every way it can end
+         * (aborted for the button, no passkey chosen, the dialog dismissed, the
+         * page closed) is ordinary. An error here would be the page complaining
+         * about something nobody did.
+         */
+    }
+}
+
 function initLogin(form) {
     initAuthForm(form, {
-        bannerId: '#login-error',
         idleLabel: 'Sign in',
         busyLabel: 'Signing in…',
         redirectTo: '/dashboard',
@@ -219,7 +345,6 @@ function initLogin(form) {
 
 function initRegister(form) {
     initAuthForm(form, {
-        bannerId: '#register-error',
         idleLabel: 'Create workshop',
         busyLabel: 'Creating…',
         // Straight to the workspace settings, which is where a new owner has
@@ -243,23 +368,18 @@ function initRegister(form) {
  | ---------------------------------------------------------------------- */
 
 /*
-| The one page shell that still has code of its own.
+| There is no per-page registry any more, and there is nothing left for one to
+| hold.
 |
-| Every module used to have one. They are cards on the dashboard now, opened in
-| the mounted shell — so the lazy-import registry that used to live here moved to
-| shell.js, which is what consumes it.
+| Every module used to be a page with its own entry point. They are cards on the
+| dashboard now, opened in the mounted shell — so the lazy-import table moved to
+| shell.js, which is what consumes it. The counter at /bills/new was the last
+| page with code of its own, and C4 retired it along with the route: a workshop
+| bill is raised from the job it came off.
 |
-| `dashboard` is absent, and that is the point: home is the module grid and
-| nothing else, so it is rendered entirely by Blade and hydrates nothing. The
-| module that used to paint its figures went with the sections it filled.
-|
-| `bill-counter` is the counter at /bills/new, still a page: a modal cannot host
-| a search-first item picker, a running total, a keyboard flow and a confirmation
-| step without becoming a scroll trap.
+| `dashboard` hydrates nothing of its own either. Home is the module grid and
+| nothing else, rendered entirely by Blade.
 */
-const SHELLS = {
-    'bill-counter': () => import('./pages/bill-counter'),
-};
 
 async function initAuthenticatedPage() {
     // A full page load starts with no token in memory, so the HttpOnly refresh
@@ -283,21 +403,17 @@ async function initAuthenticatedPage() {
     initChrome();
     initModals();
 
-    const page = document.body.dataset.page;
-
-    // The level-0/level-1 swap. Only the dashboard carries the two views it
-    // moves between; the counter is a page and has neither.
-    if (page === 'dashboard') initShell();
-
-    const load = SHELLS[page];
-
-    if (!load) return;
-
-    try {
-        const module = await load();
-        await module.default();
-    } catch (error) {
-        toast(error.message ?? 'Something went wrong loading this page.', 'error');
+    // The level-0/level-1 swap, and the only authenticated document there is.
+    if (document.body.dataset.page === 'dashboard') {
+        /*
+        | Before initShell(), and after applyPermissionGates() above — both
+        | matter. The gating pass decides which cards are visible, and only a
+        | visible card can be lifted into the favourites row; initShell() then
+        | reads its label registry and paints the empty-home hint off whatever
+        | the grid has ended up looking like.
+        */
+        initFavourites(user);
+        initShell();
     }
 }
 
@@ -307,20 +423,30 @@ async function initAuthenticatedPage() {
 
 document.addEventListener('DOMContentLoaded', () => {
     /*
-    | The public page carries the sign-in form in a modal rather than being a
+    | The public site carries the sign-in form in a modal rather than being a
     | sign-in page, so it boots two things: its own behaviour, and — below,
     | through the same branch every credential form takes — the unchanged login
-    | handler. Loaded lazily, so none of the marketing page's code is shipped to
+    | handler. Loaded lazily, so none of the public site's code is shipped to
     | the screens behind the login.
+    |
+    | One key for every public page: the home page and the service pages share
+    | a header, a nameplate guide and an action bar, and resources/js/pages/site
+    | returns early for whatever is not in the document it landed on.
     */
-    if (document.body.dataset.page === 'welcome') {
-        import('./pages/welcome').then((module) => module.default());
+    if (document.body.dataset.page === 'site') {
+        import('./pages/site').then((module) => module.default());
     }
 
     const loginForm = $('#login-form');
 
     if (loginForm) {
         initLogin(loginForm);
+
+        // Deliberately not awaited: it ends in a request that waits for the
+        // person to focus the email field, which may be never. Awaiting it
+        // here would hold up everything after this line for the life of the
+        // page.
+        initPasskeySignIn(document);
 
         return;
     }

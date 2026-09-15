@@ -182,4 +182,52 @@ class ExpenseTest extends TestCase
         $this->assertNull($response->json('data.movements'));
         $this->assertNull($response->json('data.items'));
     }
+
+    /**
+     * What the Expenses module's list is, and what it is not.
+     *
+     * The module was the whole transaction list until C2 reduced it to this one
+     * kind. Sales lists invoices and credit notes, Purchase lists bills and
+     * debit notes, and Insights' Day Book lists every posted document — so a
+     * fourth copy here would be three screens answering one question (§5.1).
+     * `types[]=expense` is what holds that shut, and it is asked for by name so
+     * the page count agrees with the rows on it.
+     *
+     * The split is asserted alongside because the list's "Paid by" column reads
+     * it straight off the listing. The ledger entries deliberately are not
+     * loaded there — a page of forty documents would pull every posting of every
+     * one — which is why the expense *account* is a server-side filter on that
+     * screen and a column on the document itself.
+     */
+    #[Test]
+    public function the_expense_listing_carries_the_split_and_holds_nothing_else(): void
+    {
+        $headers = $this->withHeaders($this->authHeader($this->owner));
+
+        $headers->postJson('/api/v1/transactions/expense', $this->expense(
+            '2000.00',
+            payments: [['cash', '500.00'], ['upi', '1500.00', 'UPI-88']],
+        ))->assertCreated();
+
+        // A journal is a posted document of another kind, written the same day.
+        // If the listing were filtering after the fact it would be here.
+        $this->postSimpleJournal($this->tenant, SystemAccount::Cash, SystemAccount::MiscExpense, '75.00');
+
+        $response = $headers->getJson('/api/v1/transactions?types[]=expense')->assertOk();
+
+        $this->assertCount(1, $response->json('data'));
+        $this->assertSame('expense', $response->json('data.0.type'));
+
+        // Both rows of the split, with the reference that is the whole point of
+        // recording a transfer rather than cash.
+        $this->assertSame(
+            ['Cash', 'UPI / Wallet'],
+            array_column($response->json('data.0.payments'), 'mode_label'),
+        );
+        $this->assertSame('UPI-88', $response->json('data.0.payments.1.reference'));
+
+        // Settled the moment it is written, so there is no payment status to ask
+        // about — which is why that filter came off this screen.
+        $this->assertNull($response->json('data.0.payment_status'));
+    }
 }

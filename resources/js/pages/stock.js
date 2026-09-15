@@ -1,11 +1,12 @@
 import auth from '../auth-client';
 import { formatQuantity } from '../components/badge';
 import {
-    averageCostOf, positionStatus, rollUpPositions, stockStatusBadge,
+    averageCostOf, positionStatus, rollUpPositions, statusOfRow, STOCK_STATUS, stockStatusBadge,
 } from '../components/stock-position';
+import { initStockAdjust, openStockAdjust } from '../components/stock-adjust';
 import {
-    $, $$, clearFormErrors, debounce, downloadCsv, esc, formatDate, formatMoney,
-    hideModal, setSubmitting, showFormErrors, showModal, tableMessage, toast,
+    $, $$, debounce, downloadCsv, esc, formatDate, formatMoney,
+    showModal, tableMessage, toast,
 } from '../ui';
 import { mountWorkspace } from '../workspace';
 
@@ -203,15 +204,21 @@ function groupByItem(rows) {
  * Whether one variant is in the state the pills are asking for.
  *
  * Read off the flags the server sent rather than recomputed from the quantity:
- * "low" depends on a reorder level this screen never sees, and guessing at it
- * would be a second definition of low stock.
+ * "low" and "below minimum" each depend on a level this screen never sees, and
+ * guessing at either would be a second definition of a shortage.
+ *
+ * `in_stock` has to exclude both. A variant with a floor and no reorder level is
+ * not low, so without the second clause it answered the "In stock" pill while
+ * its own badge two columns along said *Below Minimum*.
  */
 function matchesStatus(row) {
     switch (state.status) {
         case 'negative': return row.is_negative;
         case 'low': return row.is_low && !row.is_negative;
+        case 'below_minimum': return row.is_below_minimum && !row.is_negative;
         case 'out': return !row.has_stock && !row.is_negative;
-        case 'in_stock': return row.has_stock && !row.is_low && !row.is_negative;
+        case 'in_stock':
+            return row.has_stock && !row.is_low && !row.is_below_minimum && !row.is_negative;
         default: return true;
     }
 }
@@ -479,7 +486,22 @@ function renderGroup(group) {
  * against.
  */
 function renderVariant(row, unit) {
-    const status = row.is_negative ? 'negative' : (row.is_low ? 'low' : (row.has_stock ? 'in_stock' : 'out'));
+    const status = statusOfRow(row);
+
+    /*
+    | Both levels under the figure, in the order the shelf crosses them on the
+    | way down, and either can be set without the other. A row that shows only
+    | "reorder at 20" while a floor of 5 is what turned its badge orange is a row
+    | that looks wrong to the person who set the floor.
+    */
+    const levels = [
+        row.reorder_level === null || row.reorder_level === undefined
+            ? null
+            : `reorder at ${formatQuantity(row.reorder_level, unit)}`,
+        row.min_stock === null || row.min_stock === undefined
+            ? null
+            : `never below ${formatQuantity(row.min_stock, unit)}`,
+    ].filter(Boolean);
 
     return `
         <tr class="cursor-pointer border-t border-muted bg-secondary/10 transition hover:bg-secondary/40"
@@ -498,9 +520,9 @@ function renderVariant(row, unit) {
                 <span class="block font-mono text-[13px] ${row.is_negative ? 'font-semibold text-rose-700' : 'text-secondary-foreground'}">
                     ${esc(formatQuantity(row.quantity, unit))}
                 </span>
-                ${row.reorder_level === null || row.reorder_level === undefined
+                ${levels.length === 0
                     ? ''
-                    : `<span class="mt-0.5 block text-[11.5px] text-muted-foreground">reorder at ${esc(formatQuantity(row.reorder_level, unit))}</span>`}
+                    : `<span class="mt-0.5 block text-[11.5px] text-muted-foreground">${esc(levels.join(' · '))}</span>`}
             </td>
             <td class="px-4 py-2.5 text-right font-mono text-[13px] text-muted-foreground">
                 ${row.has_stock ? esc(money(row.average_cost)) : '—'}
@@ -661,14 +683,17 @@ function exportCsv() {
         row.average_cost,
         row.value,
         row.reorder_level ?? '',
-        row.is_negative ? 'Negative' : (row.is_low ? 'Low stock' : (row.has_stock ? 'In stock' : 'Out of stock')),
+        row.min_stock ?? '',
+        // The badge's own word for it, rather than a fourth spelling of the same
+        // five states in a spreadsheet nobody would think to check.
+        STOCK_STATUS[statusOfRow(row)]?.label ?? '',
         row.is_active ? 'Active' : 'Archived',
     ]));
 
     downloadCsv(`stock-${new Date().toISOString().slice(0, 10)}.csv`, [
         [
             'Item', 'Code', 'Category', 'Variant', 'SKU', 'Unit',
-            'Quantity', 'Average cost', 'Value', 'Reorder level', 'Status', 'Variant state',
+            'Quantity', 'Average cost', 'Value', 'Reorder level', 'Minimum', 'Status', 'Variant state',
         ],
         ...rows,
     ]);
@@ -680,106 +705,31 @@ function exportCsv() {
  | Recording a count
  | ---------------------------------------------------------------------- */
 
-let lineSeq = 0;
-
-function adjustmentLine() {
-    const id = ++lineSeq;
-
-    const options = state.rows
-        .map((row) => `<option value="${row.variant_id}">${esc(row.display_label)}${row.item ? ` · ${esc(row.item.name)}` : ''}</option>`)
-        .join('');
-
-    return `
-        <div class="grid gap-2 rounded-[10px] border border-border p-3 sm:grid-cols-[2fr_1fr_1fr_auto]" data-line="${id}">
-            <label class="field">
-                <span class="field-label">Variant</span>
-                <select name="variant_id" class="field-input" required>
-                    <option value="">Choose…</option>
-                    ${options}
-                </select>
-            </label>
-
-            <label class="field">
-                <span class="field-label">Difference</span>
-                <input type="text" name="quantity" class="field-input font-mono" inputmode="decimal"
-                       placeholder="-2" required>
-            </label>
-
-            <label class="field">
-                <span class="field-label">Cost, if found</span>
-                <input type="text" name="unit_cost" class="field-input font-mono" inputmode="decimal"
-                       placeholder="Leave blank">
-            </label>
-
-            <button type="button" class="btn btn-ghost btn-icon self-end" data-remove-line
-                    aria-label="Remove this line">×</button>
-        </div>`;
-}
-
+/**
+ * The stock-take, in the shared dialog.
+ *
+ * Everything this used to do is `components/stock-adjust.js` now — the lines,
+ * the signed difference, the client reference and the post. What is left here is
+ * the one thing only this screen knows: which variants a line may be about.
+ *
+ * They come from the rows on this page rather than from a search, which is a
+ * real limit and an old one: a variant filtered off the screen cannot be counted
+ * without clearing the filter first. It is unchanged deliberately — P5 moved
+ * this form, it did not redesign it.
+ */
 function openAdjustment() {
-    const form = $('#adjustment-form');
+    openStockAdjust({
+        mode: 'count',
+        variants: state.rows.map((row) => ({
+            id: row.variant_id,
+            label: `${row.display_label}${row.item ? ` · ${row.item.name}` : ''}`,
+        })),
 
-    clearFormErrors(form);
-    form.reset();
-    form.elements.date.value = new Date().toISOString().slice(0, 10);
-
-    lineSeq = 0;
-    $('#adjustment-lines').innerHTML = adjustmentLine();
-
-    showModal('#adjustment-modal');
-}
-
-function collectAdjustments() {
-    return $$('#adjustment-lines [data-line]')
-        .map((line) => ({
-            variant_id: Number($('[name=variant_id]', line).value),
-            quantity: $('[name=quantity]', line).value.trim(),
-            unit_cost: $('[name=unit_cost]', line).value.trim() || null,
-        }))
-        .filter((row) => row.variant_id && row.quantity !== '');
-}
-
-async function submitAdjustment(event) {
-    event.preventDefault();
-
-    const form = event.target;
-
-    clearFormErrors(form);
-
-    const adjustments = collectAdjustments();
-
-    if (!adjustments.length) {
-        showFormErrors(form, {
-            details: { errors: { adjustments: ['Say what the count found — at least one variant and the difference.'] } },
-        });
-
-        return;
-    }
-
-    setSubmitting(form, true, 'Posting…');
-
-    try {
-        await auth.call('/transactions/stock-adjustment', {
-            method: 'POST',
-            body: {
-                date: form.elements.date.value,
-                notes: form.elements.notes.value.trim() || null,
-                // Never defaulted. Committing to the ledger is the consequential
-                // act, and this screen is explicit about doing it.
-                post: true,
-                adjustments,
-            },
-        });
-
-        hideModal('#adjustment-modal');
-        toast('The count is recorded and the books are updated.');
-
-        await Promise.all([load(), loadReconciliation()]);
-    } catch (error) {
-        showFormErrors(form, error);
-    } finally {
-        setSubmitting(form, false, 'Post the correction');
-    }
+        // Both, and not just the rows: the reconciliation tile compares the
+        // ledger's Inventory balance against the movements, and a correction
+        // moves each of them.
+        onPosted: () => Promise.all([load(), loadReconciliation()]),
+    });
 }
 
 /* -------------------------------------------------------------------------
@@ -865,6 +815,11 @@ export default async function initStock() {
         listSubtitle: () => 'What is on the shelf, and what it is worth. Every figure is a sum of stock movements — there is no quantity column anywhere to go out of step.',
         createLabel: '',
         canCreate: false,
+        // The shelf is a sum of stock movements, so anything that posts one
+        // — a sale, a purchase, a return, a count, a job issuing parts —
+        // leaves these rows behind. `items` too: a new variant is a new row
+        // here, at a position of zero.
+        refreshOn: ['stock', 'items'],
         onShowList: async () => {
             await load();
             await loadReconciliation();
@@ -987,22 +942,8 @@ export default async function initStock() {
 
     $('#export-csv').addEventListener('click', exportCsv);
 
+    initStockAdjust();
     $('#new-adjustment').addEventListener('click', openAdjustment);
-    $('#add-adjustment-line').addEventListener('click', () => {
-        $('#adjustment-lines').insertAdjacentHTML('beforeend', adjustmentLine());
-    });
-
-    $('#adjustment-lines').addEventListener('click', (event) => {
-        const remove = event.target.closest('[data-remove-line]');
-
-        // Never the last one: an empty form with no way to add a line back
-        // without closing and reopening is worse than a line you can ignore.
-        if (remove && $$('#adjustment-lines [data-line]').length > 1) {
-            remove.closest('[data-line]').remove();
-        }
-    });
-
-    $('#adjustment-form').addEventListener('submit', submitAdjustment);
 
     /* --- the category filter's options ----------------------------------- */
 

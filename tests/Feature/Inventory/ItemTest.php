@@ -14,6 +14,8 @@ use App\Support\Money;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\Concerns\InteractsWithAuthModule;
+use Tests\Concerns\InteractsWithLedger;
+use Tests\Concerns\InteractsWithStock;
 use Tests\Concerns\InteractsWithTenancy;
 use Tests\TestCase;
 
@@ -30,7 +32,11 @@ use Tests\TestCase;
  */
 class ItemTest extends TestCase
 {
-    use InteractsWithAuthModule, InteractsWithTenancy, RefreshDatabase;
+    use InteractsWithAuthModule;
+    use InteractsWithLedger;
+    use InteractsWithStock;
+    use InteractsWithTenancy;
+    use RefreshDatabase;
 
     private Tenant $tenant;
 
@@ -659,6 +665,85 @@ class ItemTest extends TestCase
 
             $this->assertSame('875.00', $variant->suggestedPriceFrom(Money::of('700.00'))->amount());
             $this->assertSame('1000.00', $variant->suggestedPriceFrom(Money::of('800.00'))->amount());
+        });
+    }
+
+    /**
+     * What the workshop expects to pay is written down, and reaches nothing.
+     *
+     * `purchase_price` is the one column here that *looks* like a cost, and the
+     * whole safety of storing it rests on a promise made only in prose — in its
+     * migration, in {@see ItemVariantService}'s class note, and in
+     * `docs/items-module.md`. Prose does not fail a build.
+     *
+     * So this asserts the promise where it would actually break: the shelf. A
+     * bearing whose buying price says 410.00, bought twice at 700 and 800, is
+     * worth 750 apiece and issues at 750 — and if the typed figure ever reached
+     * a valuation, the value left behind here would be the number to notice.
+     *
+     * The other half is that a markup still takes its cost as an *argument*. The
+     * day somebody makes `suggestedPriceFrom()` fall back to this column, a
+     * price quoted from a stale note becomes a price quoted from the books.
+     */
+    #[Test]
+    public function a_buying_price_is_recorded_and_never_becomes_a_cost(): void
+    {
+        $variant = $this->inWorkshop(function () {
+            $bearing = Item::factory()->part()->create();
+
+            $recorded = $this->variants()->create($bearing, [
+                'attributes' => ['size' => '6205'],
+                'sell_price' => '520.00',
+                'purchase_price' => '410.00',
+                'markup_percent' => '25',
+            ]);
+
+            // Stored as a decimal string, like every other price on this table.
+            $this->assertSame('410.00', (string) $recorded->purchase_price);
+
+            // 875.00 is 700 marked up, not 410 marked up — which would be
+            // 512.50. The cost is handed in, and this column is not consulted.
+            $this->assertSame(
+                '875.00',
+                $recorded->suggestedPriceFrom(Money::of('700.00'))->amount(),
+            );
+
+            return $recorded;
+        });
+
+        // What it actually cost is what arrived, twice, at neither of the rates
+        // anybody wrote on the catalogue record.
+        $this->receiveStock($this->tenant, $variant, '10', '700.00');
+        $this->receiveStock($this->tenant, $variant, '10', '800.00');
+
+        $position = $this->stockPositionOf($this->tenant, $variant);
+
+        $this->assertSame('20.000', $position['quantity']);
+        $this->assertSame('15000.00', $position['value']);
+        $this->assertSame('750.00', $position['average_cost']);
+
+        /*
+        | And an issue takes its share of that value.
+        |
+        | Four bearings at the weighted average leave 12000.00 on the shelf. At
+        | the buying price they would leave 13360.00 — so this figure is the one
+        | that changes if the column is ever read by a valuation, and it changes
+        | in the Inventory account at the same time.
+        */
+        $this->issueStock($this->tenant, $variant, '4');
+
+        $this->assertSame('12000.00', $this->stockPositionOf($this->tenant, $variant)['value']);
+        $this->assertStockAgreesWithInventoryAccount($this->tenant);
+        $this->assertBooksBalance($this->tenant);
+
+        // Nullable and clearable, which is what keeps it a note. A variant
+        // bought at whatever the day's rate is has no expected price, and a
+        // figure something else depended on could not be blanked like this.
+        $this->inWorkshop(function () use ($variant) {
+            $cleared = $this->variants()->update($variant, ['purchase_price' => null]);
+
+            $this->assertNull($cleared->purchase_price);
+            $this->assertSame('520.00', (string) $cleared->sell_price);
         });
     }
 

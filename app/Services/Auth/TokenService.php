@@ -39,17 +39,20 @@ class TokenService
 
     /**
      * Mint a fresh access + refresh pair for a brand new session (login).
+     *
+     * @param  bool  $trusted  Started by a passkey — see {@see refreshTtl()}.
      */
-    public function issueTokenPair(User $user, ?Request $request = null, ?string $familyId = null): TokenPair
-    {
-        $accessTtl = $this->ttl('access');
-        $refreshTtl = $this->ttl('refresh');
-
+    public function issueTokenPair(
+        User $user,
+        ?Request $request = null,
+        ?string $familyId = null,
+        bool $trusted = false,
+    ): TokenPair {
         return new TokenPair(
             accessToken: $this->issueAccessToken($user),
-            accessTokenExpiresIn: $accessTtl,
-            refreshToken: $this->issueRefreshToken($user, $request, $familyId),
-            refreshTokenExpiresIn: $refreshTtl,
+            accessTokenExpiresIn: $this->ttl('access'),
+            refreshToken: $this->issueRefreshToken($user, $request, $familyId, $trusted),
+            refreshTokenExpiresIn: $this->refreshTtl($trusted),
         );
     }
 
@@ -79,18 +82,22 @@ class TokenService
      *
      * @param  string|null  $familyId  Continues an existing login family when rotating.
      */
-    public function issueRefreshToken(User $user, ?Request $request = null, ?string $familyId = null): string
-    {
-        return $this->mintRefreshToken($user, $request, $familyId)['token'];
+    public function issueRefreshToken(
+        User $user,
+        ?Request $request = null,
+        ?string $familyId = null,
+        bool $trusted = false,
+    ): string {
+        return $this->mintRefreshToken($user, $request, $familyId, $trusted)['token'];
     }
 
     /**
      * @return array{token: string, jti: string, family_id: string}
      */
-    private function mintRefreshToken(User $user, ?Request $request, ?string $familyId): array
+    private function mintRefreshToken(User $user, ?Request $request, ?string $familyId, bool $trusted = false): array
     {
         $now = time();
-        $ttl = $this->ttl('refresh');
+        $ttl = $this->refreshTtl($trusted);
         $jti = (string) Str::uuid();
         $family = $familyId ?? (string) Str::uuid();
 
@@ -111,6 +118,7 @@ class TokenService
             'jti' => $jti,
             'token_hash' => $this->hash($token),
             'family_id' => $family,
+            'trusted' => $trusted,
             'expires_at' => now()->addSeconds($ttl),
             'ip_address' => $request?->ip(),
             'user_agent' => Str::limit((string) $request?->userAgent(), 500, ''),
@@ -201,7 +209,16 @@ class TokenService
             );
         }
 
-        $minted = $this->mintRefreshToken($user, $request, $current->family_id);
+        /*
+        | The successor inherits the trust of the token it replaces.
+        |
+        | Re-deciding it here would mean asking "was this a passkey session?"
+        | of a request that carries only a cookie, and the honest answer at
+        | that point is "no" — which would quietly shorten every trusted
+        | session at its first rotation, signing the person out a week later
+        | with nothing anywhere to say why.
+        */
+        $minted = $this->mintRefreshToken($user, $request, $current->family_id, (bool) $current->trusted);
 
         $this->refreshTokens->revoke($current, 'rotated', $minted['jti']);
 
@@ -209,7 +226,7 @@ class TokenService
             accessToken: $this->issueAccessToken($user),
             accessTokenExpiresIn: $this->ttl('access'),
             refreshToken: $minted['token'],
-            refreshTokenExpiresIn: $this->ttl('refresh'),
+            refreshTokenExpiresIn: $this->refreshTtl((bool) $current->trusted),
         );
     }
 
@@ -383,6 +400,23 @@ class TokenService
     private function ttl(string $type): int
     {
         return (int) config("jwt.ttl.{$type}");
+    }
+
+    /**
+     * How long a session may live without anybody signing in again.
+     *
+     * Two answers, and the difference is what the session was started with. A
+     * passkey is bound to one device and re-verified by fingerprint, face or
+     * PIN every single time it is used, so a long session on it is still the
+     * strong thing it was on day one. A typed password is a secret that can be
+     * watched over a shoulder, reused from another site, or written inside a
+     * cupboard door — and lengthening its session lengthens precisely that
+     * exposure. So the long lifetime is something a passkey earns, not a
+     * setting.
+     */
+    private function refreshTtl(bool $trusted): int
+    {
+        return $this->ttl($trusted ? 'refresh_trusted' : 'refresh');
     }
 
     private function config(string $key): string

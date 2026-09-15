@@ -1,16 +1,16 @@
 /**
  * Writing a bill — the document engine behind every screen that raises one.
  *
- * This is the counter's machinery, lifted out of `pages/bill-counter.js` whole:
- * the lines, the server-priced running total, the confirmation, the payment
- * split, the autosaved draft and the post. What is left in the counter is the
- * part that is genuinely the counter's — the sale/purchase/workshop chooser and
- * everything about billing a job card.
+ * This is the counter's machinery, lifted whole out of the page that used to
+ * live at `/bills/new`: the lines, the server-priced running total, the
+ * confirmation, the payment split, the autosaved draft and the post.
  *
  * It moved because a second caller arrived. The Purchase module raises exactly
  * this document with the direction fixed, and the alternative was a copy —
  * which, on the evidence of the two counterparty forms this codebase carried
- * until last week, would have drifted before anyone noticed.
+ * until last week, would have drifted before anyone noticed. Sales was the
+ * third, and the Jobs card the fourth; the counter itself was retired at C4,
+ * because a workshop bill is now raised from the job it came off.
  *
  * ## The four decisions it inherits, unchanged
  *
@@ -47,6 +47,8 @@
  */
 
 import auth from '../auth-client';
+import { onChange } from '../data-bus';
+import { can } from '../permissions';
 import { formatQuantity } from './badge';
 import { mountItemPicker } from './item-picker';
 import { mountPartyPicker } from './party-picker';
@@ -54,7 +56,10 @@ import { mountPaymentRows } from './payment-rows';
 import { mountStaffAttribution } from './staff-attribution';
 import { initQuickItem, openQuickItem } from './quick-item';
 import { initQuickParty, openQuickParty } from './quick-party';
-import { $, $$, debounce, esc, formatMoney, hideModal, isZeroAmount, showModal, toast } from '../ui';
+import {
+    $, $$, clearFormErrors, debounce, esc, formatMoney, hideModal, isZeroAmount,
+    showFormErrors, showModal, toast,
+} from '../ui';
 
 /**
  * Mount the document form into a host that carries the markup from
@@ -201,6 +206,7 @@ export async function mountBillDocument(root, {
      */
     function addLine(choice, {
         quantity = '1', unit_price = null, discount = '0', discount_mode = 'amount', memo = null,
+        price_includes_tax = null,
     } = {}) {
         // Whatever was missing when somebody last pressed post, this is part of
         // the answer — the notice goes as soon as they start filling it in.
@@ -233,6 +239,21 @@ export async function mountBillDocument(root, {
             // Rupees or a percentage of this line. UI state only — what goes to
             // the server is the typed figure under one key or the other.
             discount_mode,
+            /*
+            | Whether the rate box holds a price with the GST already in it.
+            |
+            | Prefilled from the item, because a shop that prices parts at the
+            | figure on the box has said so once in the catalogue and should not
+            | say it again per line. Flippable per line all the same: the same
+            | bill often carries a part at its printed price and a job quoted
+            | before tax.
+            |
+            | Unlike `discount_mode` this one *is* sent — it changes what the
+            | server taxes, not merely how the browser reads a box.
+            */
+            price_includes_tax: price_includes_tax === null
+                ? choice.price_includes_tax === true
+                : price_includes_tax === true,
             memo,
         });
 
@@ -282,9 +303,18 @@ export async function mountBillDocument(root, {
         // was the row that looked most normal on the screen.
         if (lineProblem(line)) return null;
 
-        const amount = lineGross(line) - lineDiscount(line);
+        const net = Math.max(lineGross(line) - lineDiscount(line), 0);
 
-        return Math.max(amount, 0).toFixed(2);
+        /*
+        | Still pre-tax where the rate had the tax in it, so the column keeps one
+        | meaning down the bill and adds up to the "Taxable value" in the footer.
+        | A row showing ₹118 beside a row showing ₹100 for the same ₹100 of goods
+        | is a column nobody can total by eye — and the ₹118 the operator typed is
+        | not lost, it is under the rate box in `rateHint`.
+        */
+        const rate = line.price_includes_tax ? Number(line.gst_rate) || 0 : 0;
+
+        return (rate > 0 ? net / (1 + rate / 100) : net).toFixed(2);
     }
 
     /** Quantity × rate, before any discount. Indicative, like `rowAmount`. */
@@ -370,6 +400,120 @@ export async function mountBillDocument(root, {
      * cannot say different things — the initial render and every keystroke after
      * it go through the same three toggles.
      */
+    /* ---------------------------------------------------------------------
+     | What the shelf holds, beside the line
+     | ------------------------------------------------------------------ */
+
+    /**
+     * Is this line asking for more than there is?
+     *
+     * Never on a purchase — stock arriving cannot be short of itself — and never
+     * on a line with no position, which is every service.
+     */
+    function isShort(line) {
+        return !isPurchase()
+            && line.available !== null && line.available !== undefined
+            && Number(line.quantity) > Number(line.available);
+    }
+
+    /** " · 4 PCS on hand", or nothing at all for something with no shelf. */
+    function onHandText(line) {
+        return line.available === null || line.available === undefined
+            ? ''
+            : ` · ${esc(formatQuantity(line.available, line.unit_symbol))} on hand`;
+    }
+
+    function shortText(line) {
+        return isShort(line)
+            ? `Only ${esc(formatQuantity(line.available, line.unit_symbol))} available in stock.`
+            : '';
+    }
+
+    /**
+     * Put the position back on the row, in place — the counterpart of
+     * {@link paintLineProblem}, and there for both of the same reasons.
+     *
+     * A quantity typed past what is on the shelf has to raise the warning as it
+     * is typed, and a re-render would take the caret out of the very box the
+     * message is about. And a sale posted in another module moves the shelf
+     * under a document that is already open, which is what `data-bus.js`
+     * announces — repainting the whole table then would discard every
+     * half-typed rate on it.
+     */
+    function paintLineStock(row, line) {
+        const onHand = $('[data-line-onhand]', row);
+        const short = $('[data-line-short]', row);
+
+        if (onHand) onHand.innerHTML = onHandText(line);
+
+        if (short) {
+            short.innerHTML = shortText(line);
+            short.classList.toggle('hidden', !isShort(line));
+        }
+    }
+
+    /**
+     * Bring every line's "on hand" figure back up to date.
+     *
+     * The figure is captured when the row is picked, which is right — it is what
+     * the shelf held at the moment of choosing — and wrong the moment anything
+     * else moves it. Two things move it under an open document: a posting in
+     * another module, and *time*, because §26 restores a draft up to a week old
+     * and it comes back asserting last Tuesday's shelf as though it were now.
+     * The second is the one that mattered: no amount of reloading the page
+     * cleared it, because reloading is what put it back.
+     *
+     * One request for every line, named by variant, rather than one request per
+     * line. Silent on failure: this is a hint beside a box, and the posting
+     * engine has the final say on whether the bill can be written at all.
+     */
+    async function refreshAvailability() {
+        if (!can('READ', 'STOCK')) return;
+
+        const ids = [...new Set(
+            state.lines.map((line) => line.variant_id).filter((id) => id !== null && id !== undefined),
+        // The endpoint refuses more than it will page, and a document long
+        // enough to hit that is better served with two hundred figures right
+        // than with a 422 that leaves every one of them as it was.
+        )].slice(0, 200);
+
+        if (ids.length === 0) return;
+
+        try {
+            const query = ids.map((id) => `variant_ids[]=${encodeURIComponent(id)}`).join('&');
+            const { data } = await auth.call(`/stock?per_page=200&${query}`);
+
+            const positions = new Map(data.map((row) => [row.variant_id, row.quantity]));
+
+            let moved = false;
+
+            state.lines.forEach((line) => {
+                if (!positions.has(line.variant_id)) return;
+                if (positions.get(line.variant_id) === line.available) return;
+
+                line.available = positions.get(line.variant_id);
+                moved = true;
+
+                // Scoped to `root` rather than the document: on a module showing
+                // its list, the form this table lives in is detached (§2A.2), and
+                // the figures still have to be right for when it comes back.
+                const row = $(`[data-line="${line.id}"]`, root);
+
+                if (row) paintLineStock(row, line);
+            });
+
+            // The draft carries `available` with it, so a corrected figure has to
+            // be written down or the next restore puts the old one back. Only
+            // when one actually moved: `save` is what the whole document is
+            // persisted through, and calling it for nothing is how an empty
+            // draft comes to overwrite a real one.
+            if (moved) save();
+        } catch {
+            // As above — a stale hint is better than an error over a bill
+            // somebody is in the middle of writing.
+        }
+    }
+
     function paintLineProblem(row, problem) {
         const input = $('input[name="quantity"]', row);
         const note = $('[data-line-problem]', row);
@@ -425,16 +569,14 @@ export async function mountBillDocument(root, {
 
         body.innerHTML = state.lines.length
             ? state.lines.map((line) => {
-                // Shown against what the shelf holds, at the moment of typing
-                // rather than at the moment of posting. It refuses nothing — a
-                // workshop legitimately bills a part it is about to buy in — but
-                // the decision gets made knowingly. M17 has the final say.
-                //
-                // Never on a purchase: stock arriving cannot be short of itself.
-                const short = !isPurchase()
-                    && line.available !== null && line.available !== undefined
-                    && Number(line.quantity) > Number(line.available);
-
+                /*
+                | The position is written into two empty slots — `data-line-onhand`
+                | and `data-line-short` — rather than composed here, because a
+                | keystroke and a sale posted in another module both have to move
+                | it without rebuilding the table under somebody's caret. See
+                | `paintLineStock`, which fills the same two from the same pair
+                | of functions.
+                */
                 const problem = lineProblem(line);
 
                 return `
@@ -442,16 +584,10 @@ export async function mountBillDocument(root, {
                     <td class="px-2 py-2">
                         <span class="block text-sm font-medium text-foreground">${esc(line.label)}</span>
                         <span class="block text-xs text-muted-foreground">
-                            ${esc(line.gst_rate)}% GST${
-                                line.available === null || line.available === undefined
-                                    ? ''
-                                    : ` · ${esc(formatQuantity(line.available, line.unit_symbol))} on hand`
-                            }
+                            ${esc(line.gst_rate)}% GST<span data-line-onhand>${onHandText(line)}</span>
                         </span>
-                        ${short ? `
-                            <span class="mt-1 block text-xs font-medium text-rose-600">
-                                Only ${esc(formatQuantity(line.available, line.unit_symbol))} available in stock.
-                            </span>` : ''}
+                        <span class="mt-1 block text-xs font-medium text-rose-600 ${isShort(line) ? '' : 'hidden'}"
+                              data-line-short>${shortText(line)}</span>
                     </td>
 
                     <td class="px-2 py-2">
@@ -469,9 +605,21 @@ export async function mountBillDocument(root, {
                     </td>
 
                     <td class="px-2 py-2">
-                        <input type="text" class="field-input w-24 text-right font-mono" inputmode="decimal"
-                               name="unit_price" value="${esc(line.unit_price)}" placeholder="0.00"
-                               aria-label="Rate for ${esc(line.label)}">
+                        <div class="flex items-center justify-end gap-1">
+                            <input type="text" class="field-input w-24 text-right font-mono" inputmode="decimal"
+                                   name="unit_price" value="${esc(line.unit_price)}" placeholder="0.00"
+                                   aria-label="Rate for ${esc(line.label)}">
+                            <button type="button" data-tax-mode
+                                    class="h-[2.625rem] w-12 shrink-0 rounded-[10px] border text-[11px] font-semibold
+                                           ${line.price_includes_tax
+                                               ? 'border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100'
+                                               : 'border-border bg-card text-muted-foreground hover:bg-secondary hover:text-foreground'}"
+                                    aria-label="${line.price_includes_tax
+                                        ? `Rate for ${esc(line.label)} includes GST — switch to a rate before GST`
+                                        : `Rate for ${esc(line.label)} is before GST — switch to a rate that includes it`}">
+                                ${line.price_includes_tax ? 'incl' : '+GST'}
+                            </button>
+                        </div>
                         ${rateHint(line)}
                     </td>
 
@@ -522,11 +670,53 @@ export async function mountBillDocument(root, {
      * up, not so it can be accepted by tabbing past it.
      */
     function rateHint(line) {
-        if (!isPurchase() || line.average_cost === null || line.average_cost === undefined) return '';
+        const hints = [];
 
-        return `<span class="mt-1 block text-right text-[11px] text-muted-foreground">
-                    avg ${esc(formatMoney(line.average_cost))}
-                </span>`;
+        // What the rate breaks into, when it was quoted with the tax in it. The
+        // whole point of the mode is that ₹118 stays ₹118, so the figure the
+        // invoice will actually carry — ₹100 of goods and ₹18 of GST — is not on
+        // the screen anywhere else. Indicative, like `rowAmount`: the server
+        // prices the bill and the footer shows its answer.
+        const split = inclusiveSplit(line);
+
+        if (split) {
+            hints.push(`${esc(formatMoney(split.base))} + ${esc(formatMoney(split.tax))} GST`);
+        }
+
+        if (isPurchase() && line.average_cost !== null && line.average_cost !== undefined) {
+            hints.push(`avg ${esc(formatMoney(line.average_cost))}`);
+        }
+
+        return hints.length
+            ? `<span class="mt-1 block text-right text-[11px] text-muted-foreground">
+                   ${hints.join(' · ')}
+               </span>`
+            : '';
+    }
+
+    /**
+     * What one unit of a tax-inclusive rate is made of.
+     *
+     * Null on an ordinary line, and on one with no rate or no rate to extract at
+     * — 0% inclusive of nothing is just the price, and printing "₹100.00 + ₹0.00
+     * GST" under it would be noise on every exempt line.
+     *
+     * The browser's own arithmetic, and it stays inside the hint for that reason.
+     * `GstRate::baseWithin()` does this in integer paise on the server and its
+     * answer is the one that reaches the invoice; this is here so the box says
+     * something as somebody types, exactly as `rowAmount` is.
+     */
+    function inclusiveSplit(line) {
+        if (!line.price_includes_tax) return null;
+
+        const rate = Number(line.gst_rate) || 0;
+        const price = Number(line.unit_price) || 0;
+
+        if (rate <= 0 || price <= 0) return null;
+
+        const base = price / (1 + rate / 100);
+
+        return { base: base.toFixed(2), tax: (price - base).toFixed(2) };
     }
 
     /* ---------------------------------------------------------------------
@@ -550,6 +740,11 @@ export async function mountBillDocument(root, {
                 quantity: line.quantity,
                 unit_price: line.unit_price === '' ? '0' : line.unit_price,
                 ...discountKeys(line.discount, line.discount_mode),
+                // Always sent, never omitted. The server falls back to the item's
+                // own default where the key is absent, and a line the operator
+                // deliberately flipped *back* to exclusive has to be able to say
+                // so against an item that says otherwise.
+                price_includes_tax: line.price_includes_tax === true,
                 memo: line.memo,
             }));
     }
@@ -653,6 +848,18 @@ export async function mountBillDocument(root, {
                     // the discount on the panel is the discount on the invoice.
                     ...billDiscountPayload(),
                 },
+                /*
+                | Debounced against typing — see `quiet` in auth-client.
+                |
+                | This runs every 350ms through a whole line being entered, and
+                | it is also the one POST in the application that writes nothing,
+                | which is why data-bus already refuses to treat it as a write.
+                | The global bar takes the same exemption for the same reason:
+                | the totals panel says the figures are being worked out, right
+                | where somebody is looking, and a strobe at the top of the
+                | screen adds nothing to that.
+                */
+                quiet: true,
             });
 
             if (!settle()) return;
@@ -1003,7 +1210,12 @@ export async function mountBillDocument(root, {
                             <td class="px-2 py-2 text-right font-mono">
                                 ${esc(formatQuantity(line.quantity, line.unit_symbol))}
                             </td>
-                            <td class="px-2 py-2 text-right font-mono">${esc(formatMoney(line.unit_price))}</td>
+                            <td class="px-2 py-2 text-right font-mono">
+                                ${esc(formatMoney(line.unit_price))}
+                                ${line.price_includes_tax
+                                    ? '<span class="ml-1 text-[11px] font-sans text-muted-foreground">incl</span>'
+                                    : ''}
+                            </td>
                             ${discounted
                                 ? `<td class="px-2 py-2 text-right font-mono text-muted-foreground">
                                        ${esc(formatMoney(line.discount_amount))}
@@ -1084,7 +1296,7 @@ export async function mountBillDocument(root, {
         if (state.posting) return;
 
         state.posting = true;
-        clearErrors();
+        clearFormErrors(root);
 
         const button = post ? $('[data-confirm-post]') : el('[data-draft]');
         const idle = button.textContent;
@@ -1114,7 +1326,7 @@ export async function mountBillDocument(root, {
             onPosted(response);
         } catch (error) {
             hideModal('#confirm-bill-modal');
-            paintError(error);
+            paintError(error, post);
         } finally {
             state.posting = false;
             button.disabled = false;
@@ -1123,34 +1335,23 @@ export async function mountBillDocument(root, {
     }
 
     /**
-     * Put an API failure where somebody will see it — §27.
+     * Put an API failure where somebody will see it — §3.10.
      *
-     * Field errors go beside the field they are about; everything else becomes a
-     * toast carrying the server's own sentence. The messages are already written
-     * in plain language on the server ("Only 5 PCS available in stock."), so
-     * there is deliberately no translation table here: a second copy of the
-     * wording is a second thing to keep in step, and the copy is what goes stale.
+     * The shared plumbing, not a copy of it: fields are marked where they are, a
+     * banner is painted under the CTA and the same sentence goes to the alert
+     * top right. The messages are already written in plain language on the
+     * server ("Only 5 PCS available in stock."), so there is deliberately no
+     * translation table here — a second copy of the wording is a second thing to
+     * keep in step, and the copy is what goes stale.
+     *
+     * The anchor is named rather than found. This is not a `<form>`, so there is
+     * no `[type=submit]` to look for; and the button actually pressed was
+     * `[data-confirm-post]` on a confirmation this has just closed, which would
+     * put the message on a dialog nobody can see any more. The document's own
+     * Post — or Save draft — is where somebody is looking when it comes back.
      */
-    function paintError(error) {
-        if (error.fields) {
-            Object.entries(error.fields).forEach(([field, messages]) => {
-                const slot = el(`[data-error-for="${field.split('.')[0]}"]`);
-
-                if (slot) {
-                    slot.textContent = messages[0];
-                    slot.classList.remove('hidden');
-                }
-            });
-        }
-
-        toast(error.message, 'error');
-    }
-
-    function clearErrors() {
-        $$('[data-error-for]', root).forEach((slot) => {
-            slot.textContent = '';
-            slot.classList.add('hidden');
-        });
+    function paintError(error, post) {
+        showFormErrors(root, error, el(post ? '[data-post]' : '[data-draft]'));
     }
 
     /* ---------------------------------------------------------------------
@@ -1450,6 +1651,12 @@ export async function mountBillDocument(root, {
         // still typing in it.
         paintLineProblem(row, lineProblem(line));
 
+        // "Only 4 available" is a verdict on the typed quantity too, and it had
+        // been painted once at render and never again — so typing 10 against a
+        // shelf of 4 left the shortfall unsaid until something else redrew the
+        // table, which is the one moment it is least useful.
+        paintLineStock(row, line);
+
         refreshPreview();
         save();
     });
@@ -1463,12 +1670,32 @@ export async function mountBillDocument(root, {
             return;
         }
 
+        const taxMode = event.target.closest('[data-tax-mode]');
+
+        if (taxMode) {
+            const line = lineOfRow(taxMode);
+
+            if (!line) return;
+
+            line.price_includes_tax = !line.price_includes_tax;
+
+            // This one changes what the bill comes to, unlike the discount toggle
+            // below — the same ₹118 is a different taxable value on each side of
+            // it — so the server is asked again and the draft keeps the choice.
+            renderLines();
+            refreshPreview();
+            save();
+
+            focusEnd($(`[data-line="${line.id}"] input[name="unit_price"]`, root));
+
+            return;
+        }
+
         const toggle = event.target.closest('[data-discount-mode]');
 
         if (!toggle) return;
 
-        const row = toggle.closest('[data-line]');
-        const line = state.lines.find((candidate) => candidate.id === Number(row.dataset.line));
+        const line = lineOfRow(toggle);
 
         if (!line) return;
 
@@ -1481,11 +1708,27 @@ export async function mountBillDocument(root, {
 
         // The table was rebuilt, so the caret has to be put back — on the box
         // whose unit just changed, at the end of what is in it.
-        const input = $(`[data-line="${line.id}"] input[name="discount"]`, root);
+        focusEnd($(`[data-line="${line.id}"] input[name="discount"]`, root));
+    });
 
+    /** The line a control inside a row belongs to. */
+    function lineOfRow(control) {
+        const row = control.closest('[data-line]');
+
+        return state.lines.find((candidate) => candidate.id === Number(row.dataset.line));
+    }
+
+    /**
+     * Put the caret back after a re-render, at the end of what is in the box.
+     *
+     * Both row toggles rebuild the table under the button that was just pressed,
+     * and a caret that landed back at position 0 would make the next keystroke
+     * type behind the figure already there.
+     */
+    function focusEnd(input) {
         input?.focus();
         input?.setSelectionRange(input.value.length, input.value.length);
-    });
+    }
 
     el('[data-bill-date]').addEventListener('change', () => {
         refreshPreview();
@@ -1593,6 +1836,28 @@ export async function mountBillDocument(root, {
     renderLines();
 
     el('[data-restored]').classList.toggle('hidden', !restored);
+
+    /*
+    | A restored document is asserting a shelf that is as old as the draft — up
+    | to a week — and it is the one stale figure in the application that a page
+    | reload could never clear, because the reload is what restored it. Not
+    | awaited: the bill is usable while the figures catch up, and it never
+    | refuses anything on its own.
+    */
+    if (restored) refreshAvailability();
+
+    /*
+    | And the same figures while the document sits open: a delivery booked in on
+    | Purchase, a count recorded on Stock, a correction reversed. Announced
+    | rather than polled.
+    |
+    | Debounced, and for a reason that is not the usual one. This document's own
+    | post is a write like any other, so it announces too — and it announces
+    | *before* `onPosted` has emptied the form, which would spend a request
+    | fetching positions for lines that are about to be thrown away. One posting
+    | also moves several kinds of fact at once. Waiting a moment collapses both.
+    */
+    onChange('stock', debounce(() => refreshAvailability(), 400));
 
     /* --- the handle the host keeps -------------------------------------- */
 

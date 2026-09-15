@@ -4,8 +4,10 @@ namespace Tests\Feature\Inventory;
 
 use App\Models\ItemVariant;
 use App\Models\Tenant;
+use App\Models\Transaction;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Str;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\Concerns\InteractsWithAuthModule;
 use Tests\Concerns\InteractsWithLedger;
@@ -122,6 +124,123 @@ class StockApiTest extends TestCase
         // filtered page — a badge that changed when you clicked it would be
         // contradicting the screen it opened.
         $this->assertSame(1, $response->json('meta.totals.low'));
+    }
+
+    /**
+     * The floor is a second level, and a shortage of its own.
+     *
+     * `min_stock` had a column, a validator, a form field and a place in every
+     * payload for as long as `reorder_level` has — and **nothing read it**. A
+     * workshop could write "never below 5" against a part, watch it go to 2, and
+     * find no screen in the product that mentioned it. A figure somebody is
+     * asked for and no screen ever uses is worse than one that was never asked
+     * for: they believe it is doing something.
+     *
+     * The two levels answer different questions. The migration that added the
+     * second says it plainest — a shop orders at 20 and panics at 5 — so this
+     * walks a shelf down through both.
+     *
+     * The comparison is **strictly** below where `is_low` is at-or-below, which
+     * is the one place the two could reasonably have been written the same. A
+     * trigger has to fire on the day the shelf reaches it. A floor is a line the
+     * stock is still standing on when it is exactly there, and a workshop told
+     * it had broken its own rule at precisely the number it wrote down would
+     * stop reading the alarm.
+     */
+    #[Test]
+    public function the_floor_is_a_second_level_and_a_shortage_of_its_own(): void
+    {
+        $bearing = $this->variantFor($this->tenant, 'part', reorderLevel: '20', minStock: '5');
+        $headers = $this->authHeader($this->owner);
+
+        $row = function (ItemVariant $variant) use ($headers) {
+            return collect(
+                $this->withHeaders($headers)->getJson('/api/v1/stock')->assertOk()->json('data')
+            )->firstWhere('variant_id', $variant->id);
+        };
+
+        // Six on the shelf: past the trigger, above the floor.
+        $this->receiveStock($this->tenant, $bearing, '6', '400.00');
+
+        $six = $row($bearing);
+
+        $this->assertSame('20.000', $six['reorder_level']);
+        $this->assertSame('5.000', $six['min_stock']);
+        $this->assertTrue($six['is_low']);
+        $this->assertFalse($six['is_below_minimum']);
+
+        // Five. Exactly the figure they wrote down, and not yet under it.
+        $this->issueStock($this->tenant, $bearing, '1');
+
+        $this->assertFalse($row($bearing)['is_below_minimum']);
+
+        // Four. Now it is under.
+        $this->issueStock($this->tenant, $bearing, '1');
+
+        $four = $row($bearing);
+
+        $this->assertTrue($four['is_below_minimum']);
+        // Still low as well — both are true of one shelf, and the row carries
+        // both verdicts rather than one status the client has to unpick.
+        $this->assertTrue($four['is_low']);
+
+        /*
+        | And the case that had no reporting anywhere: a floor with no trigger
+        | above it.
+        |
+        | `is_low` is false, correctly — nobody said what low means for this one.
+        | Before the floor was read, that made it indistinguishable from a full
+        | shelf on every screen in the product.
+        */
+        $capacitor = $this->variantFor($this->tenant, 'part', minStock: '5');
+        $this->receiveStock($this->tenant, $capacitor, '2', '90.00');
+
+        $short = $row($capacitor);
+
+        $this->assertFalse($short['is_low']);
+        $this->assertTrue($short['is_below_minimum']);
+        $this->assertNull($short['reorder_level']);
+
+        // The filter answers for it, and the vocabulary the client builds that
+        // filter from names it — the meta endpoint exists so a screen does not
+        // keep its own copy of this list.
+        $filtered = $this->withHeaders($headers)
+            ->getJson('/api/v1/stock?status=below_minimum')
+            ->assertOk();
+
+        $ids = collect($filtered->json('data'))->pluck('variant_id')->all();
+
+        $this->assertContains($bearing->id, $ids);
+        $this->assertContains($capacitor->id, $ids);
+
+        $this->assertContains('below_minimum', collect(
+            $this->withHeaders($headers)->getJson('/api/v1/stock/meta')->assertOk()->json('data.statuses')
+        )->pluck('value')->all());
+    }
+
+    /**
+     * A negative position is nobody's shortage.
+     *
+     * It is a data problem, and putting it on a purchasing worklist as well
+     * would be one variant on two lists with two different fixes — so both
+     * levels stand down for it, whichever of them was set.
+     */
+    #[Test]
+    public function a_negative_position_is_under_no_level_because_it_is_not_a_shortage(): void
+    {
+        $bearing = $this->variantFor($this->tenant, 'part', reorderLevel: '20', minStock: '5');
+
+        $this->receiveStock($this->tenant, $bearing, '2', '400.00');
+        $this->issueStock($this->tenant, $bearing, '5');
+
+        $row = collect(
+            $this->withHeaders($this->authHeader($this->owner))
+                ->getJson('/api/v1/stock')->assertOk()->json('data')
+        )->firstWhere('variant_id', $bearing->id);
+
+        $this->assertTrue($row['is_negative']);
+        $this->assertFalse($row['is_low']);
+        $this->assertFalse($row['is_below_minimum']);
     }
 
     #[Test]
@@ -243,6 +362,157 @@ class StockApiTest extends TestCase
             ->assertStatus(422);
     }
 
+    /**
+     * The stalled request, retried — and the shelf moves once.
+     *
+     * Every write form in this application sends a `client_ref` minted per
+     * document and reused on every attempt, and this is the endpoint where
+     * getting it wrong costs the most: a duplicated sale is a wrong figure
+     * somebody eventually notices, a duplicated count is a shelf that silently
+     * disagrees with itself and an Inventory account that agrees with the
+     * wrong one.
+     *
+     * The count form only started sending one in P5. This is the contract it now
+     * depends on, asserted against the movement rather than against a status
+     * code (§8.2).
+     */
+    #[Test]
+    public function a_repeated_count_corrects_the_shelf_once(): void
+    {
+        $bearing = $this->variantFor($this->tenant, 'part');
+
+        $payload = [
+            'date' => now()->toDateString(),
+            'notes' => 'Stock-take, March',
+            'post' => true,
+            'client_ref' => (string) Str::uuid(),
+            'adjustments' => [
+                ['variant_id' => $bearing->id, 'quantity' => '6', 'unit_cost' => '450.00'],
+            ],
+        ];
+
+        $first = $this->withHeaders($this->authHeader($this->owner))
+            ->postJson('/api/v1/transactions/stock-adjustment', $payload)
+            ->assertCreated()
+            ->json('data');
+
+        $second = $this->withHeaders($this->authHeader($this->owner))
+            ->postJson('/api/v1/transactions/stock-adjustment', $payload)
+            // 200 rather than 201: nothing was created this time, and the status
+            // is how the client tells the two apart.
+            ->assertOk()
+            ->json('data');
+
+        $this->assertSame($first['id'], $second['id']);
+
+        // One document, and — the part that matters — six bearings, not twelve.
+        $this->assertSame(1, $this->actingForTenant(
+            $this->tenant,
+            fn () => Transaction::query()->where('type', 'stock_adjustment')->count()
+        ));
+
+        $this->assertSame('6.000', $this->stockPositionOf($this->tenant, $bearing)['quantity']);
+        $this->assertStockAgreesWithInventoryAccount($this->tenant);
+        $this->assertBooksBalance($this->tenant);
+    }
+
+    /**
+     * The Items host posts the document the Stock host posts.
+     *
+     * `components/stock-adjust.js` has two modes over one form. Stock counts a
+     * shelf — several lines, the signed difference typed straight in. Items
+     * corrects one variant from its drawer — the operator types *what is on the
+     * shelf* and the component subtracts the position to get the difference.
+     *
+     * The conversion is arithmetic in the browser, which nothing here can run.
+     * What this asserts is the other half, and the half that would break: the
+     * endpoint takes the document that arithmetic produces, unchanged, and makes
+     * the same kind of document out of it. There was **no server change** for the
+     * second host, so nothing else records that the contract is now shared — and
+     * a field added for the count screen alone would 422 a drawer nobody tests
+     * by hand.
+     *
+     * Three properties of the variant host's payload are the ones at risk:
+     * exactly one line, a **computed** signed difference rather than a typed one,
+     * and `unit_cost: null` on a reduction — because what is missing off a shelf
+     * is written off at what the books were carrying it at, never at a rate the
+     * counter chose. `notes` arrives null as well; that form does not ask.
+     */
+    #[Test]
+    public function the_items_host_posts_the_same_document_as_the_stock_host(): void
+    {
+        $bearing = $this->variantFor($this->tenant, 'part');
+        $headers = $this->authHeader($this->owner);
+
+        // Ten on the shelf at 450, so there is a book average for a shortage to
+        // be valued at.
+        $this->receiveStock($this->tenant, $bearing, '10', '450.00');
+
+        // The Stock host: the operator typed the difference, and left the cost
+        // box empty because the count found fewer than the books say.
+        $counted = $this->withHeaders($headers)
+            ->postJson('/api/v1/transactions/stock-adjustment', [
+                'date' => now()->toDateString(),
+                'notes' => 'Stock-take, March',
+                'post' => true,
+                'client_ref' => (string) Str::uuid(),
+                'adjustments' => [
+                    ['variant_id' => $bearing->id, 'quantity' => '-2', 'unit_cost' => null],
+                ],
+            ])
+            ->assertCreated()
+            ->json('data');
+
+        $this->assertSame('8.000', $this->stockPositionOf($this->tenant, $bearing)['quantity']);
+
+        /*
+        | The Items host, from the drawer of the same variant.
+        |
+        | Eight on the books; the operator counted eleven. The component sends
+        | the difference it worked out — never the eleven — and a rate, because
+        | this time stock was *found* and found stock has to be valued at
+        | something.
+        */
+        $shelved = $this->withHeaders($headers)
+            ->postJson('/api/v1/transactions/stock-adjustment', [
+                'date' => now()->toDateString(),
+                'notes' => null,
+                'post' => true,
+                'client_ref' => (string) Str::uuid(),
+                'adjustments' => [
+                    ['variant_id' => $bearing->id, 'quantity' => '3', 'unit_cost' => '460.00'],
+                ],
+            ])
+            ->assertCreated()
+            ->json('data');
+
+        // Two documents of one kind. Neither host has a type, a template or a
+        // route of its own, and this is what says so.
+        $this->assertSame('stock_adjustment', $counted['type']);
+        $this->assertSame($counted['type'], $shelved['type']);
+        $this->assertNotSame($counted['id'], $shelved['id']);
+
+        /*
+        | And the shelf reads what the operator counted.
+        |
+        | Eleven, at 8 x 450 plus 3 x 460 — the shortage taken out at the book
+        | average of 450 and the surplus brought in at the rate that was typed.
+        | §8.2: the stock impact, not that the request succeeded.
+        */
+        $position = $this->stockPositionOf($this->tenant, $bearing);
+
+        $this->assertSame('11.000', $position['quantity']);
+        $this->assertSame('4980.00', $position['value']);
+
+        $this->actingForTenant($this->tenant, fn () => $this->assertSame(
+            3,
+            Transaction::query()->where('type', 'stock_adjustment')->count(),
+        ));
+
+        $this->assertStockAgreesWithInventoryAccount($this->tenant);
+        $this->assertBooksBalance($this->tenant);
+    }
+
     #[Test]
     public function another_workshops_variant_does_not_resolve(): void
     {
@@ -353,5 +623,87 @@ class StockApiTest extends TestCase
         $row = collect($all->json('data'))->firstWhere('variant_id', $bearing->id);
 
         $this->assertSame('1600.00', $row['value']);
+    }
+
+    /* ---------------------------------------------------------------------
+     | Asking about named variants
+     |
+     | The bill form's "4 PCS on hand" is captured when a line is picked, and a
+     | posting anywhere else moves it. This is how the open document brings every
+     | line back up to date in one request instead of one request per line.
+     |-------------------------------------------------------------------- */
+
+    #[Test]
+    public function naming_variants_answers_for_exactly_those(): void
+    {
+        $bearing = $this->variantFor($this->tenant, 'part');
+        $copper = $this->variantFor($this->tenant, 'bulk_material');
+        $unasked = $this->variantFor($this->tenant, 'part');
+
+        $this->receiveStock($this->tenant, $bearing, '4', '400.00');
+        $this->receiveStock($this->tenant, $copper, '10', '700.00');
+        $this->receiveStock($this->tenant, $unasked, '9', '100.00');
+
+        $response = $this->withHeaders($this->authHeader($this->owner))
+            ->getJson("/api/v1/stock?variant_ids[]={$bearing->id}&variant_ids[]={$copper->id}")
+            ->assertOk();
+
+        $rows = collect($response->json('data'));
+
+        $this->assertCount(2, $rows);
+        $this->assertSame('4.000', $rows->firstWhere('variant_id', $bearing->id)['quantity']);
+        $this->assertSame('10.000', $rows->firstWhere('variant_id', $copper->id)['quantity']);
+        $this->assertNull($rows->firstWhere('variant_id', $unasked->id));
+    }
+
+    #[Test]
+    public function naming_an_archived_variant_still_answers_for_it(): void
+    {
+        /*
+        | A bill written last week can carry a line for something archived since,
+        | and the default list deliberately hides those. Dropping it here would
+        | answer a question about two lines with one position and say nothing
+        | about the other — leaving the stale figure on screen looking current.
+        */
+        $bearing = $this->variantFor($this->tenant, 'part');
+        $this->receiveStock($this->tenant, $bearing, '4', '400.00');
+
+        $this->actingForTenant($this->tenant, fn () => ItemVariant::whereKey($bearing->id)->update(['is_active' => false]));
+
+        $response = $this->withHeaders($this->authHeader($this->owner))
+            ->getJson("/api/v1/stock?variant_ids[]={$bearing->id}")
+            ->assertOk();
+
+        $this->assertSame('4.000', collect($response->json('data'))->firstWhere('variant_id', $bearing->id)['quantity']);
+    }
+
+    #[Test]
+    public function another_workshops_variant_cannot_be_named(): void
+    {
+        [$other] = $this->tenantWithUser();
+        $theirs = $this->variantFor($other, 'part');
+        $this->receiveStock($other, $theirs, '7', '100.00');
+
+        $mine = $this->variantFor($this->tenant, 'part');
+        $this->receiveStock($this->tenant, $mine, '2', '100.00');
+
+        $response = $this->withHeaders($this->authHeader($this->owner))
+            ->getJson("/api/v1/stock?variant_ids[]={$theirs->id}&variant_ids[]={$mine->id}")
+            ->assertOk();
+
+        $rows = collect($response->json('data'));
+
+        $this->assertCount(1, $rows);
+        $this->assertSame($mine->id, $rows->first()['variant_id']);
+    }
+
+    #[Test]
+    public function the_named_variant_list_is_bounded(): void
+    {
+        // Not a way to ask for the whole report in one go: the cap is what keeps
+        // it a lookup for the lines on one document.
+        $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/stock?'.collect(range(1, 201))->map(fn ($id) => "variant_ids[]={$id}")->implode('&'))
+            ->assertStatus(422);
     }
 }

@@ -2,7 +2,7 @@
 
 namespace App\Http\Controllers\Api\V1;
 
-use App\DataTransferObjects\TokenPair;
+use App\Http\Controllers\Api\V1\Concerns\IssuesSessions;
 use App\Http\Controllers\Controller;
 use App\Http\Requests\Auth\LoginRequest;
 use App\Http\Requests\Auth\RegisterRequest;
@@ -16,6 +16,8 @@ use Illuminate\Http\Request;
 
 class AuthController extends Controller
 {
+    use IssuesSessions;
+
     public function __construct(
         private readonly AuthService $auth,
         private readonly TokenService $tokens,
@@ -111,31 +113,8 @@ class AuthController extends Controller
         );
     }
 
-    /**
-     * @return array<string, mixed>
-     */
-    private function sessionPayload(User $user, TokenPair $tokens): array
+    protected function tokenService(): TokenService
     {
-        return [
-            'user' => (new UserResource($user->load(['customRole', 'tenant'])))
-                ->withPermissions()
-                ->resolve(request()),
-            ...$tokens->toArray(),
-        ];
-    }
-
-    /**
-     * Attach the refresh token as an HTTP-only cookie — it is deliberately
-     * absent from the JSON body so JavaScript can never read it.
-     */
-    private function withRefreshCookie(JsonResponse $response, TokenPair $tokens): JsonResponse
-    {
-        if ($tokens->refreshToken === '') {
-            return $response;
-        }
-
-        return $response->withCookie(
-            $this->tokens->refreshCookie($tokens->refreshToken, $tokens->refreshTokenExpiresIn)
-        );
+        return $this->tokens;
     }
 }

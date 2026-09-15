@@ -5,9 +5,10 @@ import { mountBillRevision } from '../components/bill-revision';
 import { mountPaymentRows } from '../components/payment-rows';
 import { describeShortfalls } from '../components/stock-position';
 import { can } from '../permissions';
+import { clearModuleParams, moduleParams } from '../shell';
 import {
     $, $$, confirmAction, debounce, esc, formatDate, formatMoney,
-    hideModal, showFormErrors, showModal, tableMessage, toast,
+    hideModal, showActionError, showFormErrors, showModal, tableMessage, toast,
 } from '../ui';
 import { mountWorkspace } from '../workspace';
 
@@ -497,7 +498,7 @@ async function submitPayment() {
     const split = drawer.payments.value();
 
     if (split.length === 0) {
-        toast('Say how the money moved — cash, bank, UPI or cheque.', 'error');
+        showActionError(el('[data-drawer-submit]'), 'Say how the money moved — cash, bank, UPI or cheque.');
 
         return;
     }
@@ -609,7 +610,7 @@ async function submitReturn() {
         .filter((line) => line.quantity !== '' && Number(line.quantity) > 0);
 
     if (lines.length === 0) {
-        toast('Say which lines are coming back, and how many of each.', 'error');
+        showActionError(el('[data-drawer-submit]'), 'Say which lines are coming back, and how many of each.');
 
         return;
     }
@@ -623,7 +624,10 @@ async function submitReturn() {
     });
 
     if (over) {
-        toast('One line is sending back more than was bought. Check the "Left" column.', 'error');
+        showActionError(
+            el('[data-drawer-submit]'),
+            'One line is sending back more than was bought. Check the "Left" column.'
+        );
 
         return;
     }
@@ -1088,7 +1092,44 @@ export default async function initPurchase() {
         canCreate: canWrite,
         onShowList: load,
 
+        // As Sales, mirrored: the documents, and what is still owed on them.
+        refreshOn: ['transactions', 'parties'],
+
         // §2A.8 — back on the form, the supplier is where the next bill starts.
         onShowForm: () => doc.party().focus(),
     });
+
+    applyDeepLink(moduleParams());
+
+    // Reopening an already-mounted module cannot run this function again, so a
+    // second deep link is announced on the root instead.
+    root.addEventListener('module:params', (event) => applyDeepLink(event.detail));
+}
+
+/**
+ * `#purchase?party=12` — "create a purchase bill" from the Vendors card.
+ * `#purchase?doc=88`   — a bill picked out of the topbar's search.
+ *
+ * The intent comes from the shell rather than from `location.search`, because a
+ * module's URL is a fragment of the dashboard's now, and this used to be a real
+ * navigation to the counter at /bills/new before C4 retired it. It is spent once
+ * acted on: surviving a refresh or a Back would put a counterparty back on a
+ * document somebody had cleared, or reopen a drawer they had just closed.
+ */
+function applyDeepLink(params) {
+    const party = params.get('party');
+    const document_ = params.get('doc');
+
+    if (!party && !document_) return;
+
+    if (party) {
+        workspace?.showForm();
+        doc.party().load(party);
+    }
+
+    // As Sales, mirrored: the drawer fetches by id, so no list is loaded to
+    // show one bill.
+    if (document_) openDrawer(document_);
+
+    clearModuleParams();
 }

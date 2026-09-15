@@ -9,7 +9,7 @@
     the right counterparty and nothing to choose first.
 
     The form is not written here. It is `partials/bill-document.blade.php`, the
-    same document the counter at /bills/new raises, and it must never be copied:
+    same document the Sales and Jobs cards raise, and it must never be copied:
     the fields, the error slots and the `data-` hooks are a contract with
     `components/bill-document.js`, and a second copy is a second place for that
     contract to go stale.
@@ -34,7 +34,7 @@
 
             Here rather than in the shared partial, because it is the one thing
             about this form that is the Purchase module's own: the counter at
-            /bills/new raises new documents and has nothing to correct. The
+            the Jobs card raises new documents and has nothing to correct. The
             partial stays exactly the document both screens share.
 
             It is loud on purpose. Somebody who walked away mid-correction and

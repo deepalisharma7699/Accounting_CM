@@ -56,7 +56,16 @@ class EloquentItemVariantRepository implements ItemVariantRepositoryInterface
             // position, so "active only" is a default rather than a rule — a
             // workshop looking for the last four of something they have stopped
             // selling needs to be able to find them.
-            ->when((bool) ($filters['is_active'] ?? true), fn ($query) => $query->active())
+            //
+            // Naming ids outranks it: a caller asking about exactly these
+            // variants has already decided which rows it wants, and dropping an
+            // archived one would answer a question about six bill lines with
+            // five positions and say nothing about the sixth.
+            ->when(
+                (bool) ($filters['is_active'] ?? true) && blank($filters['variant_ids'] ?? null),
+                fn ($query) => $query->active(),
+            )
+            ->when(filled($filters['variant_ids'] ?? null), fn ($query) => $query->whereIn('id', (array) $filters['variant_ids']))
             ->when(filled($filters['item_id'] ?? null), fn ($query) => $query->where('item_id', $filters['item_id']))
             // Filtered on the category the product is filed under, and on every
             // category beneath it — the caller resolves the descendants, because

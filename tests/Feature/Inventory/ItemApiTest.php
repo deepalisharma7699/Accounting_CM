@@ -2,14 +2,19 @@
 
 namespace Tests\Feature\Inventory;
 
+use App\Enums\SystemAccount;
 use App\Models\Item;
 use App\Models\ItemCategory;
 use App\Models\ItemVariant;
+use App\Models\StockMovement;
 use App\Models\Tenant;
+use App\Models\Transaction;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\Concerns\InteractsWithAuthModule;
+use Tests\Concerns\InteractsWithLedger;
+use Tests\Concerns\InteractsWithStock;
 use Tests\Concerns\InteractsWithTenancy;
 use Tests\TestCase;
 
@@ -23,7 +28,11 @@ use Tests\TestCase;
  */
 class ItemApiTest extends TestCase
 {
-    use InteractsWithAuthModule, InteractsWithTenancy, RefreshDatabase;
+    use InteractsWithAuthModule;
+    use InteractsWithLedger;
+    use InteractsWithStock;
+    use InteractsWithTenancy;
+    use RefreshDatabase;
 
     private Tenant $tenant;
 
@@ -192,6 +201,135 @@ class ItemApiTest extends TestCase
             ->assertJsonPath('data.attributes.hp', '5');
     }
 
+    /**
+     * The three fields the variant endpoint used to swallow.
+     *
+     * `barcode`, `min_stock` and `purchase_price` each had a column, a fillable
+     * entry and service code that read and wrote them — and no rule in
+     * {@see \App\Http\Requests\Item\StoreVariantRequest}, whose `payload()`
+     * therefore dropped them on the way in. The universal create form could set
+     * them once and nothing could ever change them again, which is not a
+     * validation gap but a field the product did not have.
+     */
+    #[Test]
+    public function a_variant_records_its_barcode_floor_and_buying_price(): void
+    {
+        $headers = $this->authHeader($this->owner);
+
+        $item = $this->withHeaders($headers)
+            ->postJson('/api/v1/items', $this->motorPayload())
+            ->json('data.id');
+
+        $variant = $this->withHeaders($headers)
+            ->postJson("/api/v1/items/{$item}/variants", [
+                'attributes' => ['hp' => '5', 'phase' => '3', 'rpm' => '1440'],
+                'barcode' => '8901234567890',
+                'sell_price' => '18500.00',
+                'purchase_price' => '14200.00',
+                'reorder_level' => '4',
+                'min_stock' => '2',
+            ])
+            ->assertCreated()
+            ->assertJsonPath('data.barcode', '8901234567890')
+            ->assertJsonPath('data.purchase_price', '14200.00')
+            // Reorder level and floor are different questions — order more at 4,
+            // never fall below 2 — and collapsing them loses the difference
+            // between a purchase to plan and a purchase to make today.
+            ->assertJsonPath('data.reorder_level', '4.000')
+            ->assertJsonPath('data.min_stock', '2.000')
+            ->json('data.id');
+
+        // And every one of them can be corrected afterwards, which is the half
+        // that did not exist.
+        $this->withHeaders($headers)
+            ->patchJson("/api/v1/items/{$item}/variants/{$variant}", [
+                'barcode' => '8901234567891',
+                'purchase_price' => '13750.50',
+                'min_stock' => '3',
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.barcode', '8901234567891')
+            ->assertJsonPath('data.purchase_price', '13750.50')
+            ->assertJsonPath('data.min_stock', '3.000')
+            // Untouched keys are left alone: a PATCH that changes the floor does
+            // not clear the price beside it.
+            ->assertJsonPath('data.sell_price', '18500.00');
+
+        // Null clears, which is a real edit rather than an omission.
+        $this->withHeaders($headers)
+            ->patchJson("/api/v1/items/{$item}/variants/{$variant}", ['purchase_price' => null])
+            ->assertOk()
+            ->assertJsonPath('data.purchase_price', null);
+    }
+
+    /**
+     * A barcode is not case-folded and a SKU is.
+     *
+     * A SKU is something a person types, so folding it is what makes "mot-5hp"
+     * and "MOT-5HP" one code. A barcode is what a scanner emits, and folding it
+     * would stop the stored value matching the label it was read from.
+     */
+    #[Test]
+    public function a_barcode_keeps_its_case_where_a_sku_does_not(): void
+    {
+        $headers = $this->authHeader($this->owner);
+
+        $item = $this->withHeaders($headers)
+            ->postJson('/api/v1/items', $this->motorPayload())
+            ->json('data.id');
+
+        $this->withHeaders($headers)
+            ->postJson("/api/v1/items/{$item}/variants", [
+                'attributes' => ['hp' => '5', 'phase' => '3', 'rpm' => '1440'],
+                'sku' => 'mot-5hp',
+                'barcode' => 'ab12cd34',
+            ])
+            ->assertCreated()
+            ->assertJsonPath('data.sku', 'MOT-5HP')
+            ->assertJsonPath('data.barcode', 'ab12cd34');
+    }
+
+    /**
+     * The universal create form and the variant editor accept the same values.
+     *
+     * They are two requests over one record — the first writes the variant, the
+     * second is the only way to correct it — so a bound one enforces and the
+     * other does not is a value this application stored and then refused to
+     * accept back. It showed up as a 422 on a field nobody had touched.
+     */
+    #[Test]
+    public function an_attribute_written_by_the_create_form_can_be_saved_again_by_the_editor(): void
+    {
+        $headers = $this->authHeader($this->owner);
+
+        // Longer than the 60 characters the variant editor used to allow, and
+        // within the 120 the create form has always allowed.
+        $frame = str_repeat('B', 90);
+
+        $created = $this->withHeaders($headers)
+            ->postJson('/api/v1/items', $this->motorPayload([
+                'with_variant' => true,
+                'attributes' => ['hp' => '5', 'phase' => '3', 'rpm' => '1440', 'frame' => $frame],
+            ]))
+            ->assertCreated();
+
+        $item = $created->json('data.id');
+        $variant = $created->json('data.variants.0.id');
+
+        $this->assertSame($frame, $created->json('data.variants.0.attributes.frame'));
+
+        // Correcting the price beside it must not be refused because of a value
+        // this application itself wrote.
+        $this->withHeaders($headers)
+            ->patchJson("/api/v1/items/{$item}/variants/{$variant}", [
+                'attributes' => ['hp' => '5', 'phase' => '3', 'rpm' => '1440', 'frame' => $frame],
+                'sell_price' => '19000.00',
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.attributes.frame', $frame)
+            ->assertJsonPath('data.sell_price', '19000.00');
+    }
+
     #[Test]
     public function a_duplicate_specification_is_saved_and_reported_as_a_warning(): void
     {
@@ -297,6 +435,558 @@ class ItemApiTest extends TestCase
                 'attributes' => ['hp' => '5', 'phase' => '3', 'rpm' => '1440'],
             ])
             ->assertNotFound();
+    }
+
+    /* ---------------------------------------------------------------------
+     | Opening stock
+     |
+     | The universal form records what is already on the shelf, and it does so by
+     | posting an ordinary stock adjustment through the ordinary engine. What
+     | these check is the part a 201 does not prove: that a quantity actually
+     | moved, that the Inventory account learned about it, and that the one case
+     | where it could not be valued is refused rather than posted at nothing.
+     |-------------------------------------------------------------------- */
+
+    /**
+     * A user who may both catalogue and post.
+     *
+     * Cataloguing is an ITEMS grant and recording a quantity is a TRANSACTIONS
+     * one, and the class's own `$owner` deliberately holds only the first — see
+     * the skip test at the end of this section, which is what that separation is
+     * for.
+     *
+     * @return array{0: Tenant, 1: User}
+     */
+    private function stockkeeper(string $role): array
+    {
+        return $this->tenantWithUser([
+            ['READ', 'ITEMS'], ['WRITE', 'ITEMS'], ['WRITE', 'TRANSACTIONS'],
+        ], $role);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function motorWithOpeningStock(Tenant $tenant, array $overrides = []): array
+    {
+        return array_merge([
+            'name' => 'Crompton 5 HP Motor',
+            'category_id' => $this->categoryId('motor', $tenant),
+            'gst_rate' => '18',
+            'with_variant' => true,
+            'attributes' => ['hp' => '5', 'phase' => '3', 'rpm' => '1440'],
+            'sku' => 'mot-5hp',
+            'sell_price' => '18000.00',
+            'opening_stock' => '4',
+            'opening_cost' => '13500.00',
+        ], $overrides);
+    }
+
+    private function onlyVariantOf(Tenant $tenant, int $itemId): ItemVariant
+    {
+        return $this->actingForTenant(
+            $tenant,
+            fn () => ItemVariant::query()->where('item_id', $itemId)->sole(),
+        );
+    }
+
+    #[Test]
+    public function opening_stock_reaches_the_shelf_and_the_inventory_account(): void
+    {
+        [$tenant, $keeper] = $this->stockkeeper('STOCKKEEPER_POSTS');
+
+        $created = $this->withHeaders($this->authHeader($keeper))
+            ->postJson('/api/v1/items', $this->motorWithOpeningStock($tenant))
+            ->assertCreated();
+
+        // Nothing was skipped, so nothing is warned about.
+        $this->assertNull($created->json('meta.warnings'));
+
+        $variant = $this->onlyVariantOf($tenant, (int) $created->json('data.id'));
+        $position = $this->stockPositionOf($tenant, $variant);
+
+        $this->assertSame('4.000', $position['quantity']);
+        $this->assertSame('54000.00', $position['value']);
+        $this->assertSame('13500.00', $position['average_cost']);
+
+        // §8.2 — the stock impact, not merely that the request succeeded. The
+        // shelf and the books are written from one figure in one transaction, so
+        // these are the engine's guarantee holding rather than a reconciliation.
+        $this->assertSame('54000.00', $this->balanceOf($tenant, SystemAccount::Inventory));
+        $this->assertStockAgreesWithInventoryAccount($tenant);
+        $this->assertBooksBalance($tenant);
+
+        // One document, and it says what it is on the day book.
+        $document = $this->actingForTenant($tenant, fn () => Transaction::query()->sole());
+
+        $this->assertSame('Opening stock for Crompton 5 HP Motor', $document->notes);
+        $this->assertSame(now()->toDateString(), $document->date->toDateString());
+    }
+
+    /**
+     * The buying price on the same form is the fallback, because it is the
+     * number they just typed and the honest answer to "what is this worth".
+     */
+    #[Test]
+    public function the_opening_cost_falls_back_to_the_buying_price(): void
+    {
+        [$tenant, $keeper] = $this->stockkeeper('STOCKKEEPER_FALLBACK');
+
+        $created = $this->withHeaders($this->authHeader($keeper))
+            ->postJson('/api/v1/items', $this->motorWithOpeningStock($tenant, [
+                'opening_cost' => null,
+                'purchase_price' => '12000.00',
+            ]))
+            ->assertCreated()
+            // And it is stored on the variant as well, rather than only used
+            // once and dropped — which is what it was before P0.
+            ->assertJsonPath('data.variants.0.purchase_price', '12000.00');
+
+        $position = $this->stockPositionOf($tenant, $this->onlyVariantOf($tenant, (int) $created->json('data.id')));
+
+        $this->assertSame('48000.00', $position['value']);
+        $this->assertSame('12000.00', $position['average_cost']);
+    }
+
+    /**
+     * The count is dated when it was taken, not when it was typed.
+     *
+     * `opening_date` has been validated by the request since the universal form
+     * was written and reached `postOpeningStock()`, and no screen had ever sent
+     * one. A workshop enters its catalogue in the evenings of a week whose stock
+     * it counted on the Sunday.
+     */
+    #[Test]
+    public function the_count_can_be_dated_to_the_day_it_was_taken(): void
+    {
+        [$tenant, $keeper] = $this->stockkeeper('STOCKKEEPER_DATED');
+
+        $this->withHeaders($this->authHeader($keeper))
+            ->postJson('/api/v1/items', $this->motorWithOpeningStock($tenant, [
+                'opening_date' => now()->subDays(3)->toDateString(),
+            ]))
+            ->assertCreated();
+
+        $document = $this->actingForTenant($tenant, fn () => Transaction::query()->sole());
+
+        $this->assertSame(now()->subDays(3)->toDateString(), $document->date->toDateString());
+    }
+
+    /**
+     * Stock that would arrive worth nothing is refused, and the product goes
+     * with it.
+     *
+     * A brand-new variant has no movements, so the stock ledger's own fallback —
+     * the last rate the workshop paid — is zero every time. What that produced
+     * before the refusal was not a quiet zero: the posting template throws out a
+     * voucher whose every line is worthless, so the create rolled back anyway
+     * and the message named `adjustments`, a field the form does not have.
+     */
+    #[Test]
+    public function opening_stock_with_nothing_to_value_it_at_is_refused(): void
+    {
+        [$tenant, $keeper] = $this->stockkeeper('STOCKKEEPER_UNVALUED');
+
+        $this->withHeaders($this->authHeader($keeper))
+            ->postJson('/api/v1/items', $this->motorWithOpeningStock($tenant, [
+                'opening_cost' => null,
+                'purchase_price' => null,
+            ]))
+            ->assertStatus(422)
+            ->assertJsonPath('error.code', 'OPENING_STOCK_NEEDS_A_COST')
+            // Named onto the box the person is looking at, which is the whole
+            // point of raising it here rather than one layer down.
+            ->assertJsonStructure(['error' => ['details' => ['fields' => ['opening_cost']]]]);
+
+        // The whole create is one transaction, so the product is not left behind
+        // without the quantity somebody asked for.
+        $this->actingForTenant($tenant, function () {
+            $this->assertSame(0, Item::query()->count());
+            $this->assertSame(0, StockMovement::query()->count());
+            $this->assertSame(0, Transaction::query()->count());
+        });
+    }
+
+    /**
+     * A stated zero is refused too.
+     *
+     * `StockAdjustmentTemplate` is right that a workshop may carry a free sample
+     * at nothing — but that is a stock-take somebody goes to the Stock screen to
+     * record, having decided it. Reached through a catalogue form, a zero in a
+     * cost box is a box somebody tabbed past, and the consequence is a shelf the
+     * Inventory account never learns about and a first sale reporting the whole
+     * price as profit.
+     */
+    #[Test]
+    public function opening_stock_priced_at_zero_is_refused_as_well(): void
+    {
+        [$tenant, $keeper] = $this->stockkeeper('STOCKKEEPER_ZERO');
+
+        $this->withHeaders($this->authHeader($keeper))
+            ->postJson('/api/v1/items', $this->motorWithOpeningStock($tenant, [
+                'opening_cost' => '0',
+            ]))
+            ->assertStatus(422)
+            ->assertJsonPath('error.code', 'OPENING_STOCK_NEEDS_A_COST');
+
+        $this->actingForTenant($tenant, fn () => $this->assertSame(0, Item::query()->count()));
+    }
+
+    /**
+     * The refusal is about the *value*, and it runs after the two skips.
+     *
+     * A category that holds no stock never reaches it: an hour of labour with an
+     * opening quantity typed against it is saved, warned about and given no
+     * quantity — refusing it for the missing cost would be refusing a product
+     * over a field that could never have applied to it.
+     */
+    #[Test]
+    public function an_opening_quantity_on_something_unstocked_is_warned_about_rather_than_refused(): void
+    {
+        [$tenant, $keeper] = $this->stockkeeper('STOCKKEEPER_SERVICE');
+
+        $this->withHeaders($this->authHeader($keeper))
+            ->postJson('/api/v1/items', [
+                'name' => 'Rewinding Labour',
+                'category_id' => $this->categoryId('service', $tenant),
+                'gst_rate' => '18',
+                'with_variant' => true,
+                'sell_price' => '2500.00',
+                'opening_stock' => '4',
+            ])
+            ->assertCreated()
+            ->assertJsonPath('meta.warnings.0.code', 'OPENING_STOCK_SKIPPED');
+
+        $this->actingForTenant($tenant, function () {
+            $this->assertSame(1, Item::query()->count());
+            $this->assertSame(0, StockMovement::query()->count());
+        });
+    }
+
+    /**
+     * A part bought to order is not labour, and the skip says so.
+     *
+     * `tracksStock()` is false for both — for the category that can never hold a
+     * quantity, and for the product whose workshop chose not to hold one. Blaming
+     * the category for the second sends somebody to the Category Master to fix a
+     * switch that is on this form.
+     */
+    #[Test]
+    public function a_product_the_workshop_chose_not_to_stock_is_told_which_switch_it_was(): void
+    {
+        [$tenant, $keeper] = $this->stockkeeper('STOCKKEEPER_UNSTOCKED');
+
+        $created = $this->withHeaders($this->authHeader($keeper))
+            ->postJson('/api/v1/items', $this->motorWithOpeningStock($tenant, ['is_stock' => false]))
+            ->assertCreated()
+            ->assertJsonPath('meta.warnings.0.code', 'OPENING_STOCK_SKIPPED');
+
+        $this->assertStringContainsString('keep stock of this', $created->json('meta.warnings.0.message'));
+
+        $this->actingForTenant($tenant, fn () => $this->assertSame(0, StockMovement::query()->count()));
+    }
+
+    /**
+     * Cataloguing is an ITEMS grant; recording a quantity is a TRANSACTIONS one.
+     *
+     * A clerk who may add a bearing but not write to the ledger gets the bearing
+     * — refusing the whole request would mean they could not add it at all — and
+     * is told plainly, with the count in it, what was not recorded.
+     */
+    #[Test]
+    public function a_clerk_without_the_transactions_grant_keeps_the_product_and_loses_the_quantity(): void
+    {
+        [$tenant, $clerk] = $this->tenantWithUser([
+            ['READ', 'ITEMS'], ['WRITE', 'ITEMS'],
+        ], 'CLERK_NO_POSTING');
+
+        $response = $this->withHeaders($this->authHeader($clerk))
+            ->postJson('/api/v1/items', $this->motorWithOpeningStock($tenant))
+            ->assertCreated()
+            ->assertJsonPath('meta.warnings.0.code', 'OPENING_STOCK_SKIPPED');
+
+        $this->assertStringContainsString(
+            'The opening quantity was not recorded.',
+            $response->json('meta.warnings.0.message'),
+        );
+
+        // The product and its variant survive; only the quantity did not.
+        $this->actingForTenant($tenant, function () {
+            $this->assertSame(1, Item::query()->count());
+            $this->assertSame(1, ItemVariant::query()->count());
+            $this->assertSame(0, StockMovement::query()->count());
+            $this->assertSame(0, Transaction::query()->count());
+        });
+    }
+
+    /* ---------------------------------------------------------------------
+     | Several variants on one create
+     |
+     | A motor family is bought in three ratings and catalogued in one sitting.
+     | What these check is that the ratings arrive as one act — one product, one
+     | stock adjustment — and that when one of them is wrong the refusal says
+     | which, because five blocks on a form are indistinguishable in a banner.
+     |-------------------------------------------------------------------- */
+
+    /**
+     * A motor family in however many ratings, in the longhand the form sends.
+     *
+     * @param  array<int, array<string, mixed>>  $variants
+     * @return array<string, mixed>
+     */
+    private function motorFamily(Tenant $tenant, array $variants): array
+    {
+        return [
+            'name' => 'Crompton Induction Motor',
+            'category_id' => $this->categoryId('motor', $tenant),
+            'gst_rate' => '18',
+            'variants' => $variants,
+        ];
+    }
+
+    /**
+     * One rating: the three attributes a motor is described by, and a SKU.
+     *
+     * @return array<string, mixed>
+     */
+    private function rating(string $hp, array $overrides = []): array
+    {
+        return array_merge([
+            'sku' => 'MOT-'.str_replace('.', '-', $hp),
+            'attributes' => ['hp' => $hp, 'phase' => '3', 'rpm' => '1440'],
+        ], $overrides);
+    }
+
+    private function variantBySku(Tenant $tenant, string $sku): ItemVariant
+    {
+        return $this->actingForTenant(
+            $tenant,
+            fn () => ItemVariant::query()->where('sku', $sku)->sole(),
+        );
+    }
+
+    #[Test]
+    public function several_variants_arrive_together_on_one_stock_adjustment(): void
+    {
+        [$tenant, $keeper] = $this->stockkeeper('STOCKKEEPER_FAMILY');
+
+        $created = $this->withHeaders($this->authHeader($keeper))
+            ->postJson('/api/v1/items', $this->motorFamily($tenant, [
+                $this->rating('3', ['opening_stock' => '2', 'opening_cost' => '9000.00']),
+                $this->rating('5', ['opening_stock' => '4', 'opening_cost' => '13500.00']),
+                $this->rating('7.5', ['opening_stock' => '1', 'opening_cost' => '21000.00']),
+            ]))
+            ->assertCreated()
+            ->assertJsonCount(3, 'data.variants');
+
+        // Three distinct ratings and every quantity valued, so there is nothing
+        // to warn about.
+        $this->assertNull($created->json('meta.warnings'));
+
+        foreach ([['MOT-3', '2.000', '18000.00'], ['MOT-5', '4.000', '54000.00'], ['MOT-7-5', '1.000', '21000.00']] as [$sku, $quantity, $value]) {
+            $position = $this->stockPositionOf($tenant, $this->variantBySku($tenant, $sku));
+
+            $this->assertSame($quantity, $position['quantity'], $sku.' is not on the shelf.');
+            $this->assertSame($value, $position['value'], $sku.' is not worth what it cost.');
+        }
+
+        /*
+        | One document, not three.
+        |
+        | Cataloguing a family is one act and reads on the day book as one, where
+        | three vouchers stamped the same minute read as three separate
+        | stock-takes. §8.2 — the stock impact, not merely that the request
+        | succeeded.
+        */
+        $document = $this->actingForTenant($tenant, fn () => Transaction::query()->sole());
+
+        $this->assertSame('Opening stock for Crompton Induction Motor', $document->notes);
+        $this->actingForTenant($tenant, fn () => $this->assertSame(3, StockMovement::query()->count()));
+
+        $this->assertSame('93000.00', $this->balanceOf($tenant, SystemAccount::Inventory));
+        $this->assertStockAgreesWithInventoryAccount($tenant);
+        $this->assertBooksBalance($tenant);
+    }
+
+    /**
+     * A rating catalogued before any of it is on the shelf is still a rating.
+     *
+     * The form offers a quantity per block and most of them are left empty — a
+     * workshop lists what it deals in, not only what it happens to hold today.
+     */
+    #[Test]
+    public function a_variant_with_no_opening_quantity_is_left_off_the_document(): void
+    {
+        [$tenant, $keeper] = $this->stockkeeper('STOCKKEEPER_PARTIAL');
+
+        $this->withHeaders($this->authHeader($keeper))
+            ->postJson('/api/v1/items', $this->motorFamily($tenant, [
+                $this->rating('3', ['opening_stock' => '2', 'opening_cost' => '9000.00']),
+                $this->rating('5'),
+                $this->rating('7.5', ['opening_stock' => '1', 'opening_cost' => '21000.00']),
+            ]))
+            ->assertCreated()
+            ->assertJsonCount(3, 'data.variants');
+
+        $this->actingForTenant($tenant, function () {
+            $this->assertSame(1, Transaction::query()->count());
+            $this->assertSame(2, StockMovement::query()->count());
+        });
+
+        $this->assertSame('0.000', $this->stockPositionOf($tenant, $this->variantBySku($tenant, 'MOT-5'))['quantity']);
+        $this->assertSame('39000.00', $this->balanceOf($tenant, SystemAccount::Inventory));
+    }
+
+    /**
+     * A refusal raised about one variant says which variant it was about.
+     *
+     * The SKU rule lives in ItemVariantService and legitimately does not know it
+     * was called for the third block of a repeater. Without the scoping the form
+     * paints "a variant with SKU MOT-5 already exists" on a banner above three
+     * identical blocks and leaves somebody comparing them by eye.
+     */
+    #[Test]
+    public function a_refusal_names_the_variant_it_is_about(): void
+    {
+        [$tenant, $keeper] = $this->stockkeeper('STOCKKEEPER_DUPLICATE_SKU');
+
+        $response = $this->withHeaders($this->authHeader($keeper))
+            ->postJson('/api/v1/items', $this->motorFamily($tenant, [
+                $this->rating('3'),
+                $this->rating('5'),
+                $this->rating('7.5', ['sku' => 'MOT-3']),
+            ]))
+            ->assertStatus(409)
+            ->assertJsonPath('error.code', 'ITEM_SKU_TAKEN');
+
+        $this->assertArrayHasKey('variants.2.sku', $response->json('error.details.fields'));
+
+        // The whole create is one transaction: the two good ratings do not
+        // survive without the third.
+        $this->actingForTenant($tenant, function () {
+            $this->assertSame(0, Item::query()->count());
+            $this->assertSame(0, ItemVariant::query()->count());
+        });
+    }
+
+    /**
+     * And so does the opening-stock refusal, which is raised a step later.
+     *
+     * It runs after every variant exists — the two skips come first — so the
+     * index it reports is the one the block was submitted under rather than the
+     * order the costs happened to be resolved in.
+     */
+    #[Test]
+    public function an_unvalued_opening_quantity_names_its_own_variant(): void
+    {
+        [$tenant, $keeper] = $this->stockkeeper('STOCKKEEPER_UNVALUED_BLOCK');
+
+        $response = $this->withHeaders($this->authHeader($keeper))
+            ->postJson('/api/v1/items', $this->motorFamily($tenant, [
+                $this->rating('3', ['opening_stock' => '2', 'opening_cost' => '9000.00']),
+                $this->rating('5', ['opening_stock' => '4']),
+            ]))
+            ->assertStatus(422)
+            ->assertJsonPath('error.code', 'OPENING_STOCK_NEEDS_A_COST');
+
+        $this->assertArrayHasKey('variants.1.opening_cost', $response->json('error.details.fields'));
+
+        $this->actingForTenant($tenant, function () {
+            $this->assertSame(0, Item::query()->count());
+            $this->assertSame(0, StockMovement::query()->count());
+        });
+    }
+
+    /**
+     * Two blocks describing the same thing are reported, never refused.
+     *
+     * M5's treatment of a shared GSTIN, and for the same reason: two 5 HP / 1440
+     * rows are usually one motor entered twice, which splits one stock balance in
+     * half — but a workshop stocking two brands at identical ratings legitimately
+     * has two, and only the person who typed them knows which this is.
+     */
+    #[Test]
+    public function variants_described_the_same_way_are_warned_about_rather_than_refused(): void
+    {
+        [$tenant, $keeper] = $this->stockkeeper('STOCKKEEPER_DUPLICATE_SPEC');
+
+        $created = $this->withHeaders($this->authHeader($keeper))
+            ->postJson('/api/v1/items', $this->motorFamily($tenant, [
+                $this->rating('5', ['sku' => 'MOT-5-CG']),
+                $this->rating('3'),
+                $this->rating('5', ['sku' => 'MOT-5-ABB']),
+            ]))
+            ->assertCreated()
+            ->assertJsonCount(3, 'data.variants')
+            ->assertJsonPath('meta.warnings.0.code', 'ITEM_VARIANT_DUPLICATE');
+
+        // Named by where they are on the form, which is the only thing telling
+        // them apart — their specifications are identical by definition.
+        $this->assertSame([1, 3], $created->json('meta.warnings.0.positions'));
+        $this->assertStringContainsString('Variants 1 and 3', $created->json('meta.warnings.0.message'));
+    }
+
+    /**
+     * Two variants that describe nothing are not duplicates of each other.
+     *
+     * Labour has no attribute bag at all — an hour of rewinding is an hour of
+     * rewinding — so a rule that matched empty specification against empty
+     * specification would warn about every second block on that category, every
+     * time. What tells two of those apart is the SKU, and a repeated SKU is
+     * refused outright.
+     */
+    #[Test]
+    public function variants_with_no_specification_are_not_duplicates_of_one_another(): void
+    {
+        [$tenant, $keeper] = $this->stockkeeper('STOCKKEEPER_NO_SPEC');
+
+        $this->withHeaders($this->authHeader($keeper))
+            ->postJson('/api/v1/items', [
+                'name' => 'Rewinding Labour',
+                'category_id' => $this->categoryId('service', $tenant),
+                'gst_rate' => '18',
+                'variants' => [
+                    ['sku' => 'LAB-STD', 'sell_price' => '2500.00'],
+                    ['sku' => 'LAB-URGENT', 'sell_price' => '4000.00'],
+                ],
+            ])
+            ->assertCreated()
+            ->assertJsonCount(2, 'data.variants')
+            ->assertJsonMissingPath('meta.warnings');
+    }
+
+    /**
+     * The skip warning counts what it left behind.
+     *
+     * "Opening stock was skipped" on a form that offered a box per block leaves
+     * somebody counting the boxes to work out what they have to go and ask for.
+     */
+    #[Test]
+    public function the_skip_warning_counts_the_quantities_it_left_behind(): void
+    {
+        [$tenant, $clerk] = $this->tenantWithUser([
+            ['READ', 'ITEMS'], ['WRITE', 'ITEMS'],
+        ], 'CLERK_NO_POSTING_FAMILY');
+
+        $response = $this->withHeaders($this->authHeader($clerk))
+            ->postJson('/api/v1/items', $this->motorFamily($tenant, [
+                $this->rating('3', ['opening_stock' => '2', 'opening_cost' => '9000.00']),
+                $this->rating('5', ['opening_stock' => '4', 'opening_cost' => '13500.00']),
+                $this->rating('7.5'),
+            ]))
+            ->assertCreated()
+            ->assertJsonPath('meta.warnings.0.code', 'OPENING_STOCK_SKIPPED');
+
+        $this->assertStringContainsString(
+            'The opening quantities for 2 variants were not recorded.',
+            $response->json('meta.warnings.0.message'),
+        );
+
+        // The product and all three ratings survive; only the quantities did not.
+        $this->actingForTenant($tenant, function () {
+            $this->assertSame(3, ItemVariant::query()->count());
+            $this->assertSame(0, StockMovement::query()->count());
+        });
     }
 
     /* ---------------------------------------------------------------------
@@ -518,6 +1208,83 @@ class ItemApiTest extends TestCase
             ->getJson('/api/v1/items/meta')
             ->assertOk()
             ->assertJsonPath('data.draft_counts.items', 0);
+    }
+
+    /**
+     * A rating is archived, restored and signed off one at a time.
+     *
+     * All three are the same PATCH with a different flag, and none of them had a
+     * caller until the drawer's variant rows grew the controls. What is asserted
+     * here is the part the screen depends on and cannot check for itself: the two
+     * flags are **independent**, so confirming a family leaves its ratings in the
+     * queue and confirming a rating does not confirm the family above it.
+     *
+     * That independence is deliberate. A variant inherits `is_draft` from the
+     * item it was invented under, and an importer that guessed a product also
+     * guessed every rating below it — one sign-off for the lot would be one click
+     * claiming somebody read them all.
+     */
+    #[Test]
+    public function a_variant_is_archived_restored_and_signed_off_one_flag_at_a_time(): void
+    {
+        $headers = $this->authHeader($this->owner);
+
+        $draft = $this->actingForTenant(
+            $this->tenant,
+            fn () => Item::factory()->part()->draft()->create()
+        );
+
+        $variant = $this->withHeaders($headers)
+            ->postJson("/api/v1/items/{$draft->id}/variants", [
+                'attributes' => ['size' => '6205'],
+                'sell_price' => '250.00',
+            ])
+            ->assertCreated()
+            // Inherited from the family it was invented under, which is what puts
+            // it in the queue at all.
+            ->assertJsonPath('data.is_draft', true)
+            ->assertJsonPath('data.is_active', true)
+            ->json('data.id');
+
+        // Off the shelf, and everything recorded against it stays where it is.
+        $this->withHeaders($headers)
+            ->patchJson("/api/v1/items/{$draft->id}/variants/{$variant}", ['is_active' => false])
+            ->assertOk()
+            ->assertJsonPath('data.is_active', false)
+            ->assertJsonPath('data.sell_price', '250.00');
+
+        $this->withHeaders($headers)
+            ->patchJson("/api/v1/items/{$draft->id}/variants/{$variant}", ['is_active' => true])
+            ->assertOk()
+            ->assertJsonPath('data.is_active', true);
+
+        // Signing off the family leaves the rating under it waiting.
+        $this->withHeaders($headers)
+            ->patchJson("/api/v1/items/{$draft->id}", ['is_draft' => false])
+            ->assertOk()
+            ->assertJsonPath('data.is_draft', false);
+
+        $this->withHeaders($headers)
+            ->getJson('/api/v1/items/meta')
+            ->assertOk()
+            ->assertJsonPath('data.draft_counts.items', 0)
+            // The count the review banner had never read. Without it a workshop
+            // whose import left ratings unchecked is told there is nothing to do.
+            ->assertJsonPath('data.draft_counts.variants', 1);
+
+        $this->withHeaders($headers)
+            ->patchJson("/api/v1/items/{$draft->id}/variants/{$variant}", ['is_draft' => false])
+            ->assertOk()
+            ->assertJsonPath('data.is_draft', false)
+            // The flag alone: signing off is not an edit, and the price beside it
+            // is somebody else's answer.
+            ->assertJsonPath('data.is_active', true)
+            ->assertJsonPath('data.sell_price', '250.00');
+
+        $this->withHeaders($headers)
+            ->getJson('/api/v1/items/meta')
+            ->assertOk()
+            ->assertJsonPath('data.draft_counts.variants', 0);
     }
 
     #[Test]

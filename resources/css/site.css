@@ -1,0 +1,547 @@
+@import 'tailwindcss';
+
+/*
+| Blade compiles to PHP before Tailwind sees any class names, so the compiled
+| views are a source as well as the templates themselves.
+*/
+@source '../../storage/framework/views/*.php';
+
+@import './shared.css';
+
+/* =========================================================================
+| The shopfront — resources/views/site/*
+|
+| The public site: the home page and the three service pages. This file is
+| everything that is true of those and of nothing behind the sign-in, which is
+| why it is a second entry point rather than a section of app.css — neither
+| surface downloads the other's stylesheet, and a change to one cannot appear
+| unannounced on the other.
+|
+| Two decisions run through the whole thing:
+|
+|   Copper, not blue. The application is blue because the Figma build is. The
+|   shop sells copper winding wire and rewinds motors with it, so the site is
+|   built on copper against ink. It also stops the shopfront looking like every
+|   other trade site, all of which are blue.
+|
+|   Ink and paper, in that order. The hero, the contact block and the footer
+|   are near-black; everything between them is warm paper. The dark bands are
+|   where the shop speaks and the light ones are where it explains, and a
+|   visitor scrolling fast can tell which is which without reading.
+|
+| Everything here is prefixed `s-` so none of it can reach the application's
+| screens, and every animation is switched off in one block at the bottom.
+========================================================================= */
+
+@theme {
+    /*
+    | Copper — the accent, and the product.
+    |
+    | Built around #b87333, which is what the metal actually looks like. It is
+    | warm enough to read as a highlight on ink and dark enough at 600+ to be
+    | legible as text on paper, so the same ramp works on both grounds.
+    */
+    --color-copper-50: #fbf3ec;
+    --color-copper-100: #f6e2d0;
+    --color-copper-200: #ecc19f;
+    --color-copper-300: #e09e6c;
+    --color-copper-400: #cf8146;
+    --color-copper-500: #b87333;
+    --color-copper-600: #9c5c28;
+    --color-copper-700: #7d4822;
+    --color-copper-800: #613821;
+    --color-copper-900: #4e2e1d;
+
+    /*
+    | Ink — the dark ground.
+    |
+    | Slightly blue-black rather than neutral grey, because copper on a warm
+    | grey turns muddy and copper on a cool one stays metal.
+    */
+    --color-ink-50: #f6f7f9;
+    --color-ink-100: #e9ebf0;
+    --color-ink-200: #d4d8e0;
+    --color-ink-300: #b3b9c6;
+    --color-ink-400: #8b93a5;
+    --color-ink-500: #646d80;
+    --color-ink-600: #3a4150;
+    --color-ink-700: #262b36;
+    --color-ink-800: #1a1e27;
+    --color-ink-900: #11141b;
+    --color-ink-950: #0a0c10;
+
+    /* The paper the explaining happens on. Warmer than the application's
+       --color-background, so the two never look like the same screen. */
+    --color-paper: #faf8f5;
+    --color-paper-2: #f3efe9;
+
+    /*
+    | The body face, with Devanagari behind it.
+    |
+    | Inter carries no Devanagari at all, so on /hi every word would be drawn by
+    | whatever the device fell back to. Noto Sans Devanagari is listed second:
+    | a browser takes the first family that has the glyph, so Latin still comes
+    | from Inter on both pages and only the Devanagari is served from Noto —
+    | including on the English page, where the language switch says "हिन्दी".
+    |
+    | Both are self-hosted with per-face `unicode-range`, so the Devanagari
+    | files are fetched only by a page that actually draws Devanagari.
+    */
+    --font-sans: 'Inter', 'Noto Sans Devanagari', -apple-system, BlinkMacSystemFont, ui-sans-serif,
+        system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol',
+        'Noto Color Emoji';
+
+    /*
+    | A monospace stack for anything measured.
+    |
+    | Every spec value, every reference table and every reading on the test
+    | report is set in it. Figures that line up column to column are read as
+    | data; the same figures in the body face are read as prose, and the whole
+    | claim this site makes is that the shop measures things.
+    */
+    --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Cascadia Mono', 'Roboto Mono',
+        Consolas, 'Liberation Mono', monospace;
+}
+
+@layer base {
+    /*
+    | Tabular figures everywhere on this site.
+    |
+    | Inter ships proportional numerals by default, so "1440" and "0.746" in
+    | adjacent table rows do not line up under each other. On a page whose
+    | selling point is measurement that reads as sloppiness.
+    */
+    body {
+        font-variant-numeric: tabular-nums;
+        background-color: var(--color-paper);
+    }
+
+}
+
+/*
+| Devanagari needs room above and below the line.
+|
+| The display headings are set at 1.06–1.1 line-height, which is right for
+| Latin capitals and wrong for a script that hangs matras above the line and
+| conjuncts below it: at that leading the vowel signs of one line collide with
+| the descenders of the one above, and the Hindi hero renders as two
+| overlapping rows of ink.
+|
+| Scoped to `:lang(hi)`, so it follows the `lang` attribute the layout already
+| sets from the locale and cannot be forgotten on a new page.
+|
+| Deliberately NOT inside `@layer base`: the leading comes from a Tailwind
+| utility (`leading-[1.06]`), utilities are a later layer than base, and a
+| layered rule loses to a later layer whatever its specificity. Unlayered CSS
+| beats every layer, which is what makes this stick without `!important`.
+*/
+:lang(hi) h1,
+:lang(hi) h2,
+:lang(hi) h3 {
+    line-height: 1.32;
+}
+
+/* Devanagari carries no case distinction, so uppercasing an eyebrow does
+   nothing to the letters and only opens the tracking into gaps. */
+:lang(hi) .s-eyebrow {
+    text-transform: none;
+    letter-spacing: 0.04em;
+}
+
+
+/* =========================================================================
+| Arriving
+========================================================================= */
+
+/*
+| Sections revealed as they are scrolled to.
+|
+| The offset is per element — `--rx`, `--ry`, `--rd` — so a row of cards can
+| arrive from different edges with different delays rather than all sliding up
+| in unison, which is the difference between a page that assembles and a page
+| that has an animation on it.
+|
+| Nothing is hidden from a visitor without JavaScript: `.s-in` is added by an
+| observer, and the no-JS fallback in the <noscript> block sets it on
+| everything at once.
+*/
+[data-reveal] {
+    opacity: 0;
+    transform: translate3d(var(--rx, 0), var(--ry, 1.5rem), 0);
+    transition:
+        opacity 0.65s cubic-bezier(0.2, 0.8, 0.2, 1),
+        transform 0.65s cubic-bezier(0.2, 0.8, 0.2, 1);
+    transition-delay: var(--rd, 0s);
+}
+
+[data-reveal].s-in {
+    opacity: 1;
+    transform: none;
+}
+
+/*
+| No sideways arrival on a phone.
+|
+| `--rx` slides a card in from the left or right, which on a 390px screen puts
+| it briefly outside the viewport and gives the page a horizontal scrollbar for
+| the length of the transition. `!important` because the offset is an inline
+| style on the element and would otherwise win.
+|
+| It is also the better design: on a narrow screen the cards are one per row,
+| and a stack that arrives straight up reads as one movement rather than as
+| eight things sliding in from alternate sides.
+*/
+@media (max-width: 639px) {
+    [data-reveal] {
+        --rx: 0 !important;
+    }
+}
+
+
+/* =========================================================================
+| Grounds and rules
+========================================================================= */
+
+/*
+| Engineering paper behind the dark bands.
+|
+| Masked to a soft ellipse so it never reaches an edge — a grid that runs off
+| the side of the screen looks like a background image, and a grid that fades
+| looks like the light is falling on it.
+*/
+.s-grid::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image:
+        linear-gradient(to right, rgb(184 115 51 / 0.10) 1px, transparent 1px),
+        linear-gradient(to bottom, rgb(184 115 51 / 0.10) 1px, transparent 1px);
+    background-size: 56px 56px;
+    mask-image: radial-gradient(ellipse 80% 70% at 50% 30%, #000 30%, transparent 100%);
+}
+
+/* The same, at hairline weight, for light sections that want a hint of it. */
+.s-grid-light::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image:
+        linear-gradient(to right, rgb(17 20 27 / 0.045) 1px, transparent 1px),
+        linear-gradient(to bottom, rgb(17 20 27 / 0.045) 1px, transparent 1px);
+    background-size: 40px 40px;
+    mask-image: linear-gradient(to bottom, #000, transparent 70%);
+}
+
+/*
+| A numbered section eyebrow: "01 / What we do".
+|
+| The counter is CSS rather than a number in the markup so sections can be
+| reordered without renumbering them by hand — and so a section that is
+| conditionally absent does not leave a gap in the sequence.
+*/
+.s-sections {
+    counter-reset: s-section;
+}
+
+.s-eyebrow {
+    counter-increment: s-section;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.625rem;
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+}
+
+.s-eyebrow::before {
+    content: counter(s-section, decimal-leading-zero);
+    padding-inline-end: 0.625rem;
+    border-inline-end: 1px solid currentColor;
+    opacity: 0.45;
+}
+
+
+/* =========================================================================
+| The hero's cutaway motor
+========================================================================= */
+
+/*
+| The callout labels, and the leader lines that tie them to the drawing.
+|
+| Each label is placed by two custom properties from the markup and grows its
+| own line back towards the motor, so moving a callout is editing two numbers
+| rather than re-drawing an SVG path. The line is a pseudo-element for the same
+| reason: it must not be a separate absolutely positioned element that can fall
+| out of step with the label it belongs to.
+*/
+.s-callout {
+    position: absolute;
+    top: var(--y);
+    left: var(--x);
+    animation: s-callout-in 0.8s cubic-bezier(0.16, 0.9, 0.24, 1) var(--d, 0s) both;
+}
+
+.s-callout::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    width: var(--len, 2.5rem);
+    height: 1px;
+    background: linear-gradient(var(--dir, to left), rgb(184 115 51 / 0.85), rgb(184 115 51 / 0));
+}
+
+/* A callout hanging off the left of the drawing runs its line to the right. */
+.s-callout-l::before { right: 100%; margin-right: 0.5rem; }
+.s-callout-r::before { left: 100%; margin-left: 0.5rem; --dir: to right; }
+
+.s-callout::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    width: 5px;
+    height: 5px;
+    margin-top: -2px;
+    border-radius: 50%;
+    background: var(--color-copper-500);
+}
+
+.s-callout-l::after { right: calc(100% + 0.5rem + var(--len, 2.5rem) - 2px); }
+.s-callout-r::after { left: calc(100% + 0.5rem + var(--len, 2.5rem) - 2px); }
+
+@keyframes s-callout-in {
+    from { opacity: 0; transform: translateX(var(--from, 0)); }
+    to   { opacity: 1; transform: none; }
+}
+
+/* The shaft, turning. Slow: it is a detail noticed on the second look. */
+.s-rotor {
+    transform-origin: var(--ox, 50%) var(--oy, 50%);
+    animation: s-spin 9s linear infinite;
+}
+
+@keyframes s-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* The soft light behind the drawing, breathing. */
+.s-pulse {
+    animation: s-pulse 5s ease-in-out infinite;
+}
+
+@keyframes s-pulse {
+    0%, 100% { opacity: 0.4; transform: scale(1); }
+    50%      { opacity: 0.75; transform: scale(1.05); }
+}
+
+
+/* =========================================================================
+| The nameplate
+========================================================================= */
+
+/*
+| The plate itself: an etched aluminium rectangle, and the one piece of the
+| site that is drawn rather than written.
+|
+| It is a real grid of real fields, not a picture, so the fields can be
+| highlighted from the explanation list beside it — which is the whole point of
+| the section. A screenshot of a nameplate could not do that, would not scale
+| on a phone, and would be a photograph of somebody else's motor.
+*/
+.s-plate {
+    background:
+        linear-gradient(145deg, #d9dce2 0%, #eef0f3 22%, #c8ccd4 48%, #e6e8ec 74%, #cfd3da 100%);
+    border-radius: 6px;
+    box-shadow:
+        inset 0 1px 0 rgb(255 255 255 / 0.7),
+        inset 0 -1px 0 rgb(0 0 0 / 0.12),
+        0 12px 30px -12px rgb(10 12 16 / 0.55);
+}
+
+.s-plate-field {
+    transition: background-color 0.18s, box-shadow 0.18s;
+}
+
+/*
+| Driven by a `data-field` match from the list, and by :hover on the plate
+| itself, so it works whichever half the visitor's attention is on. `.is-lit`
+| is what the script sets.
+*/
+.s-plate-field.is-lit {
+    background-color: rgb(184 115 51 / 0.22);
+    box-shadow: inset 0 0 0 1px rgb(184 115 51 / 0.75);
+}
+
+.s-plate-row {
+    cursor: default;
+    transition: background-color 0.18s, border-color 0.18s;
+}
+
+.s-plate-row.is-lit {
+    background-color: var(--color-copper-50);
+    border-color: var(--color-copper-300);
+}
+
+
+/* =========================================================================
+| Reference tables
+========================================================================= */
+
+/*
+| Dense, monospaced and scrollable inside their own box.
+|
+| The tables are the widest content on the site and they are read on a phone by
+| somebody standing at a bench, so the overflow is on the wrapper: the page
+| body must never scroll sideways, and a table that is cut off is worse than
+| one that is swiped.
+*/
+.s-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--font-mono);
+    font-size: 0.8125rem;
+}
+
+.s-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: 0.625rem 0.875rem;
+    background-color: var(--color-ink-900);
+    color: var(--color-ink-200);
+    font-weight: 500;
+    font-size: 0.6875rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    text-align: left;
+    white-space: nowrap;
+}
+
+.s-table td {
+    padding: 0.5rem 0.875rem;
+    border-top: 1px solid var(--color-ink-100);
+    color: var(--color-ink-800);
+    white-space: nowrap;
+}
+
+.s-table tbody tr:nth-child(even) {
+    background-color: var(--color-paper-2);
+}
+
+.s-table tbody tr:hover {
+    background-color: var(--color-copper-50);
+}
+
+/* The first column of every reference table is the thing being looked up. */
+.s-table td:first-child {
+    font-weight: 600;
+    color: var(--color-ink-950);
+}
+
+
+/* =========================================================================
+| Questions
+========================================================================= */
+
+/*
+| Built on <details>, so every answer is open to a visitor with no JavaScript
+| and to a search engine's crawler. The script only adds the "one at a time"
+| behaviour on top of something that already works.
+*/
+.s-faq summary {
+    cursor: pointer;
+    list-style: none;
+}
+
+.s-faq summary::-webkit-details-marker {
+    display: none;
+}
+
+.s-faq[open] .s-faq-chevron {
+    transform: rotate(180deg);
+}
+
+.s-faq-chevron {
+    transition: transform 0.22s ease;
+}
+
+
+/* =========================================================================
+| The trade band
+========================================================================= */
+
+.s-marquee {
+    display: flex;
+    width: max-content;
+    animation: s-marquee 42s linear infinite;
+}
+
+@keyframes s-marquee {
+    to { transform: translateX(-50%); }
+}
+
+
+/* =========================================================================
+| The sign-in dialog
+========================================================================= */
+
+.s-modal-in {
+    animation: s-modal-in 0.22s ease-out;
+}
+
+@keyframes s-modal-in {
+    from { opacity: 0; transform: translateY(0.75rem) scale(0.97); }
+    to   { opacity: 1; transform: none; }
+}
+
+
+/* =========================================================================
+| The bar at the bottom of a phone
+========================================================================= */
+
+/*
+| Call and WhatsApp, always within thumb reach.
+|
+| This site's visitor is standing in a shed next to a motor that has stopped.
+| The two things they might do are on screen the whole way down the page, and
+| `env(safe-area-inset-bottom)` keeps them above the home indicator rather than
+| underneath it.
+*/
+.s-actionbar {
+    padding-bottom: max(0.625rem, env(safe-area-inset-bottom));
+    transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* Held off-screen until the hero's own buttons have been scrolled past —
+   two calls to action on screen at once is neither of them. */
+.s-actionbar.is-hidden {
+    transform: translateY(120%);
+}
+
+
+/* =========================================================================
+| Somebody who asked not to be moved is not asked twice
+========================================================================= */
+
+@media (prefers-reduced-motion: reduce) {
+    .s-callout,
+    .s-rotor,
+    .s-pulse,
+    .s-marquee,
+    .s-modal-in {
+        animation: none !important;
+    }
+
+    .s-actionbar {
+        transition: none;
+    }
+
+    [data-reveal] {
+        opacity: 1;
+        transform: none;
+        transition: none;
+    }
+}

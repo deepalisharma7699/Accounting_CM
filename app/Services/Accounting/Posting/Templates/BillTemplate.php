@@ -438,13 +438,17 @@ abstract class BillTemplate implements CarriesDocumentLines, MovesStock, Posting
      * half as much left to discount, and spreading over the gross would take
      * more off it than remains.
      *
+     * A line quoted with the tax already in it offers its inclusive amount
+     * instead, which is the same sentence read in that line's own terms; see
+     * {@see BillLine::discountBase()}.
+     *
      * @param  array<int, BillLine>  $lines
      * @param  array<string, mixed>  $input
      * @return array<int, BillLine>
      */
     private function withBillDiscount(array $lines, array $input, PlaceOfSupply $place): array
     {
-        $bases = array_map(fn (BillLine $line) => $line->taxable(), $lines);
+        $bases = array_map(fn (BillLine $line) => $line->discountBase(), $lines);
 
         $discount = BillDiscount::resolve(
             Money::sum($bases),
@@ -540,6 +544,23 @@ abstract class BillTemplate implements CarriesDocumentLines, MovesStock, Posting
             // crediting back, which is what makes "how much has already come
             // back?" a sum over one key — M18.
             againstLineId: isset($row['against_line_id']) ? (int) $row['against_line_id'] : null,
+            /*
+            | Whether the rate on this line already has the GST in it.
+            |
+            | The line says so where the form asked — the picker prefills the
+            | toggle from the item and the operator may flip it, because a shop
+            | that normally sells a part at its printed price still quotes the
+            | odd job before tax.
+            |
+            | Where the key is absent the *item's* own default stands in, so an
+            | API caller that has never heard of the flag still gets the treatment
+            | the workshop set on the product rather than silently having tax
+            | added on top of a price that already had it. That default is `false`
+            | until somebody sets it, so nothing that posts today changes.
+            */
+            priceIncludesTax: array_key_exists('price_includes_tax', $row) && $row['price_includes_tax'] !== null
+                ? (bool) $row['price_includes_tax']
+                : (bool) $item->price_includes_tax,
         );
     }
 

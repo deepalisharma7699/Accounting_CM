@@ -11,6 +11,7 @@ use App\Models\ItemBrand;
 use App\Models\ItemCategory;
 use App\Models\ItemVariant;
 use App\Models\Party;
+use App\Models\Passkey;
 use App\Models\StaffDesignation;
 use App\Models\Tenant;
 use App\Models\TransactionStaff;
@@ -42,7 +43,7 @@ use Illuminate\Database\Eloquent\Model;
  *
  * **Roles and permissions.** Platform-defined rather than workshop-owned: a role
  * belongs to every tenant at once, so there is no workshop whose history it
- * belongs in. See {@see \App\Enums\PermissionResource::Audit}.
+ * belongs in. See {@see PermissionResource::Audit}.
  */
 enum AuditResource: string
 {
@@ -131,6 +132,21 @@ enum AuditResource: string
     case SaleAttribution = 'sale_attribution';
 
     /**
+     * A device somebody enrolled to sign in with.
+     *
+     * Audited because enrolling one *adds a way into an account* and removing
+     * one takes it away — the two acts a trail exists to record, and the two
+     * that leave no other mark: the user's own row is untouched, so without an
+     * entry here a workshop would have no way of answering "when did that phone
+     * become able to open the books".
+     *
+     * The public key is deliberately not in the trail. It is not evidence of
+     * anything a person can read, and it is useless to whoever steals it — the
+     * label and the date are the whole of what makes an entry mean something.
+     */
+    case Passkey = 'passkey';
+
+    /**
      * @return class-string<Model>
      */
     public function modelClass(): string
@@ -150,6 +166,7 @@ enum AuditResource: string
             self::Employee => Employee::class,
             self::StaffDesignation => StaffDesignation::class,
             self::SaleAttribution => TransactionStaff::class,
+            self::Passkey => Passkey::class,
         };
     }
 
@@ -170,6 +187,7 @@ enum AuditResource: string
             self::Employee => 'Employee',
             self::StaffDesignation => 'Designation',
             self::SaleAttribution => 'Sale attribution',
+            self::Passkey => 'Sign-in device',
         };
     }
 
@@ -199,6 +217,10 @@ enum AuditResource: string
             // The correction is made on the invoice, not on the staff list — a
             // reader following this row wants the document whose credit moved.
             self::SaleAttribution => '/sales',
+            // Devices are managed from the account menu, not from a module —
+            // there is no page to send a reader to, and the row names the
+            // device it is about.
+            self::Passkey => null,
         };
     }
 

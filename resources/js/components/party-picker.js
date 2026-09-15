@@ -41,27 +41,63 @@ import { describePosition } from './party-position';
 import { can } from '../permissions';
 import { $, debounce, esc, toast } from '../ui';
 
+/*
+| One id per mounted picker, because more than one can be on the page at once.
+|
+| M16's Transactions module mounts three — a customer on the receipt section, a
+| vendor on the payment section and an unroled one on the journal voucher — and
+| all three are attached at the same time, since a tab swap hides a section
+| rather than detaching it. Fixed ids there would mean one `<label for>` pointing
+| at another section's box and one `aria-controls` naming another section's list.
+*/
+let mountCount = 0;
+
 /**
  * Mount a party type-ahead into a host element.
  *
  * @param {HTMLElement} host   Empty container; the markup below is written into it.
  * @param {object}      options
- * @param {'customer'|'vendor'} options.role  Which half of the relationship.
+ * @param {'customer'|'vendor'|null} options.role  Which half of the relationship,
+ *        or null where the document does not decide one — a journal voucher's
+ *        optional counterparty. See the note on `role` below.
  * @param {(party: object|null) => void} options.onSelect
  * @param {string} [options.label]
  */
 export function mountPartyPicker(host, { role = 'customer', onSelect = () => {}, label = null } = {}) {
-    const heading = label ?? (role === 'vendor' ? 'Vendor' : 'Customer');
+    const heading = label ?? (role === 'vendor' ? 'Vendor' : role === 'customer' ? 'Customer' : 'Counterparty');
+    const uid = `party-${++mountCount}`;
+
+    /*
+    | A roled picker is writing one side of a relationship, so it can say what
+    | is owed on that side and offer to create somebody in that role. A picker
+    | with no role can do neither honestly: `outstanding` has a receivable and a
+    | payable half and nothing here would say which to read, and quick-party
+    | never asks which role a new record is — the module it was opened from
+    | decides, and this one has not decided. So both are simply absent.
+    */
+    const roled = role !== null;
+
+    /*
+    | Whether the counterparty is this screen's to choose.
+    |
+    | A workshop bill is raised against the job's customer and the endpoint takes
+    | the party from the job — `BillJobRequest` does not accept one — so a box
+    | that could be retyped would be a box whose answer is silently ignored.
+    | Locked rather than removed: whose motor it is is the first thing anybody
+    | checks before posting, and a document that did not name its customer would
+    | be a worse answer than one that names them and will not be argued with.
+    */
+    let locked = false;
 
     host.innerHTML = `
         <div class="relative" data-party-picker>
-            <label class="field-label" for="party-search">${esc(heading)}</label>
+            <label class="field-label" for="${uid}-search">${esc(heading)}</label>
 
             <div class="flex gap-2">
                 <div class="relative flex-1">
-                    <input id="party-search" type="text" class="field-input pr-9" autocomplete="off"
+                    <input id="${uid}-search" type="text" class="field-input pr-9" autocomplete="off"
                            role="combobox" aria-expanded="false" aria-autocomplete="list"
-                           aria-controls="party-results"
+                           aria-controls="${uid}-results"
                            placeholder="Type a name or phone number…" data-party-input>
 
                     <button type="button"
@@ -74,7 +110,7 @@ export function mountPartyPicker(host, { role = 'customer', onSelect = () => {},
                         data-requires-permission="WRITE:PARTIES">+ Add</button>
             </div>
 
-            <ul id="party-results" role="listbox"
+            <ul id="${uid}-results" role="listbox"
                 class="surface absolute z-30 mt-1 hidden max-h-72 w-full overflow-y-auto p-1 shadow-raised"
                 data-party-results></ul>
 
@@ -95,7 +131,7 @@ export function mountPartyPicker(host, { role = 'customer', onSelect = () => {},
     // Shown only where the user may actually create one. The gate is applied here
     // as well as by applyPermissionGates, because this markup is written after
     // that pass has already run over the page.
-    addButton.classList.toggle('hidden', !can('WRITE', 'PARTIES'));
+    addButton.classList.toggle('hidden', !roled || !can('WRITE', 'PARTIES'));
 
     const state = {
         rows: [],
@@ -132,7 +168,7 @@ export function mountPartyPicker(host, { role = 'customer', onSelect = () => {},
     const paint = () => {
         results.innerHTML = state.rows.length
             ? state.rows.map((party, index) => `
-                <li role="option" id="party-option-${party.id}"
+                <li role="option" id="${uid}-option-${party.id}"
                     aria-selected="${index === state.active}"
                     class="cursor-pointer rounded-md px-3 py-2 text-sm ${index === state.active ? 'bg-accent' : ''}"
                     data-index="${index}">
@@ -163,7 +199,12 @@ export function mountPartyPicker(host, { role = 'customer', onSelect = () => {},
 
         try {
             const { data } = await auth.call(
-                `/parties?role=${role}&is_active=1&per_page=10&search=${encodeURIComponent(term)}`
+                `/parties?${roled ? `role=${role}&` : ''}is_active=1&per_page=10`
+                + `&search=${encodeURIComponent(term)}`,
+                // Debounced against typing — see `quiet` in auth-client. The
+                // dropdown is the feedback here; a bar at the top of the screen
+                // flickering once per keystroke is not.
+                { quiet: true },
             );
 
             state.rows = data;
@@ -215,6 +256,9 @@ export function mountPartyPicker(host, { role = 'customer', onSelect = () => {},
      */
     const loadPosition = async (party) => {
         const seq = ++state.positionSeq;
+
+        // Nothing to read, and nothing to read it as — see `roled` above.
+        if (!roled) return;
 
         if (party === null) {
             paintPosition(null);
@@ -273,7 +317,7 @@ export function mountPartyPicker(host, { role = 'customer', onSelect = () => {},
         state.selected = party;
         input.value = party?.name ?? '';
         chosenLine.classList.toggle('hidden', party === null);
-        clear.classList.toggle('hidden', party === null);
+        clear.classList.toggle('hidden', party === null || locked);
 
         if (party) {
             chosenLine.textContent = [
@@ -381,5 +425,20 @@ export function mountPartyPicker(host, { role = 'customer', onSelect = () => {},
         */
         onAdd: (handler) => addButton.addEventListener('click', () => handler(input.value.trim())),
         role: () => role,
+
+        /**
+         * Fix the chosen party, or let it be chosen again.
+         *
+         * For a document whose counterparty was decided by the record it came
+         * off — see the note beside `locked`.
+         */
+        lock(on = true) {
+            locked = on;
+            input.disabled = on;
+            input.classList.toggle('bg-muted', on);
+            clear.classList.toggle('hidden', on || state.selected === null);
+            addButton.classList.toggle('hidden', on || !roled || !can('WRITE', 'PARTIES'));
+            close();
+        },
     };
 }

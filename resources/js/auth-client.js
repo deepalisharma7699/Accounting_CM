@@ -10,6 +10,9 @@
  * that need it must be same-origin and sent with credentials.
  */
 
+import { announceWrite } from './data-bus';
+import { beginRequest, endRequest } from './loader';
+
 const BASE = '/api/v1';
 
 let accessToken = null;
@@ -112,6 +115,79 @@ export async function register(fields) {
     return payload.data.user;
 }
 
+/* -------------------------------------------------------------------------
+ | Passkeys
+ | ---------------------------------------------------------------------- */
+
+/**
+ * A challenge to sign in with, naming no account.
+ *
+ * Unauthenticated, and takes nothing: the whole point of a discoverable
+ * credential is that the browser already knows which passkeys it holds for this
+ * site, so there is nothing for the page to tell the server first.
+ */
+export async function passkeyLoginOptions() {
+    const { response, payload } = await request('/auth/passkeys/login/options', {
+        method: 'POST',
+        auth: false,
+    });
+
+    if (!response.ok) {
+        throw toError(response, payload);
+    }
+
+    return payload.data;
+}
+
+/**
+ * Redeem an assertion for a session. Same shape as login(), deliberately —
+ * everything downstream of a started session is identical however it started.
+ */
+export async function passkeyLogin(state, credential) {
+    const { response, payload } = await request('/auth/passkeys/login', {
+        method: 'POST',
+        body: { state, credential },
+        auth: false,
+        // Required so the browser stores the Set-Cookie refresh token.
+        credentials: 'include',
+    });
+
+    if (!response.ok) {
+        throw toError(response, payload);
+    }
+
+    accessToken = payload.data.access_token;
+
+    return payload.data.user;
+}
+
+/** The devices on this account. */
+export async function passkeys() {
+    return (await call('/auth/passkeys')).data;
+}
+
+/**
+ * Enrol the device this page is running on.
+ *
+ * Both halves are authenticated — the ceremony that adds a way into an account
+ * is something you do from inside it, never on the way in.
+ */
+export async function passkeyRegisterOptions() {
+    return (await call('/auth/passkeys/options', { method: 'POST' })).data;
+}
+
+export async function registerPasskey(state, credential, label) {
+    return (await call('/auth/passkeys', { method: 'POST', body: { state, credential, label } })).data;
+}
+
+export async function renamePasskey(id, label) {
+    return (await call(`/auth/passkeys/${id}`, { method: 'PATCH', body: { label } })).data;
+}
+
+export async function deletePasskey(id) {
+    await call(`/auth/passkeys/${id}`, { method: 'DELETE' });
+}
+
 /**
  * Perform the actual exchange. Never call this directly — go through refresh(),
  * which serialises callers.
@@ -199,7 +275,7 @@ export function isAuthenticated() {
  * token means the session is genuinely over, and retrying would just rotate
  * another token for an attacker.
  */
-export async function call(path, options = {}) {
+async function perform(path, options = {}) {
     if (!accessToken) {
         await refresh();
     }
@@ -215,7 +291,68 @@ export async function call(path, options = {}) {
         throw toError(response, payload);
     }
 
+    /*
+    | Every write in the application comes through here, which is the only
+    | reason the announcement is made here and not at the call sites.
+    |
+    | The screens that hold rows — Stock's shelf, the Items catalogue, a module's
+    | level-1 list — are held detached and alive for the life of the tab, so
+    | nothing about a write reaches them on its own. A convention that each write
+    | site remembers to say what it changed fails silently, one site at a time;
+    | this cannot be forgotten because there is nowhere else to write from.
+    |
+    | It marks screens stale and fetches nothing (`data-bus.js`), so a write in
+    | one module still never loads another module's data (§7.2).
+    */
+    announceWrite(path, options.method ?? 'GET');
+
     return payload;
+}
+
+/**
+ * Every authenticated request in the application, with the global activity bar
+ * around it.
+ *
+ * The wrapper is here rather than at the call sites for exactly the reason
+ * `announceWrite()` above is: the thing being fixed is a *missing* indicator, and
+ * a convention that each caller remembers to raise one fails silently, one
+ * caller at a time. There is no way to reach the API without coming through
+ * here, so there is no way to be busy without saying so (§3.4).
+ *
+ * The work is in `perform()` and the counting is in this function, which keeps
+ * the retry-on-expiry inside one pair of begin/end: a call that refreshes its
+ * token and repeats itself is one wait as far as the person watching is
+ * concerned, not two.
+ *
+ * ## `quiet`
+ *
+ * Two paths run on a debounce as somebody types — the bill form's price preview
+ * and the party and item pickers' search — and firing the bar on each of them
+ * strobes the top of the screen through a whole line of typing. They pass
+ * `quiet: true` and are silent globally; both already say what they are doing
+ * where the eye actually is, in the picker's own list and in the totals panel.
+ *
+ * It is deliberately not an option anything *else* takes. A caller reaching for
+ * it because a spinner looks untidy is removing the only signal that a request
+ * exists, and the flag is named to be conspicuous in review.
+ */
+export async function call(path, options = {}) {
+    const { quiet = false, ...rest } = options;
+
+    if (quiet) {
+        return perform(path, rest);
+    }
+
+    beginRequest();
+
+    try {
+        return await perform(path, rest);
+    } finally {
+        // In a finally, never after the await: a 422 on a save is the single
+        // most common way one of these ends, and a bar left up by a rejected
+        // promise makes the application look permanently busy from then on.
+        endRequest();
+    }
 }
 
 /**
@@ -233,6 +370,13 @@ export async function bootstrapSession() {
 export default {
     login,
     register,
+    passkeyLoginOptions,
+    passkeyLogin,
+    passkeys,
+    passkeyRegisterOptions,
+    registerPasskey,
+    renamePasskey,
+    deletePasskey,
     logout,
     logoutEverywhere,
     refresh,

@@ -26,6 +26,8 @@ final class StockPosition
         public readonly Money $value,
         /** The reorder level the workshop set, where they set one. */
         public readonly ?Quantity $reorderLevel = null,
+        /** The floor the workshop set, where they set one. */
+        public readonly ?Quantity $minStock = null,
     ) {}
 
     public static function of(
@@ -33,13 +35,17 @@ final class StockPosition
         Quantity $quantity,
         Money $value,
         ?Quantity $reorderLevel = null,
+        ?Quantity $minStock = null,
     ): self {
-        return new self($variantId, $quantity, $value, $reorderLevel);
+        return new self($variantId, $quantity, $value, $reorderLevel, $minStock);
     }
 
-    public static function empty(int $variantId, ?Quantity $reorderLevel = null): self
-    {
-        return new self($variantId, Quantity::zero(), Money::zero(), $reorderLevel);
+    public static function empty(
+        int $variantId,
+        ?Quantity $reorderLevel = null,
+        ?Quantity $minStock = null,
+    ): self {
+        return new self($variantId, Quantity::zero(), Money::zero(), $reorderLevel, $minStock);
     }
 
     /**
@@ -95,7 +101,33 @@ final class StockPosition
     }
 
     /**
-     * @return array{quantity: string, value: string, average_cost: string, has_stock: bool, is_low: bool, is_negative: bool, reorder_level: string|null}
+     * Under the floor the workshop said never to go under.
+     *
+     * `reorder_level` and `min_stock` are two numbers on purpose, and the
+     * migration that added the second says why: a shop orders at 20 and panics
+     * at 5. One number cannot say both, and collapsing them loses the difference
+     * between a purchase to plan and a purchase to make today.
+     *
+     * The comparison is **strictly** below where {@see isLow()} is at-or-below,
+     * and the asymmetry is what each figure is for. A reorder level is a trigger
+     * and has to fire on the day the shelf reaches it. A floor is a line the
+     * stock is still standing on when it is exactly there — a workshop that
+     * wrote "never below 5" and has 5 has not broken its own rule, and telling
+     * them they have is how an alarm stops being read.
+     *
+     * A negative position is excluded here exactly as it is from `isLow()`: it
+     * is a data problem, and reporting it as a purchasing one as well would put
+     * one variant on two worklists with two different fixes.
+     */
+    public function isBelowMinimum(): bool
+    {
+        return $this->minStock !== null
+            && ! $this->isNegative()
+            && $this->quantity->compareTo($this->minStock) < 0;
+    }
+
+    /**
+     * @return array{quantity: string, value: string, average_cost: string, has_stock: bool, is_low: bool, is_below_minimum: bool, is_negative: bool, reorder_level: string|null, min_stock: string|null}
      */
     public function toArray(): array
     {
@@ -105,8 +137,10 @@ final class StockPosition
             'average_cost' => $this->averageCost()->amount(),
             'has_stock' => $this->hasStock(),
             'is_low' => $this->isLow(),
+            'is_below_minimum' => $this->isBelowMinimum(),
             'is_negative' => $this->isNegative(),
             'reorder_level' => $this->reorderLevel?->amount(),
+            'min_stock' => $this->minStock?->amount(),
         ];
     }
 }

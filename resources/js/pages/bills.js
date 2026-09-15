@@ -1,59 +1,96 @@
 import auth from '../auth-client';
-import { badge, formatQuantity, kindBadge, lifecycleTone } from '../components/badge';
+import { badge, lifecycleTone } from '../components/badge';
 import { mountPaymentRows } from '../components/payment-rows';
 import { can } from '../permissions';
 import { clearModuleParams, moduleParams } from '../shell';
 import {
-    $, $$, clearFormErrors, debounce, esc, formatDate, formatMoney,
-    hideModal, setSubmitting, showFormErrors, showModal, tableMessage, toast,
+    $, clearFormErrors, confirmAction, debounce, esc, formatDate, formatMoney,
+    setSubmitting, showFormErrors, showModal, tableMessage, toast,
 } from '../ui';
+import { mountWorkspace } from '../workspace';
 
 /**
- * The bills list — the brief's §23.
+ * Expenses — what it costs the workshop to be open.
  *
- * ## What changed in M20, and why
+ * ```
+ * card → EXPENSE FORM              ← always lands here (§2A.5)
+ *      → "Show list (18)"          → every expense ever recorded
+ *      → row → drawer (level 2)    → reverse → confirm (level 3)
+ * ```
  *
- * This file used to be the list *and* the form: a modal that preloaded two
- * hundred parties and two hundred items into `<select>`s before it could open,
- * with no search, no stock on the picker and no confirmation step. The form is
- * now `/bills/new` — a page, because a modal cannot host a search-first picker,
- * a running total and a keyboard flow without becoming a scroll trap (decision
- * D8) — and what is left here is a list that finally has something to list.
+ * ## What this file stopped doing
  *
- * The Total / Paid / Due / Status columns are the point. They were impossible
- * before M16: a receipt carried a `party_id` and nothing else, so the books
- * could say Rajesh Kumar owed ₹15,000 but not which of his three invoices it was
- * left on. Every one of those four figures is derived on read — nothing is
- * stored on the bill — so a reversed receipt or a corrected allocation moves the
- * status without anything having to remember to update it.
+ * It was the Bills list: sales, purchases, expenses and both kinds of note in
+ * one table, with a payment-status filter and the expense form behind a button.
+ * Every part of that list now has a better home — Sales lists invoices and
+ * credit notes, Purchase lists bills and debit notes, and Insights' Day Book
+ * lists every posted document, including the journals neither of those shows.
+ * Keeping a fourth copy here would be three screens answering one question, and
+ * the second one is always the one nobody opens (§5.1).
  *
- * The expense form stays, and stays separate. An expense is a different kind of
- * money — what it costs to be open rather than what was bought to sell — and
- * giving it a place on the bill counter would invite people to book the
- * electricity as a purchase, which is exactly the distinction a P&L needs kept.
+ * What was only ever here is **writing an expense**: `/transactions/expense` has
+ * exactly one caller in the front end and it is this file. So that is the whole
+ * module now, and the list behind "Show list" is expenses and nothing else.
+ *
+ * ## Why an expense is not a purchase, and why that is worth a card
+ *
+ * A purchase is bought to sell or to fit: it becomes inventory, and then cost of
+ * goods when it leaves. An expense is what it costs to be open. Keeping the two
+ * apart is the only reason a P&L can separate gross margin from overheads —
+ * which is the only reason either figure is worth having. With no way to enter
+ * one, the margin was reported against overheads of nil and the cash position
+ * drifted from the tin.
+ *
+ * ## The client reference is per document, not per attempt
+ *
+ * Minted when the form is cleared for the next entry and reused on every retry
+ * of the same expense — M17. Without it a request that timed out after the
+ * server had already posted would be re-sent by an operator who saw no
+ * confirmation, and the electricity bill would be in the books twice. The API
+ * has always accepted the field; this form never sent it.
  */
 
 const PAGE_SIZE = 25;
 
-/** The types this screen is about. A journal entry on a "Bills" page is a surprise. */
-const KINDS = ['sale', 'purchase', 'expense', 'sales_return', 'purchase_return'];
-
 const state = {
     search: '',
-    type: '',
+    account: '',
     status: '',
-    payment: '',
-    outstanding: false,
     from: '',
     to: '',
     page: 1,
-    hasMore: false,
+    total: null,
 
-    expenseAccounts: [],
-    paymentModes: [],
+    /** The workshop's own expense accounts, for the form and the filter. */
+    accounts: [],
+    modes: [],
+
+    /** This document's name for itself, until it is posted. */
+    clientRef: null,
 };
 
-let expensePayments = null;
+let root = null;
+let formRoot = null;
+let listRoot = null;
+let form = null;
+let payments = null;
+let workspace = null;
+
+/*
+| Each surface's own node, held from mount.
+|
+| §2A.2 keeps exactly one of the form and the list attached, so for half the
+| module's life the other is not a descendant of `document` at all and every
+| lookup into it comes back null. That is not a rare state — §2A.8 keeps the
+| clerk on the *form* after a post, which is precisely when the list wants
+| bringing up to date. Querying a node works whether or not it is in the
+| document; querying `document` for it does not.
+*/
+const inForm = (selector) => $(selector, formRoot);
+const inList = (selector) => $(selector, listRoot);
+
+/** The drawer, which lives outside both surfaces and is always attached. */
+const el = (selector) => $(selector, root);
 
 /* -------------------------------------------------------------------------
  | The list
@@ -64,18 +101,20 @@ function query() {
 
     if (state.search) params.set('search', state.search);
 
-    if (state.type) {
-        params.set('type', state.type);
-    } else {
-        // Asked for by name rather than filtered after the fact, so the page
-        // count agrees with the rows on it — the same reason the payment-status
-        // filter is a server-side one.
-        KINDS.forEach((kind) => params.append('types[]', kind));
-    }
+    /*
+    | Expenses and nothing else, asked for by name rather than filtered after
+    | the fact — so the page count agrees with the rows on it. There is
+    | deliberately no kind filter above the table: a list with one kind on it
+    | does not need a control for choosing which.
+    */
+    params.append('types[]', 'expense');
+
+    // "Everything that touched this account", which for an expense is the head
+    // it was booked to. See the note in the Blade for why this is a filter
+    // rather than a column.
+    if (state.account) params.set('account_id', state.account);
 
     if (state.status) params.set('status', state.status);
-    if (state.payment) params.set('payment_status', state.payment);
-    if (state.outstanding) params.set('outstanding', '1');
     if (state.from) params.set('from', state.from);
     if (state.to) params.set('to', state.to);
 
@@ -86,276 +125,520 @@ function query() {
 }
 
 async function load() {
-    $('#bills-body').innerHTML = tableMessage(8, 'Loading…');
+    inList('[data-expense-body]').innerHTML = tableMessage(6, 'Loading…');
 
     try {
         const payload = await auth.call(`/transactions?${query()}`);
 
         render(payload.data, payload.meta);
     } catch (error) {
-        $('#bills-body').innerHTML = error.code === 'NO_WORKSPACE'
-            ? tableMessage(8, 'Your account administers the platform rather than a single workshop, so it has no bills of its own.')
-            : tableMessage(8, error.message, 'error');
+        state.total = null;
+
+        inList('[data-expense-body]').innerHTML = error.code === 'NO_WORKSPACE'
+            ? tableMessage(6, 'Your account administers the platform rather than a single workshop, '
+                + 'so it has no expenses of its own.')
+            : tableMessage(6, error.message, 'error');
     }
 }
 
+/** Refetch from page one — what every filter change means. */
+const refetch = debounce(async () => {
+    state.page = 1;
+    await load();
+}, 250);
+
 function render(rows, meta) {
-    const body = $('#bills-body');
+    const body = inList('[data-expense-body]');
 
     body.innerHTML = rows.length
         ? rows.map(renderRow).join('')
-        : tableMessage(8, 'Nothing here yet. A sale, a purchase or an expense will appear the moment one is recorded.');
+        : tableMessage(6, 'Nothing here yet. Rent, electricity or a courier will appear the moment one '
+            + 'is recorded.');
 
     const pagination = meta?.pagination ?? {};
 
-    state.hasMore = Boolean(pagination.has_more);
+    state.total = pagination.total ?? null;
 
-    $('#bills-summary').textContent = pagination.total
+    inList('[data-expense-summary]').textContent = pagination.total
         ? `${rows.length} of ${pagination.total}.`
         : '';
 
-    $('#page-prev').disabled = (pagination.current_page ?? 1) <= 1;
-    $('#page-next').disabled = !state.hasMore;
+    inList('[data-page-prev]').disabled = (pagination.current_page ?? 1) <= 1;
+    inList('[data-page-next]').disabled = !pagination.has_more;
+
+    // §2A.4 — the count rides on the Show control, so the form says how much is
+    // behind it without anybody having to switch.
+    workspace?.refresh();
 }
 
 /**
- * One row.
+ * How the money left, from the split the listing already carries.
  *
- * `paid`, `due` and `payment_status` are absent for anything that is not a
- * posted bill — a draft, a reversed invoice, an expense. That is deliberate on
- * the server's side and honoured here: a dash says the question does not apply,
- * where a zero would say "nothing has been paid" and invite somebody to chase
- * it.
+ * Deduplicated by mode rather than listed row by row: "two thousand cash and the
+ * rest cash" is one answer to the question this column asks, and the amounts
+ * behind it are on the document.
  */
+function paidBy(row) {
+    const modes = [...new Set((row.payments ?? []).map((split) => split.mode_label).filter(Boolean))];
+
+    return modes.length ? modes.join(', ') : '—';
+}
+
 function renderRow(row) {
-    const settled = row.payment_status !== undefined;
+    // §2A.8 — an expense written while the list was detached carries the flash
+    // with it, so the eye finds it the first time somebody does look. The
+    // workspace spends the flag when the list reaches the screen, not here.
+    const flash = workspace?.isNew(row.id) ? ' row-new' : '';
+
+    // A document from before the numbering scheme has none and never will. A
+    // bare dash said it had no identity at all, while its own drawer had been
+    // calling it "#11" the whole time.
+    const docLabel = row.doc_no ?? `#${row.id}`;
 
     return `
-        <tr class="cursor-pointer border-t border-border transition hover:bg-secondary/60"
-            data-bill="${row.id}" tabindex="0" role="link"
-            aria-label="Open ${esc(row.doc_no ?? `bill ${row.id}`)}">
+        <tr class="cursor-pointer border-t border-border transition hover:bg-secondary/60${flash}"
+            data-expense="${row.id}" tabindex="0" role="link"
+            aria-label="Open ${esc(docLabel)}">
 
-            <td class="table-cell w-44">
-                <span class="block font-mono text-[0.8125rem] font-medium text-foreground">
-                    ${esc(row.doc_no ?? '—')}
+            <td class="table-cell w-40">
+                <span class="block font-mono text-[0.8125rem] font-medium ${
+                    row.doc_no ? 'text-foreground' : 'text-muted-foreground'
+                }">
+                    ${esc(docLabel)}
                 </span>
-                ${kindBadge(row.type, row.type_label)}
-            </td>
-
-            <td class="table-cell text-[0.8125rem]">
-                ${esc(row.party?.name ?? '—')}
-                ${row.notes ? `<span class="block text-xs text-muted-foreground">${esc(row.notes)}</span>` : ''}
+                ${row.reverses_id
+                    ? `<span class="text-xs text-muted-foreground">reverses #${esc(String(row.reverses_id))}</span>`
+                    : ''}
             </td>
 
             <td class="table-cell w-28 whitespace-nowrap text-[0.8125rem]">${esc(formatDate(row.date))}</td>
 
-            <td class="table-cell w-16 text-right font-mono text-[0.8125rem] text-muted-foreground">
-                ${row.line_count === null ? '—' : esc(String(row.line_count))}
+            <td class="table-cell text-[0.8125rem]">
+                ${row.notes
+                    ? esc(row.notes)
+                    : '<span class="text-muted-foreground">No note</span>'}
             </td>
+
+            <td class="table-cell w-32 text-[0.8125rem] text-muted-foreground">${esc(paidBy(row))}</td>
 
             <td class="table-cell w-32 text-right font-mono text-[0.8125rem] font-semibold">
                 ${esc(formatMoney(row.total))}
             </td>
 
-            <td class="table-cell w-28 text-right font-mono text-[0.8125rem]">
-                ${settled ? esc(formatMoney(row.paid)) : '<span class="text-muted-foreground">—</span>'}
-            </td>
-
-            <td class="table-cell w-28 text-right font-mono text-[0.8125rem] ${
-                settled && row.payment_status !== 'paid' ? 'font-semibold text-rose-700' : ''
-            }">
-                ${settled ? esc(formatMoney(row.due)) : '<span class="text-muted-foreground">—</span>'}
-            </td>
-
-            <td class="table-cell w-32">
-                ${settled
-                    ? badge(row.payment_status_label, row.payment_status_tone,
-                        { title: row.due_date ? `Due ${formatDate(row.due_date)}` : null })
-                    : badge(row.status_label, lifecycleTone(row.status))}
-            </td>
+            <td class="table-cell w-28">${badge(row.status_label, lifecycleTone(row.status))}</td>
         </tr>`;
 }
 
 /* -------------------------------------------------------------------------
- | Reading one bill
+ | One expense — level 2
+ |
+ | Read-only, plus the one act a posted document still permits. There is no
+ | edit: a posted transaction is immutable, and an expense has no `revise` path
+ | — that is for bills, whose replacement has to be re-priced and re-taxed
+ | against a shelf that has moved since.
  | ---------------------------------------------------------------------- */
 
-async function openBill(id) {
-    $('#bill-modal-title').textContent = `Bill #${id}`;
-    $('#bill-modal-subtitle').textContent = '';
-    $('#bill-modal-body').innerHTML = '<p class="px-5 py-6 text-sm text-muted-foreground">Loading…</p>';
+const drawer = {
+    id: null,
+    expense: null,
+};
 
-    showModal('#bill-modal');
+async function openDrawer(id) {
+    drawer.id = id;
+    drawer.expense = null;
 
+    $('#expense-drawer-title', root).textContent = 'Loading…';
+    el('[data-drawer-subtitle]').textContent = '';
+    el('[data-drawer-status]').innerHTML = '';
+    el('[data-drawer-actions]').innerHTML = '';
+    el('[data-drawer-body]').innerHTML =
+        '<p class="py-8 text-center text-sm text-muted-foreground">Loading…</p>';
+
+    showModal('#expense-drawer');
+
+    await loadDocument();
+}
+
+async function loadDocument() {
     try {
-        const { data, meta } = await auth.call(`/transactions/${id}`);
+        const { data } = await auth.call(`/transactions/${drawer.id}`);
 
-        $('#bill-modal-title').textContent = `${data.type_label} ${data.doc_no ?? `#${data.id}`}`;
-        $('#bill-modal-subtitle').textContent =
-            `${formatDate(data.date)}${data.party ? ` · ${data.party.name}` : ''}${data.notes ? ` · ${data.notes}` : ''}`;
+        drawer.expense = data;
 
-        $('#bill-modal-body').innerHTML = renderBill(data, meta ?? {});
+        paint();
     } catch (error) {
-        $('#bill-modal-body').innerHTML =
-            `<p class="px-5 py-6 text-sm text-rose-600">${esc(error.message)}</p>`;
+        el('[data-drawer-body]').innerHTML =
+            `<p class="py-8 text-center text-sm text-rose-600">${esc(error.message)}</p>`;
     }
 }
 
-/** What is owed on this one, at the top where somebody looking for it will find it. */
-function renderSettlement(bill) {
-    if (bill.payment_status === undefined) return '';
+function paint() {
+    const expense = drawer.expense;
 
-    return `
-        <div class="flex flex-wrap items-center gap-4 border-b border-border px-5 py-3 text-[0.8125rem]">
-            <span>${badge(bill.payment_status_label, bill.payment_status_tone)}</span>
-            <span class="text-muted-foreground">Paid <span class="font-mono text-foreground">${esc(formatMoney(bill.paid))}</span></span>
-            <span class="text-muted-foreground">Due <span class="font-mono text-foreground">${esc(formatMoney(bill.due))}</span></span>
-            ${bill.credited && bill.credited !== '0.00'
-                ? `<span class="text-muted-foreground">Credited <span class="font-mono text-foreground">${esc(formatMoney(bill.credited))}</span></span>`
-                : ''}
-            ${bill.due_date ? `<span class="text-muted-foreground">Due by ${esc(formatDate(bill.due_date))}</span>` : ''}
-        </div>`;
+    $('#expense-drawer-title', root).textContent = expense.doc_no ?? `Expense #${expense.id}`;
+
+    el('[data-drawer-subtitle]').textContent = [
+        formatDate(expense.date),
+        expense.notes,
+    ].filter(Boolean).join(' · ');
+
+    el('[data-drawer-status]').innerHTML = badge(expense.status_label, lifecycleTone(expense.status));
+
+    el('[data-drawer-body]').innerHTML = renderDocument(expense);
+
+    paintActions();
 }
 
-function renderBill(bill, meta) {
-    const warnings = (meta.warnings ?? []).map((warning) => `
-        <div class="surface mx-5 mt-4 border-amber-200 bg-amber-50/60 px-4 py-3 text-[0.8125rem] text-amber-900">
-            ${esc(warning.message)}
-        </div>`).join('');
-
-    if (!bill.items?.length) {
-        return renderSettlement(bill) + warnings + `
-            <div class="px-5 py-6 text-sm text-muted-foreground">
-                This document has no item lines — an expense is recorded as an amount and an account rather
-                than as a list of things.
-            </div>` + renderLedgerLines(bill);
-    }
-
-    const rows = bill.items.map((line) => `
+/**
+ * What the expense was, which for this document *is* its ledger entries.
+ *
+ * Shown outright rather than folded into a "what this did to the books"
+ * disclosure, as a bill's are. An expense has no item lines: the account it was
+ * booked to and the account the money came out of are the entire document, and
+ * hiding them behind a summary would leave the drawer with nothing in it.
+ */
+function renderDocument(expense) {
+    const lines = (expense.lines ?? []).map((line) => `
         <tr class="border-t border-border">
-            <td class="table-cell">
-                <span class="font-medium">${esc(line.description ?? '')}</span>
-                ${line.memo ? `<div class="text-[0.8125rem] text-muted-foreground">${esc(line.memo)}</div>` : ''}
+            <td class="px-2 py-2 text-[0.8125rem]">
+                ${esc(line.account?.name ?? `Account ${line.account_id}`)}
+                ${line.memo ? `<span class="block text-xs text-muted-foreground">${esc(line.memo)}</span>` : ''}
             </td>
-            <td class="table-cell w-24 text-right font-mono text-[0.8125rem]">
-                ${esc(formatQuantity(line.quantity, line.unit_symbol))}
+            <td class="px-2 py-2 text-right font-mono text-[0.8125rem]">
+                ${line.debit === '0.00' ? '' : esc(formatMoney(line.debit))}
             </td>
-            <td class="table-cell w-28 text-right font-mono text-[0.8125rem]">${esc(formatMoney(line.unit_price))}</td>
-            <td class="table-cell w-20 text-right font-mono text-[0.8125rem]">${esc(line.gst_rate)}%</td>
-            <td class="table-cell w-28 text-right font-mono text-[0.8125rem]">${esc(formatMoney(line.taxable_value))}</td>
-            <td class="table-cell w-28 text-right font-mono text-[0.8125rem]">${esc(formatMoney(line.tax_amount))}</td>
-            <td class="table-cell w-28 text-right font-mono text-[0.8125rem] font-semibold">${esc(formatMoney(line.line_total))}</td>
-            <td class="table-cell w-28 text-right font-mono text-[0.8125rem] ${line.below_cost ? 'font-semibold text-rose-700' : ''}">
-                ${line.margin === null ? '<span class="text-muted-foreground">—</span>' : esc(formatMoney(line.margin))}
+            <td class="px-2 py-2 text-right font-mono text-[0.8125rem]">
+                ${line.credit === '0.00' ? '' : esc(formatMoney(line.credit))}
             </td>
         </tr>`).join('');
 
-    const tax = meta.tax ?? {};
-    const margin = meta.margin ?? null;
-
-    return renderSettlement(bill) + warnings + `
-        <table class="w-full min-w-[720px] border-collapse">
-            <thead>
-                <tr class="border-b border-border bg-secondary/40 text-left text-xs uppercase tracking-wide
-                           text-muted-foreground">
-                    <th class="px-4 py-3 font-semibold">Item</th>
-                    <th class="px-4 py-3 text-right font-semibold">Qty</th>
-                    <th class="px-4 py-3 text-right font-semibold">Rate</th>
-                    <th class="px-4 py-3 text-right font-semibold">GST</th>
-                    <th class="px-4 py-3 text-right font-semibold">Taxable</th>
-                    <th class="px-4 py-3 text-right font-semibold">Tax</th>
-                    <th class="px-4 py-3 text-right font-semibold">Total</th>
-                    <th class="px-4 py-3 text-right font-semibold">Margin</th>
-                </tr>
-            </thead>
-            <tbody>${rows}</tbody>
-        </table>
-
-        <div class="grid gap-4 border-t border-border px-5 py-4 sm:grid-cols-2">
-            <dl class="space-y-1 text-[0.8125rem]">
-                <div class="flex justify-between"><dt class="text-muted-foreground">Taxable value</dt>
-                    <dd class="font-mono">${esc(formatMoney(tax.taxable ?? '0.00'))}</dd></div>
-                ${tax.inter_state
-                    ? `<div class="flex justify-between"><dt class="text-muted-foreground">IGST</dt>
-                           <dd class="font-mono">${esc(formatMoney(tax.igst ?? '0.00'))}</dd></div>`
-                    : `<div class="flex justify-between"><dt class="text-muted-foreground">CGST</dt>
-                           <dd class="font-mono">${esc(formatMoney(tax.cgst ?? '0.00'))}</dd></div>
-                       <div class="flex justify-between"><dt class="text-muted-foreground">SGST</dt>
-                           <dd class="font-mono">${esc(formatMoney(tax.sgst ?? '0.00'))}</dd></div>`}
-                <div class="flex justify-between border-t border-border pt-1 font-semibold">
-                    <dt>Total</dt><dd class="font-mono">${esc(formatMoney(bill.total))}</dd></div>
-            </dl>
-
-            ${margin ? `
-                <dl class="space-y-1 text-[0.8125rem]">
-                    <div class="flex justify-between"><dt class="text-muted-foreground">Revenue</dt>
-                        <dd class="font-mono">${esc(formatMoney(margin.revenue))}</dd></div>
-                    <div class="flex justify-between"><dt class="text-muted-foreground">Cost of goods</dt>
-                        <dd class="font-mono">${esc(formatMoney(margin.cost))}</dd></div>
-                    <div class="flex justify-between border-t border-border pt-1 font-semibold">
-                        <dt>Margin</dt>
-                        <dd class="font-mono">${esc(formatMoney(margin.margin))} (${esc(margin.margin_percent)}%)</dd></div>
-                </dl>` : ''}
-        </div>
-
-        ${renderLedgerLines(bill)}`;
-}
-
-function renderLedgerLines(bill) {
-    if (!bill.lines?.length) return '';
+    // A reference is the whole point of recording a cheque or a transfer, so it
+    // is shown where it can be read back against a bank statement.
+    const references = (expense.payments ?? [])
+        .filter((split) => split.reference)
+        .map((split) => `${split.mode_label}: ${split.reference}`)
+        .join(' · ');
 
     return `
-        <details class="border-t border-border px-5 py-4">
-            <summary class="cursor-pointer text-[0.8125rem] font-medium text-muted-foreground">
-                What this did to the books — ${bill.lines.length} ledger lines
-            </summary>
-            <table class="mt-3 w-full border-collapse text-[0.8125rem]">
-                ${bill.lines.map((line) => `
-                    <tr class="border-t border-border">
-                        <td class="px-2 py-1.5">${esc(line.account?.name ?? `Account ${line.account_id}`)}</td>
-                        <td class="px-2 py-1.5 text-muted-foreground">${esc(line.memo ?? '')}</td>
-                        <td class="px-2 py-1.5 text-right font-mono">${line.debit === '0.00' ? '' : esc(formatMoney(line.debit))}</td>
-                        <td class="px-2 py-1.5 text-right font-mono">${line.credit === '0.00' ? '' : esc(formatMoney(line.credit))}</td>
-                    </tr>`).join('')}
-            </table>
-        </details>`;
+        <div class="mb-4 flex items-baseline justify-between gap-4">
+            <span class="text-[0.8125rem] text-muted-foreground">Total</span>
+            <span class="font-mono text-lg font-bold text-foreground">${esc(formatMoney(expense.total))}</span>
+        </div>
+
+        ${lines ? `
+            <table class="w-full border-collapse">
+                <thead>
+                    <tr class="border-b border-border text-left text-xs uppercase tracking-wide
+                               text-muted-foreground">
+                        <th class="px-2 py-2 font-semibold">Account</th>
+                        <th class="px-2 py-2 text-right font-semibold">Debit</th>
+                        <th class="px-2 py-2 text-right font-semibold">Credit</th>
+                    </tr>
+                </thead>
+                <tbody>${lines}</tbody>
+            </table>` : ''}
+
+        ${references
+            ? `<p class="mt-4 text-[0.8125rem] text-muted-foreground">${esc(references)}</p>`
+            : ''}
+
+        ${renderLink(expense)}
+
+        <p class="mt-4 text-xs text-muted-foreground">
+            Recorded${expense.created_by ? ` by ${esc(expense.created_by)}` : ''}${
+                expense.posted_at ? ` on ${esc(formatDate(expense.posted_at.slice(0, 10)))}` : ''
+            }.
+        </p>`;
+}
+
+/** Which way a reversal points. Neither end is derivable from the other. */
+function renderLink(expense) {
+    if (expense.reverses_id) {
+        return `
+            <p class="mt-4 rounded-[10px] border border-border bg-muted/40 px-3 py-2 text-[0.8125rem]
+                      text-muted-foreground">
+                This is the reversing entry for #${esc(String(expense.reverses_id))}.
+            </p>`;
+    }
+
+    if (expense.reversal_id) {
+        return `
+            <p class="mt-4 rounded-[10px] border border-amber-200 bg-amber-50 px-3 py-2 text-[0.8125rem]
+                      text-amber-900">
+                Reversed by #${esc(String(expense.reversal_id))}. Both documents stay on the record.
+            </p>`;
+    }
+
+    return '';
+}
+
+function paintActions() {
+    const expense = drawer.expense;
+    const buttons = [];
+
+    /*
+    | Only what this document can still have done to it. Offering an act that
+    | would be refused teaches somebody the product is unreliable — and a
+    | reversed expense is refused by the engine, not merely discouraged here.
+    */
+    if (expense.status === 'posted' && can('WRITE', 'TRANSACTIONS')) {
+        buttons.push('<button type="button" class="btn btn-ghost btn-sm" data-drawer-reverse>Reverse</button>');
+    }
+
+    el('[data-drawer-actions]').innerHTML = buttons.join('')
+        + '<button type="button" class="btn btn-secondary btn-sm ml-auto" data-modal-close>Close</button>';
+}
+
+async function reverseExpense() {
+    const expense = drawer.expense;
+
+    const ok = await confirmAction({
+        title: `Reverse ${expense.doc_no ?? `#${expense.id}`}?`,
+        body: 'A mirroring entry is posted: the cost comes back out of the expense account and the money '
+            + 'goes back into whatever it was paid from. Both documents stay on the record — nothing is '
+            + 'erased, which is what makes the correction auditable.',
+        confirmLabel: 'Reverse it',
+    });
+
+    if (!ok) return;
+
+    try {
+        const response = await auth.call(`/transactions/${expense.id}/reverse`, { method: 'POST' });
+
+        toast(response.message ?? 'Reversing entry posted.');
+
+        await loadDocument();
+
+        // Only where a list is actually held (§2A.7). Reversing from the drawer
+        // means the list is on screen, but the guard costs nothing and keeps
+        // this honest if that ever stops being true.
+        if (workspace?.hasList()) await load();
+    } catch (error) {
+        toast(error.message, 'error');
+    }
 }
 
 /* -------------------------------------------------------------------------
  | Writing an expense
  | ---------------------------------------------------------------------- */
 
-async function loadExpenseReference() {
+/**
+ * The expense accounts and the payment modes.
+ *
+ * Narrowed server-side rather than fetched whole and filtered here: the chart
+ * holds every account the workshop has, and this form is only ever about the
+ * expense ones (§7.2).
+ *
+ * Settled rather than awaited together, because neither is fatal. A caller
+ * without `READ:ACCOUNTS` still gets a working form that books to Misc Expense,
+ * which is the template's own default and a real answer rather than a fallback.
+ */
+async function loadReference() {
     const [accounts, meta] = await Promise.allSettled([
-        auth.call('/accounts?per_page=200'),
+        auth.call('/accounts?type=expense&is_active=1&sort=code&per_page=200'),
         auth.call('/transactions/meta'),
     ]);
 
-    state.expenseAccounts = accounts.status === 'fulfilled'
-        ? accounts.value.data.filter((account) => account.type === 'expense' && account.is_active)
-        : [];
+    state.accounts = accounts.status === 'fulfilled' ? accounts.value.data : [];
+    state.modes = meta.status === 'fulfilled' ? meta.value.data.payment_modes : [];
 
-    state.paymentModes = meta.status === 'fulfilled' ? meta.value.data.payment_modes : [];
+    const options = state.accounts
+        .map((account) => `<option value="${account.id}">${esc(account.code)} · ${esc(account.name)}</option>`)
+        .join('');
+
+    inForm('#expense-account').innerHTML = `<option value="">Misc Expense</option>${options}`;
+    inList('[data-filter-account]').innerHTML = `<option value="">Every expense account</option>${options}`;
 }
 
-function openExpenseForm() {
-    const form = $('#expense-form');
+/** The date, the account and the split — everything the next entry needs blank. */
+function resetForm() {
+    clearFormErrors(form);
+
+    form.elements.account_id.value = '';
+    form.elements.amount.value = '';
+    form.elements.gst_amount.value = '';
+    form.elements.notes.value = '';
+    payments.reset();
+
+    /*
+    | The date is deliberately *not* cleared. Somebody working through a stack of
+    | receipts is entering several from one day, and a form that reset it would
+    | make them retype the same date every time — the same judgement the bill
+    | document already makes about its own date field.
+    */
+
+    // A fresh document deserves a fresh reference, or the posted expense's
+    // idempotency key would follow the next one in and the server would answer
+    // with the first document instead of writing the second.
+    state.clientRef = crypto.randomUUID();
+}
+
+/**
+ * What the browser can answer without asking the server.
+ *
+ * Shape only, and never the whole of it (§6.1): that the account is an expense
+ * account, that the split equals the receipt, and that the date is inside the
+ * open books are all decided server-side, where they cannot be skipped.
+ */
+function validate() {
+    const errors = {};
+    const amount = form.elements.amount.value.trim();
+    const gst = form.elements.gst_amount.value.trim();
+
+    if (!form.elements.date.value) {
+        errors.date = ['Give the date on the receipt.'];
+    }
+
+    if (!amount || !(Number(amount) > 0)) {
+        errors.amount = ['An expense needs an amount greater than zero.'];
+    }
+
+    if (gst && !(Number(gst) >= 0)) {
+        errors.gst_amount = ['Claimable GST is an amount, or empty where none is claimable.'];
+    }
+
+    return Object.keys(errors).length ? errors : null;
+}
+
+async function submit(event) {
+    event.preventDefault();
 
     clearFormErrors(form);
-    form.reset();
+
+    const errors = validate();
+
+    if (errors) {
+        showFormErrors(form, { fields: errors, message: 'Check the highlighted fields.' });
+
+        return;
+    }
+
+    setSubmitting(form, true, 'Recording…');
+
+    try {
+        const response = await auth.call('/transactions/expense', {
+            method: 'POST',
+            body: {
+                date: form.elements.date.value,
+                notes: form.elements.notes.value.trim() || null,
+                post: true,
+                client_ref: state.clientRef,
+                account_id: Number(form.elements.account_id.value) || null,
+                amount: form.elements.amount.value.trim(),
+                gst_amount: form.elements.gst_amount.value.trim() || null,
+                payments: payments.value(),
+            },
+        });
+
+        toast(response.message ?? 'Expense recorded.');
+
+        /*
+        | §2A.8 — a successful entry stays on the form, clears it for the next
+        | one and returns focus to the first field that needs a new answer. A
+        | clerk works through the morning's receipts several at a time, and being
+        | thrown to a list after each would mean several trips back.
+        */
+        if (response.data?.id) workspace?.flagNew(response.data.id);
+
+        resetForm();
+        form.elements.account_id.focus();
+
+        // Only where a list is actually held. §2A.7 is that it is fetched on the
+        // first Show and not before, so somebody who only ever writes expenses
+        // must not be made to pay for one by posting.
+        if (workspace?.hasList()) refetch();
+    } catch (error) {
+        showFormErrors(form, error);
+    } finally {
+        setSubmitting(form, false, 'Record the expense');
+    }
+}
+
+/* -------------------------------------------------------------------------
+ | Wiring
+ | ---------------------------------------------------------------------- */
+
+function bindFilters() {
+    inList('[data-filter-search]').addEventListener('input', (event) => {
+        state.search = event.target.value.trim();
+        refetch();
+    });
+
+    ['account', 'status', 'from', 'to'].forEach((field) => {
+        inList(`[data-filter-${field}]`).addEventListener('change', (event) => {
+            state[field] = event.target.value;
+            refetch();
+        });
+    });
+
+    inList('[data-clear-filters]').addEventListener('click', () => {
+        Object.assign(state, { search: '', account: '', status: '', from: '', to: '', page: 1 });
+
+        inList('[data-filter-search]').value = '';
+        ['account', 'status', 'from', 'to'].forEach((hook) => {
+            inList(`[data-filter-${hook}]`).value = '';
+        });
+
+        load();
+    });
+
+    const open = (event) => {
+        const row = event.target.closest('[data-expense]');
+
+        if (row) openDrawer(row.dataset.expense);
+    };
+
+    inList('[data-expense-body]').addEventListener('click', open);
+    inList('[data-expense-body]').addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') open(event);
+    });
+
+    inList('[data-page-prev]').addEventListener('click', () => {
+        if (state.page > 1) {
+            state.page -= 1;
+            load();
+        }
+    });
+
+    inList('[data-page-next]').addEventListener('click', () => {
+        if (!inList('[data-page-next]').disabled) {
+            state.page += 1;
+            load();
+        }
+    });
+}
+
+/* -------------------------------------------------------------------------
+ | Boot
+ | ---------------------------------------------------------------------- */
+
+export default async function initBills() {
+    root = $('[data-ws-form]').closest('[data-module-root]');
+
+    // Before `mountWorkspace`, which is what takes both surfaces out of the
+    // document. After it, these lookups would find nothing.
+    formRoot = $('[data-ws-form]', root);
+    listRoot = $('[data-ws-list]', root);
+
+    form = $('#expense-form', formRoot);
+
     form.elements.date.value = new Date().toISOString().slice(0, 10);
+    state.clientRef = crypto.randomUUID();
 
-    form.elements.account_id.innerHTML = `<option value="">Misc Expense</option>${
-        state.expenseAccounts
-            .map((account) => `<option value="${account.id}">${esc(account.code)} · ${esc(account.name)}</option>`)
-            .join('')
-    }`;
+    // Before the payment rows, which take the modes by value at mount: chips
+    // built from an empty list stay empty, however often they are repainted.
+    await loadReference();
 
-    // The same payment rows the counter uses. An expense *is* its split — take
-    // the money away and there is no event left — so the section is headed for
-    // what it is rather than for what it might be.
-    expensePayments = mountPaymentRows($('#expense-payments-host'), {
-        modes: state.paymentModes,
+    /*
+    | Mounted once and reset between entries, rather than rebuilt per open as
+    | the modal it replaced did. The rows are part of the form now, so they
+    | survive the trip to the list and back with everything else on it (§2A.6).
+    |
+    | "On credit" is not offered, which is the component's default: an expense
+    | *is* its split — take the money away and there is no event left.
+    */
+    payments = mountPaymentRows(inForm('[data-expense-payments]'), {
+        modes: state.modes,
         outstanding: () => {
             const amount = Number(form.elements.amount.value) || 0;
             const gst = Number(form.elements.gst_amount.value) || 0;
@@ -365,155 +648,61 @@ function openExpenseForm() {
         heading: 'Paid by',
     });
 
-    showModal('#expense-modal');
+    form.addEventListener('submit', submit);
+
+    bindFilters();
+
+    el('[data-drawer-actions]').addEventListener('click', (event) => {
+        if (event.target.closest('[data-drawer-reverse]')) reverseExpense();
+    });
+
+    workspace = mountWorkspace(root, {
+        key: 'bills',
+        title: 'Expenses',
+        formSubtitle: 'What it costs the workshop to be open — rent, power, a courier, the tea.',
+        listSubtitle: (count) => (count === null
+            ? 'Every expense recorded, newest first.'
+            : `${count} expense${count === 1 ? '' : 's'}, newest first.`),
+        createLabel: 'Record an expense',
+        count: () => state.total,
+        canCreate: can('WRITE', 'TRANSACTIONS'),
+        onShowList: load,
+
+        /*
+        | The rows are a copy of what has been posted, and an expense is not the
+        | only thing that can post one: a reversal raised from this drawer, an
+        | import, or anything else the engine writes under `/transactions`. See
+        | `data-bus.js` — the announcement is made there so a new write site
+        | cannot forget to make it.
+        */
+        refreshOn: ['transactions'],
+
+        // §2A.8 — back on the form, the account is where the next entry starts.
+        // The date is kept from the last one; see `resetForm`.
+        onShowForm: () => form.elements.account_id.focus(),
+    });
+
+    applyDeepLink(moduleParams());
+
+    // Reopening an already-mounted module cannot run this function again, so a
+    // second deep link is announced on the root instead.
+    root.addEventListener('module:params', (event) => applyDeepLink(event.detail));
 }
 
-async function submitExpense(event) {
-    event.preventDefault();
+/**
+ * `#bills?doc=88` — an expense picked out of the topbar's search.
+ *
+ * The drawer fetches the document by id, so the module is left on whichever
+ * surface it landed on and the expense opens over it; nothing loads a list in
+ * order to show one row (§7.2). Spent once acted on, or a refresh or a Back
+ * would reopen a drawer somebody has just closed.
+ */
+function applyDeepLink(params) {
+    const document_ = params.get('doc');
 
-    const form = event.target;
+    if (!document_) return;
 
-    clearFormErrors(form);
-    setSubmitting(form, true, 'Recording…');
+    openDrawer(document_);
 
-    try {
-        await auth.call('/transactions/expense', {
-            method: 'POST',
-            body: {
-                date: form.elements.date.value,
-                notes: form.elements.notes.value.trim() || null,
-                post: true,
-                account_id: Number(form.elements.account_id.value) || null,
-                amount: form.elements.amount.value.trim(),
-                gst_amount: form.elements.gst_amount.value.trim() || null,
-                payments: expensePayments?.value() ?? [],
-            },
-        });
-
-        hideModal('#expense-modal');
-        toast('Expense recorded.');
-
-        await load();
-    } catch (error) {
-        showFormErrors(form, error);
-    } finally {
-        setSubmitting(form, false, 'Record the expense');
-    }
-}
-
-/* -------------------------------------------------------------------------
- | Boot
- | ---------------------------------------------------------------------- */
-
-export default async function initBills() {
-    await loadExpenseReference();
-    await load();
-
-    const reload = () => {
-        state.page = 1;
-        load();
-    };
-
-    $('#filter-search').addEventListener('input', debounce((event) => {
-        state.search = event.target.value.trim();
-        reload();
-    }, 300));
-
-    ['type', 'status', 'from', 'to'].forEach((field) => {
-        $(`#filter-${field}`).addEventListener('change', (event) => {
-            state[field] = event.target.value;
-            reload();
-        });
-    });
-
-    $('#filter-payment').addEventListener('change', (event) => {
-        state.payment = event.target.value;
-        reload();
-    });
-
-    $('#filter-outstanding').addEventListener('click', (event) => {
-        state.outstanding = !state.outstanding;
-        event.currentTarget.setAttribute('aria-pressed', String(state.outstanding));
-        reload();
-    });
-
-    $('#clear-filters').addEventListener('click', () => {
-        Object.assign(state, {
-            search: '', type: '', status: '', payment: '', outstanding: false, from: '', to: '', page: 1,
-        });
-
-        $('#filter-search').value = '';
-        ['type', 'status', 'payment', 'from', 'to'].forEach((field) => { $(`#filter-${field}`).value = ''; });
-        $('#filter-outstanding').setAttribute('aria-pressed', 'false');
-
-        load();
-    });
-
-    const open = (event) => {
-        const row = event.target.closest('[data-bill]');
-
-        if (row) openBill(row.dataset.bill);
-    };
-
-    $('#bills-body').addEventListener('click', open);
-    $('#bills-body').addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') open(event);
-    });
-
-    $('#page-prev').addEventListener('click', () => {
-        if (state.page > 1) {
-            state.page -= 1;
-            load();
-        }
-    });
-
-    $('#page-next').addEventListener('click', () => {
-        if (state.hasMore) {
-            state.page += 1;
-            load();
-        }
-    });
-
-    $('[data-new-expense]').addEventListener('click', openExpenseForm);
-    $('#expense-form').addEventListener('submit', submitExpense);
-
-    /*
-    | `#bills?new=expense` and `#bills?payment=overdue` — the dashboard's tiles
-    | and its attention list. Deep links rather than screens of their own, so
-    | there is exactly one place an expense is written.
-    |
-    | The intent comes from the shell rather than from `location.search`: a
-    | module's URL is a fragment of the dashboard's now. It is cleared once acted
-    | on, so a refresh or a Back does not reopen a form somebody just closed.
-    */
-    const applyIntent = async (params) => {
-        if (params.get('payment')) {
-            state.payment = params.get('payment');
-            $('#filter-payment').value = state.payment;
-            await load();
-        }
-
-        if (params.get('outstanding') === '1') {
-            state.outstanding = true;
-            $('#filter-outstanding').setAttribute('aria-pressed', 'true');
-            await load();
-        }
-
-        if (params.get('type')) {
-            state.type = params.get('type');
-            $('#filter-type').value = state.type;
-            await load();
-        }
-
-        if (params.get('new') === 'expense' && can('WRITE', 'TRANSACTIONS')) openExpenseForm();
-
-        clearModuleParams();
-    };
-
-    // Reopening an already-mounted module cannot run this function again, so the
-    // shell announces a fresh intent instead.
-    $('#bills-body').closest('[data-module-root]')
-        ?.addEventListener('module:params', (event) => applyIntent(event.detail));
-
-    await applyIntent(moduleParams());
+    clearModuleParams();
 }

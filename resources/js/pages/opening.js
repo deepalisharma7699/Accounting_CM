@@ -1,8 +1,11 @@
 import auth from '../auth-client';
+import { onChange } from '../data-bus';
+import { can } from '../permissions';
 import {
-    $, confirmAction, esc, formatDate, formatMoney, setSubmitting, showFormErrors,
-    clearFormErrors, tableMessage, toast,
+    $, clearFormErrors, confirmAction, esc, formatDate, formatMoney, setSubmitting,
+    showActionError, showFormErrors, showFormMessage, tableMessage, toast,
 } from '../ui';
+import { mountWorkspace } from '../workspace';
 
 /**
  * Getting a running workshop's existing position into the books — M11.
@@ -12,6 +15,28 @@ import {
  * buttons, and the second one stays disabled until the first has run against
  * the text currently in the box — so an edit made after a preview cannot be
  * committed on the strength of the preview it invalidated.
+ *
+ * ## The §2A flow
+ *
+ * The module opens on the declaration (§2A.1) and every import ever run sits
+ * behind one switch control beside the heading. The *position* travels with the
+ * form rather than with the list: it is what somebody about to declare their
+ * whole financial history needs in front of them, and it is what they want to
+ * see the instant they commit.
+ *
+ * ## One call, two surfaces
+ *
+ * `GET /opening-balances` answers with the position *and* the receipts, so the
+ * list costs nothing beyond the call the form already makes — §2A.7's rule that
+ * a module never used to write should not pay for a list is satisfied by there
+ * being no second request, rather than by deferring one.
+ *
+ * ## Everything is scoped to its surface
+ *
+ * §2A.2 keeps exactly one of the form and the list attached, so
+ * `document.querySelector` finds nothing in the other — which is precisely when
+ * a post wants to bring the receipts up to date. Both roots are held at mount
+ * and every lookup goes through them; querying a node works detached.
  */
 
 const state = {
@@ -20,22 +45,66 @@ const state = {
     /** The exact text that preview was run against. */
     checkedCsv: '',
     meta: null,
+    /** The receipts, as last fetched. Null until the first call comes back. */
+    history: null,
 };
+
+/**
+ * Is what we hold current?
+ *
+ * The position is a copy of the books and the go-live date is a copy of a
+ * setting on another screen, so both go behind the moment anything is posted or
+ * the workshop's settings are saved (§3.7). False only *marks* — nothing is
+ * fetched until the module is next actually looked at (§7.2).
+ */
+let held = false;
+
+let workspace = null;
+let formRoot = null;
+let listRoot = null;
+let openingForm = null;
+
+/** Scoped lookups — the surface each node belongs to, never the document. */
+const inForm = (selector) => $(selector, formRoot);
+const inList = (selector) => $(selector, listRoot);
 
 /* -------------------------------------------------------------------------
  | Position
  | ---------------------------------------------------------------------- */
 
-async function loadPosition() {
+/** The call in flight, so two callers asking at once make one request. */
+let loading = null;
+
+/**
+ * The workshop's position and its receipts, in one call.
+ *
+ * Both surfaces are painted whether or not either is on screen: a held node
+ * takes a repaint perfectly well detached, which is what keeps the receipts
+ * current for the next Show without a second request.
+ *
+ * Shared rather than re-entrant, because three things ask for it — boot, the
+ * first Show and coming back after a write — and two of them can land in the
+ * same tick.
+ */
+function load() {
+    loading ||= fetchPosition().finally(() => { loading = null; });
+
+    return loading;
+}
+
+async function fetchPosition() {
     try {
         const { data, meta } = await auth.call('/opening-balances');
 
+        held = true;
+        state.history = meta?.history ?? [];
+
         renderPosition(data);
-        renderHistory(meta?.history ?? []);
+        renderHistory(state.history);
 
         return data;
     } catch (error) {
-        $('#history-rows').innerHTML = error.code === 'NO_WORKSPACE'
+        inList('#history-rows').innerHTML = error.code === 'NO_WORKSPACE'
             ? tableMessage(6, 'Your account administers the platform rather than a single workshop, so it has no books to open.')
             : tableMessage(6, error.message, 'error');
 
@@ -44,14 +113,14 @@ async function loadPosition() {
 }
 
 function renderPosition(position) {
-    $('#stat-stake').textContent = formatMoney(position.owners_stake, { sign: true });
-    $('#stat-posted').textContent = position.opening_transactions;
+    inForm('#stat-stake').textContent = formatMoney(position.owners_stake, { sign: true });
+    inForm('#stat-posted').textContent = position.opening_transactions;
 
-    $('#stat-books-start').textContent = position.books_start_date
+    inForm('#stat-books-start').textContent = position.books_start_date
         ? formatDate(position.books_start_date)
         : 'Not set';
 
-    const date = $('#opening-date');
+    const date = inForm('#opening-date');
     if (!date.value) date.value = position.default_date ?? '';
 
     renderReconciliation(position.trial_balance, position.has_opening_balances);
@@ -66,7 +135,7 @@ function renderPosition(position) {
  * the books rather than breaking them.
  */
 function renderReconciliation(trial, hasOpening) {
-    const host = $('#reconciliation');
+    const host = inForm('#reconciliation');
 
     host.classList.remove('hidden');
 
@@ -84,16 +153,19 @@ function renderReconciliation(trial, hasOpening) {
 }
 
 function renderHistory(imports) {
-    const body = $('#history-rows');
+    const body = inList('#history-rows');
 
     if (!imports.length) {
         body.innerHTML = tableMessage(6, 'No opening balances have been imported yet.');
+    } else {
+        body.innerHTML = imports.map((row) => {
+            // §2A.8 — the import just posted is flagged rather than flashed, so
+            // the highlight happens whenever the receipts are next looked at
+            // and not at a moment nobody was watching.
+            const flash = workspace?.isNew(row.id) ? ' row-new' : '';
 
-        return;
-    }
-
-    body.innerHTML = imports.map((row) => `
-        <tr class="border-t border-border">
+            return `
+        <tr class="border-t border-border${flash}">
             <td class="table-cell w-40 whitespace-nowrap text-[0.8125rem]">${esc(formatDate(row.created_at ?? row.date))}</td>
             <td class="table-cell">
                 <span class="font-medium">${esc(row.filename || 'Typed in')}</span>
@@ -109,7 +181,13 @@ function renderHistory(imports) {
             </td>
             <td class="table-cell w-40 text-right font-mono text-[0.8125rem]">${esc(formatMoney(row.declared_total))}</td>
             <td class="table-cell w-40 text-[0.8125rem] text-muted-foreground">${esc(row.created_by ?? '—')}</td>
-        </tr>`).join('');
+        </tr>`;
+        }).join('');
+    }
+
+    // The count rides on the Show control (§2A.4), so the form says how much is
+    // behind it without anybody having to switch to find out.
+    workspace?.refresh();
 }
 
 /* -------------------------------------------------------------------------
@@ -126,7 +204,7 @@ async function loadMeta() {
 
         state.meta = data;
 
-        $('#column-guide').innerHTML = `
+        inForm('#column-guide').innerHTML = `
             <p class="font-medium text-foreground">Each row says what it declares.</p>
             <ul class="mt-1.5 space-y-1 text-muted-foreground">
                 ${data.kinds.map((kind) => `
@@ -148,7 +226,7 @@ async function loadMeta() {
     } catch {
         // The guide is help text. Its absence must not stop somebody who
         // already knows the format from using the screen.
-        $('#column-guide').innerHTML = '';
+        inForm('#column-guide').innerHTML = '';
     }
 }
 
@@ -158,29 +236,27 @@ async function loadMeta() {
 
 function payload() {
     return {
-        csv: $('#opening-csv').value,
-        date: $('#opening-date').value || null,
-        filename: $('#opening-filename').value || null,
+        csv: inForm('#opening-csv').value,
+        date: inForm('#opening-date').value || null,
+        filename: inForm('#opening-filename').value || null,
     };
 }
 
 async function preview(event) {
     event.preventDefault();
 
-    const form = $('#opening-form');
-
-    clearFormErrors(form);
+    clearFormErrors(openingForm);
     invalidate();
 
     const body = payload();
 
     if (!body.csv.trim()) {
-        toast('Paste the rows you want to declare first.', 'error');
+        showFormMessage(openingForm, 'Paste the rows you want to declare first.');
 
         return;
     }
 
-    setSubmitting(form, true, 'Checking…');
+    setSubmitting(openingForm, true, 'Checking…');
 
     try {
         const { data, meta } = await auth.call('/opening-balances/preview', {
@@ -193,23 +269,23 @@ async function preview(event) {
 
         renderPreview(data, meta.summary);
     } catch (error) {
-        showFormErrors(form, error);
-        $('#preview-panel').classList.add('hidden');
+        showFormErrors(openingForm, error);
+        inForm('#preview-panel').classList.add('hidden');
     } finally {
-        setSubmitting(form, false);
+        setSubmitting(openingForm, false);
     }
 }
 
 function renderPreview(rows, summary) {
-    $('#preview-panel').classList.remove('hidden');
+    inForm('#preview-panel').classList.remove('hidden');
 
-    $('#preview-summary').textContent = [
+    inForm('#preview-summary').textContent = [
         `${summary.ready} to post`,
         summary.skipped ? `${summary.skipped} already declared` : null,
         summary.errors ? `${summary.errors} needing attention` : null,
     ].filter(Boolean).join(' · ');
 
-    $('#preview-totals').innerHTML = [
+    inForm('#preview-totals').innerHTML = [
         ['Stock', summary.stock_value],
         ['Customers owe', summary.receivable_total],
         ['Owed to suppliers', summary.payable_total],
@@ -223,7 +299,7 @@ function renderPreview(rows, summary) {
             </span>
         </div>`).join('');
 
-    $('#preview-rows').innerHTML = rows.map((row) => `
+    inForm('#preview-rows').innerHTML = rows.map((row) => `
         <tr class="border-t border-border ${row.outcome === 'error' ? 'bg-rose-50/50' : ''}">
             <td class="table-cell w-16 font-mono text-[0.8125rem] text-muted-foreground">${row.line_no}</td>
             <td class="table-cell w-36 text-[0.8125rem]">${esc(row.kind_label)}</td>
@@ -246,7 +322,7 @@ function renderPreview(rows, summary) {
             <td class="table-cell w-64 text-[0.8125rem]">${outcome(row)}</td>
         </tr>`).join('');
 
-    const post = $('#import-opening');
+    const post = inForm('#import-opening');
 
     // Enabled only when there is something to post and nothing to fix. A
     // half-imported opening balance is harder to unpick than none, so the
@@ -285,8 +361,8 @@ function outcome(row) {
 function invalidate() {
     state.checked = null;
     state.checkedCsv = '';
-    $('#import-opening').disabled = true;
-    $('#preview-panel').classList.add('hidden');
+    inForm('#import-opening').disabled = true;
+    inForm('#preview-panel').classList.add('hidden');
 }
 
 /* -------------------------------------------------------------------------
@@ -294,8 +370,8 @@ function invalidate() {
  | ---------------------------------------------------------------------- */
 
 async function commit() {
-    if (!state.checked || $('#opening-csv').value !== state.checkedCsv) {
-        toast('Check the rows again — they have changed since the last look.', 'error');
+    if (!state.checked || inForm('#opening-csv').value !== state.checkedCsv) {
+        showActionError(inForm('#import-opening'), 'Check the rows again — they have changed since the last look.');
         invalidate();
 
         return;
@@ -315,7 +391,7 @@ async function commit() {
 
     if (!confirmed) return;
 
-    const button = $('#import-opening');
+    const button = inForm('#import-opening');
 
     button.disabled = true;
 
@@ -324,10 +400,18 @@ async function commit() {
 
         toast(response.message ?? 'Opening balances posted.');
 
-        $('#opening-csv').value = '';
+        /*
+        | §2A.8 — the declaration stays on the form with the box cleared, and the
+        | receipt just written is flagged so it is highlighted the next time the
+        | receipts are looked at. There is no focus to return: the next thing
+        | anybody does here is paste another file, not type a field.
+        */
+        if (response.data?.id) workspace?.flagNew(response.data.id);
+
+        inForm('#opening-csv').value = '';
         invalidate();
 
-        await loadPosition();
+        await load();
     } catch (error) {
         toast(error.message, 'error');
         button.disabled = false;
@@ -347,15 +431,65 @@ payable,Kohli Traders,,,,,32000.00,
 balance,,,,,,40000.00,Cash in Hand`;
 
 export default async function initOpening() {
-    await Promise.all([loadMeta(), loadPosition()]);
+    const root = $('[data-ws-form]').closest('[data-module-root]');
 
-    $('#opening-form').addEventListener('submit', preview);
-    $('#import-opening').addEventListener('click', commit);
-    $('#opening-csv').addEventListener('input', invalidate);
-    $('#opening-date').addEventListener('change', invalidate);
+    formRoot = $('[data-ws-form]', root);
+    listRoot = $('[data-ws-list]', root);
+    openingForm = $('#opening-form', formRoot);
 
-    $('#load-sample').addEventListener('click', () => {
-        $('#opening-csv').value = SAMPLE;
+    /*
+    | Declaring is the create act, so the module lands on it. Both grants,
+    | because that is exactly what the endpoint asks for: landing somebody on a
+    | form the server would refuse is worse than landing them on the receipts.
+    */
+    const canDeclare = can('UPDATE', 'WORKSPACE') && can('WRITE', 'TRANSACTIONS');
+
+    workspace = mountWorkspace(root, {
+        key: 'opening',
+        title: 'Opening balances',
+        formSubtitle: 'What the workshop already had on the day the books opened — stock on the shelf, money '
+            + 'customers owed, money owed to suppliers, cash in the till. Declared once, before anything else '
+            + 'is entered, because every figure this product reports is wrong by whatever was there already.',
+        listSubtitle: (count) => (count === null
+            ? 'Every declaration that has been posted.'
+            : `${count} import${count === 1 ? '' : 's'}. A receipt for a decision, not a position — the trial `
+                + 'balance on the declaration is what says whether the position is right.'),
+        createLabel: 'Declare balances',
+        count: () => state.history?.length ?? null,
+        canCreate: canDeclare,
+        // Both surfaces are painted by `load()`, so there is nothing left for a
+        // first Show to fetch — unless the first call failed, which is the retry
+        // this leaves open.
+        onShowList: async () => { if (!held) await load(); },
+    });
+
+    /*
+    | The position is a copy of the books, and the go-live date on it is a copy
+    | of a setting on another screen. Marking only — the refetch waits for the
+    | module to be looked at again, or a write in one module would be loading
+    | another module's data (§7.2, `data-bus.js`).
+    |
+    | Subscribed here rather than through `refreshOn` because what goes behind is
+    | on the *form*: `refreshOn` refreshes a list when the list is next shown,
+    | and the tiles somebody reads before declaring would stay wrong.
+    */
+    onChange(['ledger'], () => { held = false; });
+
+    root.addEventListener('module:shown', () => {
+        // Back on screen after something wrote. Nothing to hand a rejection to:
+        // `load()` paints its own failure into the receipts.
+        if (!held) load().catch(() => {});
+    });
+
+    await Promise.all([loadMeta(), load()]);
+
+    openingForm.addEventListener('submit', preview);
+    inForm('#import-opening').addEventListener('click', commit);
+    inForm('#opening-csv').addEventListener('input', invalidate);
+    inForm('#opening-date').addEventListener('change', invalidate);
+
+    inForm('#load-sample').addEventListener('click', () => {
+        inForm('#opening-csv').value = SAMPLE;
         invalidate();
     });
 }

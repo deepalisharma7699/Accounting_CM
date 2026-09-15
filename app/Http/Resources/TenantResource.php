@@ -52,6 +52,18 @@ class TenantResource extends JsonResource
                 // Off by default; the refusal message points here.
                 'allow_negative_stock' => (bool) $this->allow_negative_stock,
                 'round_off_invoices' => (bool) $this->round_off_invoices,
+                /*
+                | Which module cards sit at the top of the workshop's home
+                | screen. Presentation rather than a trading rule, and it is in
+                | here with the rest because it is one of the workshop's own
+                | settings and the Settings screen is where somebody would look
+                | for it.
+                |
+                | Filtered through the registry by the model, so a key left over
+                | from a module that has since been switched off is not published
+                | as though its card existed.
+                */
+                'favourite_modules' => $this->resource->favouriteModules(),
             ],
 
             // The financial year the workshop is currently in, resolved server

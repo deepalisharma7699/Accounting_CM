@@ -158,6 +158,41 @@ out to the screen. Low stock is a purchasing decision; negative stock is a data
 problem with a different fix, and showing them the same way trains people to
 ignore the second.
 
+### Five states, one ladder, decided twice at two scales
+
+A variant carries **two levels**, and they answer different questions:
+`reorder_level` is when to order and `min_stock` is when to stop what you are
+doing and go and get some. Both leave the API as levels *and* as verdicts —
+`is_low`, `is_below_minimum` — because a client that recomputed either would be a
+second definition of a shortage.
+
+Worst wins, in this order:
+
+```
+negative  →  out  →  below_minimum  →  low  →  in_stock
+```
+
+`components/stock-position.js` decides it once for a family (`positionStatus()`,
+over a roll-up) and once for a single variant (`statusOfRow()`), and the two
+ladders are deliberately identical. `statusOfRow()` exists because the single-row
+version had been written inline at two callers — the Stock table's variant row
+and that screen's CSV export — and both had drifted from the family's: they
+ranked `low` ahead of `out`, so a variant sitting at nought with a reorder level
+on it reported *Low stock* underneath a family row that said *Out of stock* about
+the same shelf. Nought is out.
+
+The bill form's item picker keeps its own three words and is **not** a third
+caller. What it asks is whether a line can be sold, and a part below its floor
+sells exactly like one above it — the floor is a buying question, and that picker
+is the one screen where buying is not the question being asked.
+
+On the Stock screen the floor is a **pill and deliberately not a tile**. A fifth
+tile leaves one alone on a row at every breakpoint that grid has, and the state
+already announces itself in the status column; the count that matters is on
+Insights, where the worklist is. `PagesRenderTest` asserts the pill *and* the
+absent tile, so adding one stays a decision somebody takes rather than one they
+make by tidying.
+
 ## Stock and the books cannot disagree
 
 M8 is the first module to write **two kinds of record inside one transaction**.
@@ -222,6 +257,44 @@ had stopped paying.
 It is the same reasoning that sends `draft_lines` back through
 `PostingLine::fromInput()` rather than trusting them because they were saved
 once, carried to its conclusion.
+
+## One count form, two screens
+
+`partials/stock-adjust.blade.php` and `components/stock-adjust.js` are the whole
+of changing a position from the UI, and both screens that offer it include the
+same one. Stock counts a shelf: several lines, a variant per line, the signed
+difference typed in. Items corrects a single variant from its drawer: the count
+typed in, and the component subtracts the position to get the difference.
+
+It was extracted from `pages/stock.js`, where it had been the only copy, when
+Items needed the same act — a second form writing to the stock ledger is the last
+thing this application should have two of (§5.1). What a second copy would
+duplicate is not the layout: it is where the sign is decided, where `post: true`
+is set, and where the `client_ref` comes from, and the sign is the whole meaning
+of the document.
+
+Two things it gained in the move, both of which had been quietly wrong:
+
+* **A `client_ref`,** minted when the dialog opens and reused on every retry.
+  Without one, a request that timed out after the server had posted put the same
+  count in the books twice — a shelf silently disagreeing with itself and an
+  Inventory account agreeing with the wrong one.
+  `StockApiTest::a_repeated_count_corrects_the_shelf_once` holds it shut.
+* **Error slots the form plumbing actually paints.** The old modal labelled them
+  `data-error`, and nothing reads that: `showFormErrors()` looks for
+  `data-error-for`, so every 422 this form ever took fell through to a toast that
+  named no field and was gone before it could be read. Per-line slots are stamped
+  with the line's index in the payload at submit — not its position on screen,
+  because blank rows are dropped on the way out and the fourth block is very often
+  not the fourth line.
+
+Adding the second host changed **no server code**, which is what makes the
+contract between them easy to break later: a field added for the count screen
+alone would 422 a drawer nobody opens by hand.
+`StockApiTest::the_items_host_posts_the_same_document_as_the_stock_host` is what
+records it — one line, a *computed* signed difference rather than a typed one,
+`unit_cost: null` on a shortage and a rate on a surplus, and no notes, all
+landing as the same kind of document the multi-line count produces.
 
 ## Stock adjustment — template G
 
@@ -297,7 +370,7 @@ take it away to protect one line of it.
 | --- | --- |
 | `GET /stock` | Every inventoried variant with its position |
 | `GET /stock/summary` | Totals, and the reconciliation for anyone who may read the books |
-| `GET /stock/meta` | Movement types and position statuses |
+| `GET /stock/meta` | Movement types and position statuses — a client builds its filters from this rather than keeping a copy that drifts |
 | `GET /stock/variants/{id}` | One variant's stock card, with a running balance |
 | `POST /transactions/stock-adjustment` | Template G |
 
@@ -353,6 +426,16 @@ history with it.
 - [x] A variant with stock history cannot be deleted
 - [x] One workshop's stock is invisible to another
 - [x] There is no route that writes stock directly
+- [x] Both hosts of the count form post one document shape — the Items drawer's
+      computed difference and the Stock screen's typed one land on the same
+      endpoint as the same type
+- [x] A count retried after a timeout moves the shelf once — `client_ref`,
+      asserted against the movement rather than the status code
+- [x] Both levels are read: at or below the trigger is low, strictly under the
+      floor is below minimum, and a variant with a floor and no trigger is
+      reported by the second alone
+- [x] A negative position is under neither — it is a data problem, not a
+      shortage, and it belongs on no purchasing worklist
 
 ## Decisions worth carrying forward
 

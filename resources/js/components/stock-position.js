@@ -8,7 +8,7 @@
  * both have to answer it the same way or the two screens disagree about the same
  * shelf.
  *
- * So the rule lives here once (§4.4). Three parts of it are worth stating,
+ * So the rule lives here once (§4.4). Four parts of it are worth stating,
  * because each is a decision rather than an obvious sum:
  *
  * **Average cost is total value over total quantity**, never the mean of the
@@ -24,6 +24,13 @@
  * which is a data problem with a different fix. They are separate statuses with
  * separate colours, because a screen that showed them alike would train people
  * to ignore the second.
+ *
+ * **And below the floor is not a kind of low either.** A variant carries two
+ * levels: `reorder_level` is when to order and `min_stock` is when to stop what
+ * you are doing and go and get some — a shop orders at 20 and panics at 5. Both
+ * are the server's verdicts (`is_low`, `is_below_minimum`), never recomputed
+ * here, and the ladder below ranks the second above the first: a purchase to
+ * make today over a purchase to plan for this week.
  */
 
 /**
@@ -32,6 +39,7 @@
  * @property {number} value      ditto
  * @property {number} variants   how many were rolled up
  * @property {number} low        how many are at or below their reorder level
+ * @property {number} below      how many are under the floor somebody set
  * @property {number} negative   how many are below zero
  * @property {number} out        how many are empty
  * @property {Array<object>} positions  the variant rows themselves
@@ -39,7 +47,7 @@
 
 /** An empty roll — the shape callers can rely on before any row is added. */
 function emptyRoll() {
-    return { quantity: 0, value: 0, variants: 0, low: 0, negative: 0, out: 0, positions: [] };
+    return { quantity: 0, value: 0, variants: 0, low: 0, below: 0, negative: 0, out: 0, positions: [] };
 }
 
 /**
@@ -60,11 +68,14 @@ export function rollUpPositions(rows) {
         roll.variants += 1;
 
         // Counted as one thing each, in the order that matters: a variant that
-        // is negative is not also counted as out, or the three tallies would sum
-        // to more than the variants they describe.
+        // is negative is not also counted as out, or the four tallies would sum
+        // to more than the variants they describe. Under the floor outranks
+        // merely low, and where both levels are set both are true of the same
+        // row — it is counted once, as the worse of the two.
         if (row.is_negative) roll.negative += 1;
-        else if (row.is_low) roll.low += 1;
         else if (!row.has_stock) roll.out += 1;
+        else if (row.is_below_minimum) roll.below += 1;
+        else if (row.is_low) roll.low += 1;
 
         roll.positions.push(row);
 
@@ -89,13 +100,43 @@ export function averageCostOf(roll) {
  * The worst thing true of any variant in the roll.
  *
  * @param {Roll|null|undefined} roll
- * @returns {'negative'|'out'|'low'|'in_stock'}
+ * @returns {'negative'|'out'|'below_minimum'|'low'|'in_stock'}
  */
 export function positionStatus(roll) {
     if (!roll || roll.variants === 0) return 'out';
     if (roll.negative > 0) return 'negative';
     if (roll.quantity <= 0) return 'out';
+    if (roll.below > 0) return 'below_minimum';
     if (roll.low > 0) return 'low';
+
+    return 'in_stock';
+}
+
+/**
+ * The same ladder for a single variant, off the flags the server sent.
+ *
+ * Here rather than inline at each caller because it was written inline at two of
+ * them — the Stock table's variant row and that screen's export — and both had
+ * drifted from the roll-up above: both ranked "low" ahead of "out", so a variant
+ * sitting at nought with a reorder level on it reported *Low stock* underneath a
+ * family row that said *Out of stock* about the same shelf. Nought is out. The
+ * reorder level is still the reason it matters, and the family's answer was the
+ * one that was right.
+ *
+ * The bill form's item picker keeps its own three words and is not a third
+ * caller. What it asks is whether a line can be sold, and a part below the floor
+ * sells exactly like one above it — the floor is a buying question, and that
+ * picker is the one screen where buying is not the question being asked.
+ *
+ * @param {object|null|undefined} row  a StockPositionResource row
+ * @returns {'negative'|'out'|'below_minimum'|'low'|'in_stock'}
+ */
+export function statusOfRow(row) {
+    if (!row) return 'out';
+    if (row.is_negative) return 'negative';
+    if (!row.has_stock) return 'out';
+    if (row.is_below_minimum) return 'below_minimum';
+    if (row.is_low) return 'low';
 
     return 'in_stock';
 }
@@ -107,6 +148,11 @@ export function positionStatus(roll) {
 export const STOCK_STATUS = {
     in_stock: { label: 'In Stock', chip: 'border-emerald-100 bg-emerald-50 text-emerald-700', dot: 'bg-emerald-500' },
     low: { label: 'Low Stock', chip: 'border-amber-100 bg-amber-50 text-amber-700', dot: 'bg-amber-500' },
+    // Between amber and rose, because that is where it sits: still on the shelf,
+    // already past the line the workshop drew. Named for the line rather than
+    // for how bad it is — "Critical" would be this screen's opinion, where
+    // "Below Minimum" is the workshop's own figure quoted back at them.
+    below_minimum: { label: 'Below Minimum', chip: 'border-orange-200 bg-orange-50 text-orange-700', dot: 'bg-orange-500' },
     out: { label: 'Out of Stock', chip: 'border-rose-100 bg-rose-50 text-rose-600', dot: 'bg-rose-500' },
     // Its own badge, never folded into "low". The fix for a negative position is
     // to find the missing purchase, not to order more.

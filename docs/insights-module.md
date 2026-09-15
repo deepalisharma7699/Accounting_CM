@@ -127,6 +127,20 @@ variant never issued at all is included and said so plainly: "never sold" and "n
 sold since April" are different problems — one is a buying mistake, the other a
 part that has gone out of use.
 
+**What needs buying is ranked, and the floor outranks the trigger.** The list is
+built from the rows `StockLedgerService::report()` already returned rather than
+from a second query, so it inherits `StockPosition`'s verdicts and cannot come to
+a different conclusion from the Stock module's badges about one shelf. The order
+is gone and negative first — a part that is out stops a job today — then under
+the **floor**, then merely low: a purchase to make today above a purchase to plan
+for this week.
+
+`shortfall` is measured against whichever level the variant carries: the reorder
+level where there is one, the floor otherwise. A variant with a floor and no
+trigger is the row that was missing from this panel entirely, and a worklist
+entry reading "below minimum" with a dash where the number goes is a badge rather
+than a worklist entry.
+
 **Shrinkage is invisible in the P&L on purpose.** `StockAdjustmentTemplate` posts
 a write-off to COGS rather than to an account of its own, because a separate
 account would report a healthier gross margin than the workshop actually earns.
@@ -202,6 +216,21 @@ attribution carries no line grain and no hours, an invoice names at most one
 person per trade, and half a workshop's people never appear on a document at all.
 A winder with no invoices against them is usually the person doing the stripping.
 CLAUDE.md is explicit that attribution must never become an input to pay.
+
+**A person's Invoices column counts documents, not names on them.**
+`transaction_staff` holds a row per trade, so a fitter who also wound the motor
+is two rows on one invoice — counted as rows, that person read as twice as
+productive as somebody doing identical work, and the same invoice landed in
+their value twice. Both figures count the distinct document, and `work_trades`
+carries what the count was accidentally saying: "Fitting 8 · Winding 3".
+
+**The column is read across, never summed.** An invoice naming a fitter *and* a
+winder appears whole in both their rows — neither did a stated share of it and
+the schema records none. So the panel states the workshop's own figure above the
+table, from the `work` block: how many invoices name somebody, what those came
+to, and how many invoices there were in all. The last is the one the table
+cannot say about itself — a light-looking column is either a quiet bench or
+pickers nobody filled in, and those have opposite answers.
 
 **An unmarked day is reported as unmarked.** What silence is worth depends on how
 somebody is paid, and that decision lives in `SalaryBasis::unmarkedDayIsPaid()` and

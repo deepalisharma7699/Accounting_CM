@@ -63,6 +63,9 @@ function fromStock(row) {
         unit: row.item?.base_uom ?? null,
         unit_symbol: row.item?.base_uom_symbol ?? '',
         gst_rate: row.item?.gst_rate ?? '0',
+        // Which basis the price below is quoted on. The bill line's toggle
+        // starts here and the operator may flip it per line.
+        price_includes_tax: row.item?.price_includes_tax === true,
         price: row.sell_price ?? '',
         quantity: row.quantity,
         average_cost: row.average_cost,
@@ -85,6 +88,7 @@ function fromServiceVariant(item, variant) {
         unit: item.base_uom,
         unit_symbol: item.base_uom_symbol ?? '',
         gst_rate: item.gst_rate ?? '0',
+        price_includes_tax: item.price_includes_tax === true,
         price: variant?.sell_price ?? '',
         quantity: null,
         average_cost: null,
@@ -107,7 +111,7 @@ export async function searchCatalogue(term) {
 
     const [stock, services, bare] = await Promise.allSettled([
         can('READ', 'STOCK')
-            ? auth.call(`/stock?per_page=12&is_active=1&search=${query}`)
+            ? auth.call(`/stock?per_page=12&is_active=1&search=${query}`, { quiet: true })
             : Promise.resolve({ data: [] }),
         /*
         | `is_stock=0`, not `type=service`.
@@ -124,7 +128,7 @@ export async function searchCatalogue(term) {
         | complement of what /stock returns.
         */
         can('READ', 'ITEMS')
-            ? auth.call(`/items?per_page=12&is_stock=0&is_active=1&with_variants=1&search=${query}`)
+            ? auth.call(`/items?per_page=12&is_stock=0&is_active=1&with_variants=1&search=${query}`, { quiet: true })
             : Promise.resolve({ data: [] }),
         /*
         | A stocked family with nothing under it yet, and the only query that
@@ -139,7 +143,7 @@ export async function searchCatalogue(term) {
         | Small on purpose: this is an exception list, not a way to browse.
         */
         can('READ', 'ITEMS')
-            ? auth.call(`/items?per_page=5&is_stock=1&has_variants=0&is_active=1&search=${query}`)
+            ? auth.call(`/items?per_page=5&is_stock=1&has_variants=0&is_active=1&search=${query}`, { quiet: true })
             : Promise.resolve({ data: [] }),
     ]);
 
@@ -200,6 +204,7 @@ function needsVariant(item) {
         unit: item.base_uom,
         unit_symbol: item.base_uom_symbol ?? '',
         gst_rate: item.gst_rate ?? '0',
+        price_includes_tax: item.price_includes_tax === true,
         price: '',
         quantity: null,
         average_cost: null,
@@ -208,6 +213,9 @@ function needsVariant(item) {
         is_negative: false,
     };
 }
+
+/** One id per mounted picker — see the note beside `uid` below. */
+let mountCount = 0;
 
 /**
  * Mount the search box.
@@ -237,17 +245,28 @@ export function mountItemPicker(host, {
     // A thunk where the host can change direction under a mounted picker.
     const say = (value) => (typeof value === 'function' ? value() : value);
 
+    /*
+    | One id per mounted picker, because more than one can be on the page at
+    | once. The Jobs card mounts two — the part adder on the job card and the
+    | bill document's line picker — and both are attached whenever the drawer is
+    | opened from the create surface. Fixed ids there meant a `<label for>`
+    | pointing at the other picker's box and an `aria-controls` naming the other
+    | picker's list. Same fix, same reason, as `party-picker.js` (M16).
+    */
+    const uid = `item-${++mountCount}`;
+
     host.innerHTML = `
         <div class="relative" data-item-picker>
-            <label class="field-label" for="item-search">Add an item or a service</label>
+            <label class="field-label" for="${uid}-search">Add an item or a service</label>
 
-            <input id="item-search" type="text" class="field-input" autocomplete="off"
-                   role="combobox" aria-expanded="false" aria-autocomplete="list" aria-controls="item-results"
+            <input id="${uid}-search" type="text" class="field-input" autocomplete="off"
+                   role="combobox" aria-expanded="false" aria-autocomplete="list"
+                   aria-controls="${uid}-results"
                    placeholder="Start typing — bearing, winding wire, labour…" data-item-input>
 
             <p class="mt-1.5 text-xs text-muted-foreground" data-item-hint>${esc(say(hint))}</p>
 
-            <ul id="item-results" role="listbox"
+            <ul id="${uid}-results" role="listbox"
                 class="surface absolute z-30 mt-1 hidden max-h-80 w-full overflow-y-auto p-1 shadow-raised"
                 data-item-results></ul>
         </div>`;

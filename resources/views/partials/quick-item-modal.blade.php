@@ -29,9 +29,6 @@
             </header>
 
             <div class="max-h-[60vh] space-y-4 overflow-y-auto px-5 py-4">
-                <p class="hidden rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-3 text-[0.8125rem] text-rose-700"
-                   data-form-banner role="alert"></p>
-
                 {{-- Hidden when the family already exists and only its
                      specification is missing. --}}
                 <div id="quick-item-fields" class="grid gap-4 sm:grid-cols-2">
@@ -73,9 +70,9 @@
                         <label for="quick-gst" class="field-label">GST rate</label>
                         <div class="relative">
                             {{-- See the note on the same field in modules/items.blade.php:
-                                 a greyed numeral in this box reads as a filled-in
-                                 value and saved 0%. --}}
-                            <input id="quick-gst" name="gst_rate" type="text" inputmode="decimal"
+                                 prefilled as a real value, because a greyed numeral
+                                 in this box reads as a filled-in one and saved 0%. --}}
+                            <input id="quick-gst" name="gst_rate" type="text" inputmode="decimal" value="18"
                                    class="field-input pr-8 text-right font-mono" placeholder="Rate in %">
                             <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground">%</span>
                         </div>

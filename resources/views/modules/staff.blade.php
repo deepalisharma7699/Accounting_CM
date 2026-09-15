@@ -475,9 +475,6 @@
                 </div>
 
                 <form id="advance-form" novalidate>
-                    <p class="mb-4 hidden rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-3 text-[0.8125rem] text-rose-700"
-                       data-form-banner role="alert"></p>
-
                     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                         <div>
                             <label for="advance-employee" class="field-label">Who <span class="req">*</span></label>
@@ -720,16 +717,27 @@
                 </button>
             </div>
 
-            <form id="designation-form" class="mt-4 flex gap-2" novalidate
+            {{-- The row is a child of the form rather than the form itself, so the
+                 field's message and ui.js's banner have somewhere to go that is
+                 not this line: the input is full-width, and anything sharing a
+                 line with it pushes Add onto the next one. --}}
+            <form id="designation-form" class="mt-4" novalidate
                   data-requires-permission="WRITE:STAFF">
-                <input type="text" id="designation-name" class="field-input" maxlength="80" required
-                       placeholder="Add a designation…" aria-label="New designation">
-                <button type="submit" class="btn btn-primary shrink-0">
-                    <x-icon name="plus" :size="15" />
-                    Add
-                </button>
+                <div class="flex gap-2">
+                    <input type="text" id="designation-name" name="name" class="field-input"
+                           maxlength="80" required
+                           placeholder="Add a designation…" aria-label="New designation">
+                    <button type="submit" class="btn btn-primary shrink-0">
+                        <x-icon name="plus" :size="15" />
+                        Add
+                    </button>
+                </div>
+
+                {{-- Inside the form, which is where showFormErrors() looks. It
+                     was written just outside it, so the one field this form has
+                     could never be marked. --}}
+                <p class="field-error hidden" data-error-for="name"></p>
             </form>
-            <p class="field-error hidden" data-error-for="name"></p>
         </div>
 
         <div class="flex-1 overflow-y-auto px-6 py-5" id="designation-list"></div>
@@ -772,9 +780,6 @@
             </div>
 
             <div class="space-y-4" data-form-body>
-                <p class="hidden rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-3 text-[0.8125rem] text-rose-700"
-                   data-form-banner role="alert"></p>
-
                 <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div>
                         <label for="employee-name" class="field-label">Name <span class="req">*</span></label>

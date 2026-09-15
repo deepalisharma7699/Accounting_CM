@@ -48,6 +48,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property string $taxable_value
  * @property string|null $hsn_sac
  * @property string $gst_rate
+ * @property bool $price_includes_tax
  * @property string $cgst_amount
  * @property string $sgst_amount
  * @property string $igst_amount
@@ -58,7 +59,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 #[Fillable([
     'tenant_id', 'transaction_id', 'item_id', 'variant_id', 'line_no', 'against_line_id',
     'description', 'quantity', 'unit', 'unit_price', 'discount_amount',
-    'taxable_value', 'hsn_sac', 'gst_rate',
+    'taxable_value', 'hsn_sac', 'gst_rate', 'price_includes_tax',
     'cgst_amount', 'sgst_amount', 'igst_amount', 'line_total',
     'is_stock', 'memo',
 ])]
@@ -94,6 +95,7 @@ class TransactionLine extends Model
             'discount_amount' => 'decimal:2',
             'taxable_value' => 'decimal:2',
             'gst_rate' => 'decimal:2',
+            'price_includes_tax' => 'boolean',
             'cgst_amount' => 'decimal:2',
             'sgst_amount' => 'decimal:2',
             'igst_amount' => 'decimal:2',

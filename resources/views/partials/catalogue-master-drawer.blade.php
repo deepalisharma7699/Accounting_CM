@@ -80,9 +80,6 @@
             </div>
 
             <div class="space-y-4 px-6 py-5">
-                <p class="hidden rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-3 text-[0.8125rem] text-rose-700"
-                   data-form-banner role="alert"></p>
-
                 <div>
                     <label for="category-name" class="field-label">Name</label>
                     <input id="category-name" name="name" type="text" class="field-input" required
@@ -125,8 +122,13 @@
                             Usual GST rate <span class="font-normal text-muted-foreground">(optional)</span>
                         </label>
                         <div class="relative">
-                            <input id="category-gst" name="default_gst_rate" type="text" inputmode="decimal"
-                                   class="field-input pr-8 text-right font-mono" placeholder="18">
+                            {{-- Prefilled rather than suggested in placeholder
+                                 grey, for the reason modules/items.blade.php
+                                 records. Clear it for a category that cannot
+                                 state a rate for its products — null here is
+                                 what makes the product form insist on one. --}}
+                            <input id="category-gst" name="default_gst_rate" type="text" inputmode="decimal" value="18"
+                                   class="field-input pr-8 text-right font-mono" placeholder="Rate in %">
                             <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground">%</span>
                         </div>
                         <p class="field-error hidden" data-error-for="default_gst_rate"></p>
@@ -201,9 +203,6 @@
             </div>
 
             <div class="space-y-4 px-6 py-5">
-                <p class="hidden rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-3 text-[0.8125rem] text-rose-700"
-                   data-form-banner role="alert"></p>
-
                 <div>
                     <label for="attribute-label" class="field-label">Label</label>
                     <input id="attribute-label" name="label" type="text" class="field-input" required
@@ -328,9 +327,6 @@
             </div>
 
             <div class="space-y-4 px-6 py-5">
-                <p class="hidden rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-3 text-[0.8125rem] text-rose-700"
-                   data-form-banner role="alert"></p>
-
                 <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <div>
                         <label for="unit-label" class="field-label">Name</label>
@@ -422,9 +418,6 @@
             </div>
 
             <div class="space-y-4 px-6 py-5">
-                <p class="hidden rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-3 text-[0.8125rem] text-rose-700"
-                   data-form-banner role="alert"></p>
-
                 <div>
                     <label for="brand-name" class="field-label">Name</label>
                     <input id="brand-name" name="name" type="text" class="field-input" required

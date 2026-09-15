@@ -397,6 +397,15 @@ class TransactionController extends Controller
      * The list a "which invoices is this for?" picker renders, and the reason it
      * is a server answer rather than a client filter over the transaction list —
      * what is left owing is derived from two tables the client does not have.
+     *
+     * What it is **already** pointed at rides in the meta beside it, and the
+     * screen needs both to draw one editable list. `due` is net of every
+     * allocation including this settlement's own, so a bill this receipt has
+     * already paid off in full is not open any more and does not appear in the
+     * data at all — an allocation picker built from that alone would silently
+     * drop the rows the operator is most likely to want to change. Merged, a
+     * row's ceiling is what is still owing plus whatever this settlement is
+     * currently holding against it.
      */
     public function openBills(int $transaction): JsonResponse
     {
@@ -412,7 +421,7 @@ class TransactionController extends Controller
             ], $this->settlements->openBillsFor($settlement)),
             null,
             200,
-            ['unallocated' => $this->settlements->unallocated($settlement)->amount()],
+            $this->allocationMeta($settlement),
         );
     }
 

@@ -169,21 +169,57 @@ forward would credit somebody for a motor they never touched.
 
 ### The report counts jobs and value, and says so
 
-`GET /staff/{employee}/work` returns two figures because neither stands in for
-the other:
+`GET /staff/{employee}/work` returns three figures because none stands in for
+the others:
 
 - **Jobs** is throughput. Eleven motors is eleven motors.
 - **Invoiced** is what those documents came to — gross, matching the day book.
+- **Trades** is which benches they were credited at, and on how many invoices
+  each: "Fitting 8 · Winding 3".
 
 The second is the one an owner reaches for and the one most easily misread: a
 bill that is mostly bearings credits its fitter with the bearings, because the
-document does not separate the labour from the parts. Both are shown so that
-neither is taken for a measure of effort on its own.
+document does not separate the labour from the parts. All three are shown so
+that none is taken for a measure of effort on its own.
+
+### An invoice counts once, and the trades say the rest
+
+`transaction_staff` holds **one row per trade**, so somebody who fitted a motor
+and wound it is two rows on one document. The first two figures counted those
+rows, which made a ₹11,800 invoice read as two jobs worth ₹23,600 — a throughput
+figure that made a two-trade person look twice as productive as a one-trade
+person doing identical work, and a money figure that was not a rounding error
+but revenue the workshop never billed. In a small shop one person covering two
+benches is the ordinary case rather than the edge one.
+
+Both figures now count the **distinct invoice**, and `trades` carries what the
+double count was accidentally saying. That also settles a discrepancy the drawer
+had been printing at people: it lists the invoices and says "showing 10 of
+{jobs}", and the two were counting different things.
+
+The de-duplication happens on the rows and never on the aggregate. A
+`sum(distinct total)` would have been shorter and would collapse two different
+invoices that come to the same amount, which on a counter charging ₹500 for a
+service is a daily occurrence rather than a coincidence.
 
 **Reversed documents are excluded.** A repair that was billed and then cancelled
 is not work anybody did — and this is also what keeps a correction honest, since
 a revision reverses the original and posts a replacement, which would otherwise
 count the same motor twice.
+
+### The per-person column does not add up, and the panel says what does
+
+An invoice naming a fitter *and* a winder appears **whole in both their rows**.
+Neither did a stated share of it, the schema records none, and inventing one
+would be the piece rate this feature exists to avoid — so the column is read
+across and never summed.
+
+Insights' people table therefore carries the workshop's own total above it:
+`GET /insights/people` returns a `work` block with the credited invoices, what
+they came to, and how many invoices there were in all. That second figure is the
+one that cannot be recovered from the table itself — a light-looking column
+means either a quiet bench or pickers nobody filled in, and those have opposite
+answers.
 
 Nothing here is an input to pay. Payroll computes from a rate and an attendance
 sheet in one place, and a throughput figure that quietly became a piece rate

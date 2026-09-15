@@ -80,9 +80,6 @@
             </header>
 
             <div data-form-body>
-                <p class="hidden rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-3 text-[0.8125rem]
-                          text-rose-700" data-form-banner role="alert"></p>
-
                 <div>
                     <label for="quick-party-name" class="field-label" id="quick-party-name-label">Name</label>
                     <input id="quick-party-name" name="name" type="text" class="field-input" required

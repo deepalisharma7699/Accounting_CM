@@ -29,6 +29,11 @@ class RegistrationTest extends TestCase
         // Sign-up attaches the seeded OWNER role to the first user, so the
         // real catalogue has to exist.
         $this->seedRoleCatalogue();
+
+        // Self-serve sign-up ships off — onboarding is sales-led. The feature
+        // is still supported, so this class turns it on to exercise it; the
+        // one test below that asserts the refusal turns it back off.
+        config()->set('tenancy.allow_public_signup', true);
     }
 
     /**

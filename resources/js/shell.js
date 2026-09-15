@@ -28,13 +28,23 @@
  *   cannot happen, because `default()` is called on the first open only.
  * - **A module is paid for once** (§2.5, §7.2). Markup, code and data all
  *   arrive on first open. A module never opened costs nothing at all.
+ *
+ * The cost of holding them is that a module's rows are a snapshot of whenever it
+ * was last looked at, and something else may have written since. So re-attaching
+ * dispatches `module:shown` on the root, and a module that has been told it is
+ * stale refetches then — at the moment it is back in front of somebody, never at
+ * the moment of the write. See `data-bus.js`.
  */
 
+import { track } from './loader';
 import { applyPermissionGates, can, hasWorkspace } from './permissions';
 import { $, $$, esc, toast } from './ui';
 
 /** Page modules are loaded lazily so the dashboard never ships the CRUD code. */
 const PAGES = {
+    // C5 — the chart of accounts and the trial balance, merged. There is no
+    // `ledger` entry: it was the same question at a second zoom level, and its
+    // screen is the second view of this one.
     accounts: () => import('./pages/accounts'),
     audit: () => import('./pages/audit'),
     bills: () => import('./pages/bills'),
@@ -46,7 +56,6 @@ const PAGES = {
     items: () => import('./pages/items'),
     jobs: () => import('./pages/jobs'),
     journal: () => import('./pages/journal'),
-    ledger: () => import('./pages/ledger'),
     opening: () => import('./pages/opening'),
     purchase: () => import('./pages/purchase'),
     roles: () => import('./pages/roles'),
@@ -74,7 +83,7 @@ let current = null;
  * The open module's deep-link intent — `?type=sale`, `?new=expense`.
  *
  * Held here rather than read from `location.search`, because a module's URL is
- * now a fragment of the dashboard's: `/dashboard#bills?type=sale`. Modules read
+ * now a fragment of the dashboard's: `/dashboard#jobs?status=ready`. Modules read
  * it through {@link moduleParams}.
  */
 let params = new URLSearchParams();
@@ -124,6 +133,29 @@ function paintEmptyHome() {
 }
 
 /**
+ * Take the home skeleton down and show what it stood in for.
+ *
+ * Last, and that is the whole of its correctness. By the time this runs the
+ * grants have been applied, the favourites have been lifted out of their bands,
+ * a band left with nothing visible under it has hidden its own heading, and
+ * `paintEmptyHome()` above has decided whether there is anything here at all —
+ * so the grid is revealed in its finished state rather than assembling itself in
+ * front of somebody.
+ *
+ * `aria-busy` goes with it. It is on `#view-home` rather than on the skeleton
+ * because the skeleton is `aria-hidden` — there is nothing in it to announce,
+ * and the fact worth announcing is that this region is not ready yet.
+ */
+function revealHome() {
+    const home = $('#view-home');
+
+    if (!home) return;
+
+    delete home.dataset.homeLoading;
+    home.removeAttribute('aria-busy');
+}
+
+/**
  * May this session open that module?
  *
  * The cards are gated already, so this only matters for a URL somebody typed or
@@ -140,6 +172,20 @@ function permitted(key) {
 
     return (!grant || can(action, resource))
         && (wrapper.dataset.requiresWorkspace === undefined || hasWorkspace());
+}
+
+/**
+ * The same question {@link openModule} asks itself, exported so that a caller
+ * can decline to *offer* what it would refuse.
+ *
+ * The topbar's search uses it: a document whose module is switched off, or whose
+ * card this session may not see, is dropped from the results rather than listed
+ * and then met with "that module is not available" on the click. Asked of the
+ * shell rather than answered a second time, or the two could disagree about the
+ * same card (§4.4).
+ */
+export function canOpenModule(key) {
+    return Boolean(PAGES[key]) && permitted(key);
 }
 
 /* -------------------------------------------------------------------------
@@ -224,6 +270,23 @@ async function mount(key) {
         host.replaceChildren(root);
 
         /*
+        | Back on screen, after however long detached.
+        |
+        | The counterpart of the cache above: holding a module alive is what
+        | makes reopening it instant, and it is also the only reason its rows can
+        | be out of date — something else wrote while it was away. A module that
+        | has been told it is stale (`data-bus.js`) refetches here, at the moment
+        | somebody is actually looking at it, rather than when the write happened
+        | (§7.2). `workspace.js` listens for every module with a level-1 list, so
+        | nothing per-module has to.
+        |
+        | Announced on re-attach only. A first mount has just fetched everything
+        | it has, and telling it to refresh would be a second request for the
+        | rows already arriving.
+        */
+        root.dispatchEvent(new CustomEvent('module:shown'));
+
+        /*
         | A module that is already up cannot read its intent from `default()`,
         | because `default()` ran on the first open and will not run again. So a
         | second deep link — a different row of the attention list, say — is
@@ -238,10 +301,19 @@ async function mount(key) {
 
     host.innerHTML = busyState(key);
 
-    const response = await fetch(`/modules/${key}`, {
+    /*
+    | The one request in the application that does not go through
+    | `auth.call()` — it asks for markup, not for JSON — so it is the one place
+    | the activity bar has to be raised by hand. `track()` and not a bare pair,
+    | because a module that 404s must still take the bar down.
+    |
+    | The skeleton below is not made redundant by it: the bar says the server is
+    | busy, the skeleton says this region is what is arriving.
+    */
+    const response = await track(fetch(`/modules/${key}`, {
         headers: { Accept: 'text/html' },
         credentials: 'same-origin',
-    });
+    }));
 
     if (!response.ok) {
         throw new Error(
@@ -278,10 +350,9 @@ async function mount(key) {
  * What a module was opened *for*, when it was opened by a link rather than by
  * its card.
  *
- * The dashboard's attention list points at `/bills?payment=overdue`; the shell
- * turns that into `/dashboard#bills?payment=overdue` and opens the module in
- * place. A module reads its intent here instead of from `location.search`, which
- * belongs to the shell now.
+ * An attention list points at `/jobs?overdue=1`; the shell turns that into
+ * `/dashboard#jobs?overdue=1` and opens the module in place. A module reads its
+ * intent here instead of from `location.search`, which belongs to the shell now.
  */
 export function moduleParams() {
     return params;
@@ -394,6 +465,7 @@ export function initShell() {
     baseTitle = document.title;
     readRegistry();
     paintEmptyHome();
+    revealHome();
 
     document.addEventListener('click', (event) => {
         // closest(), not matches(): a card wraps an icon and two spans, so a
@@ -417,9 +489,9 @@ export function initShell() {
         /*
         | A link to where a module used to live.
         |
-        | The dashboard's tiles and its attention list point at `/bills?type=sale`
-        | and the like, and some of those hrefs come from the API rather than
-        | from markup here. Following one would be a document load into a
+        | A link can point at `/jobs?status=ready` and the like, and some of
+        | those hrefs come from the API rather than from markup here. Following
+        | one would be a document load into a
         | redirect into another document load — so the shell recognises the path
         | and opens the module in place, intent and all (§1.1, §3.2).
         |
@@ -489,6 +561,10 @@ export function initShell() {
 
         if ($('[data-modal]:not(.hidden)')) return;
         if ($('[data-user-menu-panel]:not(.hidden)')) return;
+        // The search results, for the same reason as the menu above: while the
+        // panel is up it is the innermost thing on screen, and `search.js` takes
+        // the one step of closing it.
+        if ($('[data-search-panel]:not(.hidden)')) return;
 
         if (escapeHandlers.get(current)?.()) return;
 
@@ -498,7 +574,7 @@ export function initShell() {
     /*
     | A deep link. `/items` redirects to `/dashboard#items`, and a bookmark of
     | either lands here — so the fragment is read once on boot and opened without
-    | a second load. `#bills?payment=overdue` carries an intent with it.
+    | a second load. `#jobs?overdue=1` carries an intent with it.
     */
     const [key = '', search = ''] = location.hash.replace(/^#/, '').split('?');
 

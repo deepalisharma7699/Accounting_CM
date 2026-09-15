@@ -58,7 +58,18 @@ class BillJobRequest extends FormRequest
             'items.*.quantity' => ['required', 'numeric', 'decimal:0,3', 'gt:0'],
             'items.*.unit_price' => ['required', 'numeric', 'decimal:0,2', 'min:0', 'max:'.self::MAX_AMOUNT],
             'items.*.discount' => ['nullable', 'numeric', 'decimal:0,2', 'min:0', 'max:'.self::MAX_AMOUNT],
+            'items.*.discount_percent' => [
+                'nullable', 'numeric', 'min:0', 'max:100', 'prohibits:items.*.discount',
+            ],
+            'items.*.price_includes_tax' => ['nullable', 'boolean'],
             'items.*.memo' => ['nullable', 'string', 'max:255'],
+
+            // Money off the whole repair, apportioned across the lines before
+            // tax exactly as it is on any other bill.
+            'bill_discount' => ['nullable', 'numeric', 'decimal:0,2', 'min:0', 'max:'.self::MAX_AMOUNT],
+            'bill_discount_percent' => [
+                'nullable', 'numeric', 'min:0', 'max:100', 'prohibits:bill_discount',
+            ],
 
             // What was collected as the motor went out. Optional, like any bill's:
             // a regular customer's repair goes out on account.
@@ -66,6 +77,35 @@ class BillJobRequest extends FormRequest
             'payments.*.mode' => ['required', Rule::enum(PaymentMode::class)],
             'payments.*.amount' => ['required', 'numeric', 'decimal:0,2', 'gt:0', 'max:'.self::MAX_AMOUNT],
             'payments.*.reference' => ['nullable', 'string', 'max:100'],
+
+            /*
+            | Who did the work - M22, and a rewind is the canonical case for it.
+            | "Ramesh fitted it, Sunil wound it" is a sentence about a job before
+            | it is one about a counter sale, and until C4 this endpoint dropped
+            | it silently because the only screen that could reach it sent the
+            | shared bill document's whole payload and this class named none of
+            | these keys.
+            |
+            | Shape only, as everywhere else: which trades this workshop asks
+            | about and whether the person is on its staff list belong to
+            | WorkAttributionService.
+            */
+            'staff' => ['nullable', 'array', 'max:10'],
+            'staff.*.designation_id' => ['required', 'integer', 'min:1'],
+            // Nullable, and the null is load-bearing - it means "this box is
+            // empty", which a correction has to be able to say.
+            'staff.*.employee_id' => ['nullable', 'integer', 'min:1'],
+        ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    public function messages(): array
+    {
+        return [
+            'items.*.discount_percent.prohibits' => 'Give a line discount in rupees or as a percentage, not both.',
+            'bill_discount_percent.prohibits' => 'Give the bill discount in rupees or as a percentage, not both.',
         ];
     }
 
@@ -98,8 +138,34 @@ class BillJobRequest extends FormRequest
                 'quantity' => $line['quantity'] ?? 0,
                 'unit_price' => $line['unit_price'] ?? 0,
                 'discount' => ($line['discount'] ?? null) === '' ? null : ($line['discount'] ?? null),
+                'discount_percent' => ($line['discount_percent'] ?? null) === ''
+                    ? null
+                    : ($line['discount_percent'] ?? null),
+                /*
+                | Absent means "ask the item", which is what the job's own parts
+                | rely on - billPayloadFor() sends no flag at all. Sent
+                | explicitly it wins, because a shop selling parts at the price
+                | printed on the box still quotes a rewind before tax.
+                */
+                'price_includes_tax' => array_key_exists('price_includes_tax', $line)
+                    && $line['price_includes_tax'] !== null && $line['price_includes_tax'] !== ''
+                    ? filter_var($line['price_includes_tax'], FILTER_VALIDATE_BOOLEAN)
+                    : null,
                 'memo' => $line['memo'] ?? null,
             ], array_values((array) $this->input('items', [])));
+        }
+
+        foreach (['bill_discount', 'bill_discount_percent'] as $field) {
+            if ($this->filled($field)) {
+                $overrides[$field] = $this->input($field);
+            }
+        }
+
+        if ($this->has('staff')) {
+            $overrides['staff'] = array_map(fn (array $pair) => [
+                'designation_id' => $pair['designation_id'] ?? null,
+                'employee_id' => ($pair['employee_id'] ?? null) === '' ? null : ($pair['employee_id'] ?? null),
+            ], array_values((array) $this->input('staff', [])));
         }
 
         if ($this->has('payments')) {

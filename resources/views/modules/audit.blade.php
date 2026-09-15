@@ -1,12 +1,33 @@
+{{--
+    The trail — M13. Who changed what, and when, across the whole workshop.
 
-<header class="mb-6">
-    <h2 class="text-2xl font-bold tracking-tight text-foreground">History</h2>
-    <p class="mt-1.5 text-[0.9375rem] text-muted-foreground">
-        Who changed what, and when. This covers the records underneath the figures — your accounts,
-        parties, catalogue, people and settings — because those are the ones that can change quietly.
-        A posted transaction cannot be edited or deleted at all, so it needs no entry here.
+    **Read-mostly, so it opens on its list.** §2A.10, and the plainest case of it
+    after Stock: nothing is created here and nothing can be. Entries arrive
+    through model events on the Auditable trait, and the model refuses an UPDATE
+    and a DELETE — there is no POST, PATCH or DELETE anywhere in the API group,
+    so there is no verb that could put a claim on the trail or take one off it.
+    `mountWorkspace(..., { canCreate: false })` is what says so: the module lands
+    straight on the table and the workspace paints no "Show list" switch.
+
+    **There is no detail modal, and there must not be one.** An entry *is* its
+    detail — the changed fields are shown inline on the row that describes them.
+    A modal would put one click between somebody and the only thing they came to
+    read.
+
+    **The heading is the workspace's**, not this file's. The subtitle it paints
+    says what the screen is; the note below says what it deliberately leaves out,
+    which is a different question and the one this screen provokes most.
+--}}
+<div class="mx-auto max-w-[1280px]">
+
+    {{-- Level 1, and the only surface this module has. --}}
+    <div data-ws-list>
+
+    <p class="mb-6 max-w-[70ch] text-[0.9375rem] text-muted-foreground">
+        This covers the records underneath the figures — your accounts, parties, catalogue, people
+        and settings — because those are the ones that can change quietly. A posted transaction
+        cannot be edited or deleted at all, so it needs no entry here.
     </p>
-</header>
 
 <div class="surface mb-4 flex flex-wrap items-center gap-3 p-3">
     <div class="relative min-w-56 flex-1">
@@ -73,3 +94,5 @@
     </div>
 </div>
 
+    </div>
+</div>

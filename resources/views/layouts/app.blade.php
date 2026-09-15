@@ -9,6 +9,25 @@
 {{-- data-page selects which module resources/js/app.js boots. --}}
 <body class="h-full" data-page="@yield('page', 'dashboard')">
 
+    {{--
+        The global activity bar.
+
+        A body child above everything, so it reports a request made from a
+        module, from a drawer over it and from a confirm over that — all three
+        of which can be waiting on the server, and none of which could carry an
+        indicator that survives being closed.
+
+        Empty markup on purpose: it is driven entirely by resources/js/loader.js,
+        from the request counter inside `auth.call()`. Nothing here decides when
+        it is up, because nothing at a call site should have to.
+
+        `hidden` while idle, so it is out of the accessibility tree rather than
+        being a progressbar permanently reading nought.
+    --}}
+    <div id="global-loader" class="global-loader" role="progressbar" aria-label="Loading" hidden>
+        <span class="global-loader-fill"></span>
+    </div>
+
     {{-- The chrome, mounted once. Nothing below ever replaces it. --}}
     @include('partials.topbar')
 
@@ -26,6 +45,11 @@
         node.
     --}}
     @include('partials.confirm-modal')
+
+    {{-- Level 2, mounted once for the same reason the confirm modal is: it is
+         opened from the topbar, which never unmounts, so it belongs to the
+         layout rather than to whichever module happens to be open. --}}
+    @include('partials.security-drawer')
 
     {{--
         The workshop's own copy of an invoice, waiting to be printed.
@@ -48,6 +72,18 @@
     <div id="invoice-print" role="document" aria-hidden="true">
         @include('partials.invoice-document')
     </div>
+
+    {{-- Level 2, and a body child for the same reason the sheet above is one:
+         it borrows that single node while somebody reads the invoice on screen,
+         and a drawer declared inside a module would carry the document off the
+         page when the shell detached that module. See the partial. --}}
+    @include('partials.invoice-preview')
+
+    {{-- Level 3, over the preview or over a module's own drawer — and in the
+         layout for the same reason both of those are: it is opened from Sales
+         and from Jobs, and a dialog declared inside either would not be in the
+         page while the other was open. See the partial. --}}
+    @include('partials.invoice-share-modal')
 
     <div id="toast-host" class="toast-host" aria-live="polite"></div>
 

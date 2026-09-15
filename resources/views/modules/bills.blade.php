@@ -1,203 +1,245 @@
+{{--
+    Expenses — what it costs the workshop to be open.
 
-<header class="mb-6 flex flex-wrap items-start justify-between gap-4">
-    <div>
-        <h2 class="text-2xl font-bold tracking-tight text-foreground">Bills</h2>
-        <p class="mt-1.5 text-[0.9375rem] text-muted-foreground">
-            What was sold, what was bought and what is still owed on each. Tax follows the item's HSN code and
-            the two state codes; cost follows the shelf at the moment of sale.
-        </p>
-    </div>
+    ## What this module stopped being
 
-    {{-- Straight to the counter — M20. The chooser this replaced asked two
-         questions before offering a form, and the second one ("how would you
-         like to enter it?") had exactly one live answer. The kind is now the
-         first thing on the counter itself, where it can be changed without
-         starting again. --}}
-    <div class="flex flex-wrap gap-2">
-        <a href="{{ route('bills.create') }}" class="btn btn-primary hidden" data-new-bill
-           data-requires-permission="WRITE:TRANSACTIONS">
-            <x-icon name="plus" :size="17" />
-            New bill
-        </a>
+    It was "Bills": a transaction list spanning sales, purchases, expenses and
+    both kinds of note, with the expense form tucked behind a button on it. Every
+    part of that list is now somewhere better — Sales lists invoices and credit
+    notes, Purchase lists bills and debit notes, and Insights' Day Book lists
+    every posted document including the journals neither of those shows — so
+    rebuilding it here would be three screens answering one question (§5.1).
 
-        {{-- An expense is a different kind of money — what it costs to be open
-             rather than what was bought to sell — so it keeps its own small
-             form rather than a place on the counter. --}}
-        <button type="button" class="btn btn-secondary hidden" data-new-expense
-                data-requires-permission="WRITE:TRANSACTIONS">
-            <x-icon name="credit-card" :size="17" />
-            Expense
-        </button>
-    </div>
-</header>
+    What was only ever here is **writing an expense**: `POST
+    /transactions/expense` has exactly one caller in the whole front end and it
+    is this module. So that is what the module is now, and the list behind "Show
+    list" is expenses and nothing else.
 
-<div class="surface mb-4 flex flex-wrap items-center gap-3 p-3">
-    <div class="search-pill min-w-56 flex-1">
-        <x-icon name="search" :size="16" />
-        <input type="search" id="filter-search" class="w-full bg-transparent text-sm outline-none"
-               placeholder="Invoice number, customer or note…" aria-label="Search bills">
-    </div>
+    The registry key stays `bills`, because it is the module's address — the
+    fragment route, the shell's lazy-import table and the `#bills` URL — and
+    renaming an address to match a label is churn that breaks bookmarks. The
+    *card* says Expenses, which is what a workshop is looking for.
 
-    <select id="filter-type" class="field-input w-auto min-w-44" aria-label="Filter by kind">
-        <option value="">Sales, purchases and expenses</option>
-        <option value="sale">Sales</option>
-        <option value="purchase">Purchases</option>
-        <option value="expense">Expenses</option>
-        <option value="sales_return">Credit notes</option>
-        <option value="purchase_return">Debit notes</option>
-    </select>
+    ## Why the account is a filter and not a column
 
-    {{-- §23's status column, as a filter. Derived on the fly from the total, the
-         document's own payments and the receipts allocated to it — see M16 —
-         which is why it is a server-side filter and not something applied to the
-         page after it arrives. --}}
-    <select id="filter-payment" class="field-input w-auto min-w-40" aria-label="Filter by payment">
-        <option value="">Any payment status</option>
-        @foreach (\App\Enums\PaymentStatus::cases() as $status)
-            <option value="{{ $status->value }}">{{ $status->label() }}</option>
-        @endforeach
-    </select>
+    Which expense account a cost was booked to lives in the ledger entries, and a
+    listing deliberately does not load them: a page of forty documents would pull
+    every posting of every one, which is the classic listing-page mistake the
+    transaction repository already refuses to make. So the account narrows the
+    list *server-side* (`account_id`, which the index request has always
+    accepted) and is read on the document itself in the drawer. The column that
+    is here instead is the note — "March electricity" — which is what somebody
+    scanning for a cost actually recognises.
 
-    <select id="filter-status" class="field-input w-auto min-w-36" aria-label="Filter by state">
-        <option value="">Any state</option>
-        @foreach (\App\Enums\TransactionStatus::cases() as $status)
-            <option value="{{ $status->value }}">{{ $status->label() }}</option>
-        @endforeach
-    </select>
+    ## The counter link that used to be here
 
-    <label class="flex items-center gap-2 text-[0.8125rem] text-muted-foreground">
-        From
-        <input type="date" id="filter-from" class="field-input w-auto" aria-label="From date">
-    </label>
+    `/bills/new` was the one screen that could raise a **workshop bill** — a
+    job's parts and labour posted through `{job}/bill`, which Sales cannot do
+    because Sales posts `/transactions/sale`. C4 moved that path onto the Jobs
+    card, where the invoice is raised from the job it came off, and the counter
+    was retired with the route. Nothing here links to it because there is
+    nothing to link to.
+--}}
+<div class="mx-auto max-w-[1080px]">
 
-    <label class="flex items-center gap-2 text-[0.8125rem] text-muted-foreground">
-        To
-        <input type="date" id="filter-to" class="field-input w-auto" aria-label="To date">
-    </label>
+    {{-- Level 1, form mode — where the module lands (§2A.1). --}}
+    <div data-ws-form>
 
-    <button type="button" id="filter-outstanding" class="pill" aria-pressed="false">
-        Only what is owed
-    </button>
+        <form id="expense-form" novalidate class="space-y-4">
 
-    <button type="button" id="clear-filters" class="btn btn-ghost btn-sm">Clear</button>
-</div>
-
-<div class="surface overflow-hidden">
-    <div class="overflow-x-auto">
-        {{-- The brief's §23 columns. Total, Paid and Due were impossible before
-             M16 gave a receipt a link to the invoice it settled — the ledger
-             could say what a customer owed in total but not which bill it was
-             left on. --}}
-        <table class="w-full min-w-[900px] border-collapse">
-            <thead>
-                <tr class="border-b border-border bg-secondary/40 text-left text-xs uppercase tracking-wide
-                           text-muted-foreground">
-                    <th class="px-4 py-3 font-semibold">Invoice</th>
-                    <th class="px-4 py-3 font-semibold">Party</th>
-                    <th class="px-4 py-3 font-semibold">Date</th>
-                    <th class="px-4 py-3 text-right font-semibold">Items</th>
-                    <th class="px-4 py-3 text-right font-semibold">Total</th>
-                    <th class="px-4 py-3 text-right font-semibold">Paid</th>
-                    <th class="px-4 py-3 text-right font-semibold">Due</th>
-                    <th class="px-4 py-3 font-semibold">Status</th>
-                </tr>
-            </thead>
-            <tbody id="bills-body"></tbody>
-        </table>
-    </div>
-
-    <div class="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3">
-        <p id="bills-summary" class="text-[0.8125rem] text-muted-foreground"></p>
-
-        <div class="flex gap-2">
-            <button type="button" id="page-prev" class="btn btn-secondary btn-sm" disabled>Previous</button>
-            <button type="button" id="page-next" class="btn btn-secondary btn-sm" disabled>Next</button>
-        </div>
-    </div>
-</div>
-
-{{-- The bill, opened over the list. Shows the document — items, tax, totals —
-     and, for a sale, what it made. The margin is derived on read from the stock
-     movement behind each line, so it is answerable long after the bill was
-     posted, which is when "why is this month's margin down" is actually asked. --}}
-<div id="bill-modal" class="modal-backdrop hidden" data-modal role="dialog" aria-modal="true"
-     aria-labelledby="bill-modal-title">
-    <div class="modal-panel max-w-4xl">
-        <header class="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
-            <div>
-                <h2 class="text-base font-bold text-foreground" id="bill-modal-title">Bill</h2>
-                <p class="mt-0.5 text-[0.8125rem] text-muted-foreground" id="bill-modal-subtitle"></p>
-            </div>
-            <button type="button" class="btn btn-ghost btn-icon" data-modal-close aria-label="Close">
-                <x-icon name="x" :size="18" />
-            </button>
-        </header>
-
-        <div class="max-h-[70vh] overflow-y-auto" id="bill-modal-body"></div>
-    </div>
-</div>
-
-{{-- An expense is a different kind of money and gets a different form: it costs
-     the workshop to be open, and nothing on it is bought to sell. --}}
-<div id="expense-modal" class="modal-backdrop hidden" data-modal role="dialog" aria-modal="true"
-     aria-labelledby="expense-title">
-    <div class="modal-panel max-w-2xl">
-        <form id="expense-form" novalidate>
-            <header class="border-b border-border px-5 py-4">
-                <h2 class="text-base font-bold text-foreground" id="expense-title">New expense</h2>
-                <p class="mt-0.5 text-[0.8125rem] text-muted-foreground">
-                    Rent, electricity, a courier, the tea. Anything bought to sell or to fit is a purchase.
+            <section class="surface p-5 sm:p-6">
+                <h3 class="text-sm font-bold text-foreground">What was spent</h3>
+                <p class="mt-1 text-[0.8125rem] text-muted-foreground">
+                    Rent, electricity, a courier, the tea. Anything bought to sell or to fit is a purchase,
+                    and belongs on the Purchase card — that is the line a P&amp;L needs kept.
                 </p>
-            </header>
 
-            <div class="max-h-[60vh] space-y-4 overflow-y-auto px-5 py-4">
-                <div class="grid gap-4 sm:grid-cols-2">
-                    <label class="field">
-                        <span class="field-label">Date</span>
-                        <input type="date" name="date" class="field-input" required>
-                        <span class="field-error" data-error-for="date"></span>
-                    </label>
+                <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                    <div>
+                        <label for="expense-date" class="field-label">Date</label>
+                        <input id="expense-date" name="date" type="date" class="field-input" required>
+                        <p class="field-error hidden" data-error-for="date"></p>
+                    </div>
 
-                    <label class="field">
-                        <span class="field-label">Account</span>
-                        <select name="account_id" class="field-input">
+                    {{-- Defaulted to Misc Expense, and that is a real answer
+                         rather than a placeholder: "we spent money and I do not
+                         want to categorise it right now" is a state the template
+                         accepts on purpose, because refusing the entry over it
+                         would push somebody into not recording the spend. --}}
+                    <div>
+                        <label for="expense-account" class="field-label">What it was for</label>
+                        <select id="expense-account" name="account_id" class="field-input">
                             <option value="">Misc Expense</option>
                         </select>
-                        <span class="field-error" data-error-for="account_id"></span>
-                    </label>
+                        <p class="mt-1.5 text-xs text-muted-foreground">
+                            Any expense account on your chart. Rent and Electricity are added from Accounting.
+                        </p>
+                        <p class="field-error hidden" data-error-for="account_id"></p>
+                    </div>
                 </div>
 
-                <div class="grid gap-4 sm:grid-cols-2">
-                    <label class="field">
-                        <span class="field-label">Amount before tax</span>
-                        <input type="text" name="amount" class="field-input font-mono" inputmode="decimal" required>
-                        <span class="field-error" data-error-for="amount"></span>
-                    </label>
+                <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                    <div>
+                        <label for="expense-amount" class="field-label">Amount before tax</label>
+                        <input id="expense-amount" name="amount" type="text" inputmode="decimal"
+                               class="field-input font-mono" required autocomplete="off" placeholder="0.00">
+                        <p class="field-error hidden" data-error-for="amount"></p>
+                    </div>
 
-                    <label class="field">
-                        <span class="field-label">Claimable GST</span>
-                        <input type="text" name="gst_amount" class="field-input font-mono" inputmode="decimal"
+                    {{-- An amount and not a rate, because that is what is printed
+                         on the receipt in the person's hand. Blank is meaningful:
+                         where none is claimable the whole amount is the expense,
+                         which is the correct treatment — unclaimable tax really
+                         is part of what the thing cost. --}}
+                    <div>
+                        <label for="expense-gst" class="field-label">
+                            Claimable GST <span class="font-normal text-muted-foreground">(optional)</span>
+                        </label>
+                        <input id="expense-gst" name="gst_amount" type="text" inputmode="decimal"
+                               class="field-input font-mono" autocomplete="off"
                                placeholder="Leave blank where none is claimable">
-                        <span class="field-error" data-error-for="gst_amount"></span>
-                    </label>
+                        <p class="field-error hidden" data-error-for="gst_amount"></p>
+                    </div>
                 </div>
 
-                <label class="field">
-                    <span class="field-label">Notes</span>
-                    <input type="text" name="notes" class="field-input" maxlength="500"
-                           placeholder="March electricity">
-                    <span class="field-error" data-error-for="notes"></span>
-                </label>
+                <div class="mt-4">
+                    <label for="expense-notes" class="field-label">Note</label>
+                    <input id="expense-notes" name="notes" type="text" class="field-input" maxlength="500"
+                           autocomplete="off" placeholder="March electricity">
+                    <p class="mt-1.5 text-xs text-muted-foreground">
+                        What this was, in the words you would use looking for it later. It is the column the
+                        list is scanned by.
+                    </p>
+                    <p class="field-error hidden" data-error-for="notes"></p>
+                </div>
 
-                <div class="border-t border-border pt-4" id="expense-payments-host"></div>
-            </div>
+                {{-- The same payment rows the counter uses. An expense *is* its
+                     split — take the money away and there is no event left — so
+                     "On credit" is not offered here, which is what the
+                     component's `canCredit` default already decides. --}}
+                <div class="mt-4 border-t border-border pt-4" data-expense-payments></div>
 
-            <footer class="flex items-center justify-end gap-2 border-t border-border px-5 py-4">
-                <button type="button" class="btn btn-ghost" data-modal-close>Cancel</button>
+                <p class="field-error hidden" data-error-for="payments"></p>
+            </section>
+
+            {{-- Absent rather than blanked for a reader: a disabled Save asks
+                 somebody to work out for themselves why it will not press. The
+                 workspace additionally lands such a caller on the list, so this
+                 surface is never the one they are looking at. --}}
+            <div class="flex items-center justify-end gap-3" data-requires-permission="WRITE:TRANSACTIONS">
                 <button type="submit" class="btn btn-primary">Record the expense</button>
-            </footer>
+            </div>
         </form>
     </div>
+
+    {{-- Level 1, list mode. Exactly one of the two is in the DOM at a time — the
+         other is held detached by the workspace, so a half-typed expense and the
+         list's filters both survive every trip between them (§2A.2, §2A.6). --}}
+    <div data-ws-list>
+
+        <div class="surface mb-4 flex flex-wrap items-center gap-3 p-3">
+            <div class="search-pill min-w-56 flex-1">
+                <x-icon name="search" :size="16" />
+                <input type="search" data-filter-search class="w-full bg-transparent text-sm outline-none"
+                       placeholder="Voucher number or note…" aria-label="Search expenses">
+            </div>
+
+            {{-- Server-side, against the ledger. See the note at the top of this
+                 file for why this is a filter and not a column. --}}
+            <select data-filter-account class="field-input w-auto min-w-48" aria-label="Filter by account">
+                <option value="">Every expense account</option>
+            </select>
+
+            <select data-filter-status class="field-input w-auto min-w-36" aria-label="Filter by state">
+                <option value="">Any state</option>
+                @foreach (\App\Enums\TransactionStatus::cases() as $status)
+                    <option value="{{ $status->value }}">{{ $status->label() }}</option>
+                @endforeach
+            </select>
+
+            <label class="flex items-center gap-2 text-[0.8125rem] text-muted-foreground">
+                From
+                <input type="date" data-filter-from class="field-input w-auto" aria-label="From date">
+            </label>
+
+            <label class="flex items-center gap-2 text-[0.8125rem] text-muted-foreground">
+                To
+                <input type="date" data-filter-to class="field-input w-auto" aria-label="To date">
+            </label>
+
+            <button type="button" data-clear-filters class="btn btn-ghost btn-sm">Clear</button>
+        </div>
+
+        <div class="surface overflow-hidden">
+            <div class="overflow-x-auto">
+                <table class="w-full min-w-[760px] border-collapse">
+                    <thead>
+                        <tr class="border-b border-border bg-secondary/40 text-left text-xs uppercase
+                                   tracking-wide text-muted-foreground">
+                            <th class="px-4 py-3 font-semibold">Voucher</th>
+                            <th class="px-4 py-3 font-semibold">Date</th>
+                            <th class="px-4 py-3 font-semibold">What it was for</th>
+                            <th class="px-4 py-3 font-semibold">Paid by</th>
+                            <th class="px-4 py-3 text-right font-semibold">Amount</th>
+                            <th class="px-4 py-3 font-semibold">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody data-expense-body></tbody>
+                </table>
+            </div>
+
+            <div class="flex flex-wrap items-center justify-between gap-3 border-t border-border px-4 py-3">
+                <p data-expense-summary class="text-[0.8125rem] text-muted-foreground"></p>
+
+                <div class="flex gap-2">
+                    <button type="button" data-page-prev class="btn btn-secondary btn-sm" disabled>Previous</button>
+                    <button type="button" data-page-next class="btn btn-secondary btn-sm" disabled>Next</button>
+                </div>
+            </div>
+        </div>
+
+    </div>{{-- /data-ws-list --}}
 </div>
 
+{{--
+    One expense, read without leaving the list — level 2.
 
+    A drawer rather than a modal, for the reason every drawer here is one: what
+    this cost is read while thinking about the row above it, and losing the list
+    to look is what makes people stop looking.
+
+    There is no edit and no correct. A posted document is immutable, and an
+    expense has no `revise` path — that is for bills, whose replacement has to be
+    re-priced and re-taxed. What an expense has is **reverse**, which posts the
+    mirror entry and leaves both documents on the record.
+--}}
+<div id="expense-drawer" class="drawer-backdrop hidden" data-modal role="dialog" aria-modal="true"
+     aria-labelledby="expense-drawer-title">
+    <div class="drawer-panel max-w-[560px]">
+        <div class="border-b border-muted px-6 py-4">
+            <div class="flex items-start justify-between gap-2">
+                <div class="flex min-w-0 items-center gap-2.5">
+                    <span class="grid size-9 shrink-0 place-items-center rounded-[10px] bg-violet-50 text-violet-600">
+                        <x-icon name="credit-card" :size="16" />
+                    </span>
+                    <div class="min-w-0">
+                        <h3 id="expense-drawer-title"
+                            class="truncate text-[15.5px] font-bold leading-tight text-foreground"></h3>
+                        <p data-drawer-subtitle class="truncate text-xs text-muted-foreground"></p>
+                    </div>
+                </div>
+
+                <div class="flex shrink-0 items-center gap-2">
+                    <span data-drawer-status></span>
+                    <button type="button" class="btn btn-ghost btn-icon" data-modal-close aria-label="Close">
+                        <x-icon name="x" :size="16" />
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex-1 overflow-y-auto px-6 py-5" data-drawer-body></div>
+
+        <div class="flex flex-wrap gap-2 border-t border-muted px-6 py-4" data-drawer-actions></div>
+    </div>
+</div>

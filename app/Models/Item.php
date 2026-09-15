@@ -45,6 +45,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int|null $brand_id
  * @property string|null $hsn_sac
  * @property string $gst_rate
+ * @property bool $price_includes_tax
  * @property UnitDefinition $base_uom
  * @property bool $is_stock
  * @property bool $is_draft
@@ -54,7 +55,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  */
 #[Fillable([
     'tenant_id', 'name', 'code', 'category_id', 'brand_id', 'hsn_sac', 'gst_rate',
-    'base_uom', 'is_stock', 'is_draft', 'description', 'image_path', 'is_active',
+    'price_includes_tax', 'base_uom', 'is_stock', 'is_draft', 'description', 'image_path', 'is_active',
 ])]
 class Item extends Model
 {
@@ -70,7 +71,10 @@ class Item extends Model
      * `gst_rate` is the one to watch. It is copied onto every bill line at the
      * moment of posting, so changing it does not restate a single existing
      * invoice — which is correct, and is also exactly why a reader comparing two
-     * quarters needs to know it moved.
+     * quarters needs to know it moved. `price_includes_tax` is audited beside it
+     * for the same reason and a sharper one: flipping it does not change the
+     * price on the shelf, it changes what that price *means*, and a ₹118 part
+     * that starts being billed at ₹139.24 has an explanation somebody will want.
      *
      * @return array<int, string>
      */
@@ -78,7 +82,7 @@ class Item extends Model
     {
         return [
             'name', 'code', 'category_id', 'brand_id', 'hsn_sac', 'gst_rate',
-            'base_uom', 'is_stock', 'is_draft', 'description', 'image_path', 'is_active',
+            'price_includes_tax', 'base_uom', 'is_stock', 'is_draft', 'description', 'image_path', 'is_active',
         ];
     }
 
@@ -99,6 +103,7 @@ class Item extends Model
             // call site reading a unit had to change. See UnitCast.
             'base_uom' => UnitCast::class,
             'gst_rate' => 'decimal:2',
+            'price_includes_tax' => 'boolean',
             'is_stock' => 'boolean',
             'is_draft' => 'boolean',
             'is_active' => 'boolean',

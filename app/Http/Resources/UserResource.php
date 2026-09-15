@@ -46,6 +46,19 @@ class UserResource extends JsonResource
                     'name' => $this->tenant->name,
                     'slug' => $this->tenant->slug,
                     'status' => $this->tenant->status->value,
+                    /*
+                    | Which module cards the workshop wants at the top of its
+                    | home screen.
+                    |
+                    | Here rather than only on /workspace, and that is the point
+                    | of it: the dashboard already fetches /auth/me before it
+                    | paints anything, so the favourites arrive with the session
+                    | and cost no second request. Reading them needs no grant —
+                    | a clerk holds no READ:WORKSPACE and still has to see the
+                    | home screen their owner arranged. Writing them is
+                    | UPDATE:WORKSPACE, on the route.
+                    */
+                    'favourite_modules' => $this->tenant->favouriteModules(),
                 ]
             ),
             // The password hash is excluded at the model level (#[Hidden]) and

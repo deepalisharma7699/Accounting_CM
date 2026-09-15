@@ -10,13 +10,17 @@ return [
     | When enabled, POST /api/v1/auth/register provisions a brand new tenant
     | and makes the registrant its owner — self-serve workshop onboarding.
     |
-    | Turn this off for sales-led onboarding: registration then returns 403 and
+    | It is off by default: onboarding is sales-led, so registration returns
+    | 403, /register answers 404, the sign-in modal offers no sign-up link, and
     | tenants are created only by a platform super-admin via POST /v1/tenants,
-    | who also creates the owner account.
+    | who also creates the owner account. Turning it back on is one env var,
+    | and it re-opens all three at once — the endpoint, the page and the link
+    | are deliberately one switch, because a visible form whose endpoint
+    | refuses is worse than no form.
     |
     */
 
-    'allow_public_signup' => (bool) env('TENANCY_ALLOW_PUBLIC_SIGNUP', true),
+    'allow_public_signup' => (bool) env('TENANCY_ALLOW_PUBLIC_SIGNUP', false),
 
     /*
     |--------------------------------------------------------------------------

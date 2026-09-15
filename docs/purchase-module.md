@@ -17,7 +17,7 @@ registry — and it added **zero endpoints, zero migrations and zero permissions
 ```
 Purchase card
    └─ level 1  workspace.js              §2A: form ⇄ list, one switch control
-        ├─ form   components/bill-document.js   the document, shared with /bills/new
+        ├─ form   components/bill-document.js   the document, shared with Sales and Jobs
         │           ├─ party-picker  + quick-party    the supplier, created inline
         │           ├─ item-picker   + quick-item     the goods, created inline
         │           └─ payment-rows                   what was paid at the counter
@@ -40,7 +40,7 @@ eventually disagree about what a bill comes to.
 
 ## The decisions
 
-### Purchase is its own card, and Bills narrowed to sales and expenses
+### Purchase is its own card, and Bills narrowed until nothing was left of it
 
 The registry used to argue for one Bills module covering everything, on the
 grounds that a screen making somebody "choose a transaction type before offering
@@ -51,6 +51,10 @@ module would have to open by asking sale-or-purchase — which is exactly the
 ledger-shaped screen the original objection was against. One card per document
 kind lands straight on the right form, with the right counterparty, and nothing
 to choose first.
+
+Purchases left Bills here, sales left it when Sales was converted, and C2 finished
+the argument: what was left was the **expense**, which is the one thing that was
+only ever there. The card is called Expenses now.
 
 ### The rate box starts empty on a purchase
 
@@ -82,6 +86,23 @@ comes from the supplier's invoice.
 An item's `purchase_price`, typed when the product was created, is not that rate
 and is not stored as one. It is a reference figure, used as the unit cost of the
 opening-stock adjustment if one is recorded, and nothing reads it afterwards.
+
+### A supplier's rate may be quoted with the tax already in it
+
+Beside the rate box is a toggle reading `+GST` or `incl`, prefilled from the
+item and flippable per line. Where it says `incl`, the tax is **extracted** from
+the figure typed rather than added to it, and the stock arrives at what is left.
+
+This is the same unrecoverable-costing problem as the section above, arriving
+from the other direction. A supplier who invoices at printed prices was being
+entered at the inclusive figure with no way to say so, which carried the shelf
+at a value inflated by the whole rate — ₹826 a kilo of copper booked as ₹826
+rather than ₹700, permanently, with every later margin wrong by the difference
+and nothing on any screen saying it had happened.
+
+`GstRate::baseWithin()` is the one place that division lives. The full account —
+where the flag is stored, why the line keeps its own copy, and what a credit note
+does with it — is in [inclusive-pricing.md](inclusive-pricing.md).
 
 ### Paying and returning are states of the drawer, not dialogs over it
 
@@ -235,7 +256,7 @@ movement whose type already says everything. A stock card reads
 
 ### A posted bill stays on the form
 
-§2A.8. The counter at `/bills/new` exists to write one bill and hands the
+§2A.8. The counter that used to live at `/bills/new` existed to write one bill and handed the
 operator to a list afterwards. A clerk working through the morning's deliveries
 writes six in a row, so the document is emptied for the next entry, focus returns
 to the supplier, and the new row is *flagged* rather than shown — the flash

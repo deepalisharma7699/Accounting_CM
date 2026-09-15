@@ -50,13 +50,41 @@ interface TransactionStaffRepositoryInterface
     /**
      * What one person got through — M22.
      *
-     * Two figures, and both were asked for: how many invoices name them, and
-     * what those invoices came to. Reversed documents are excluded — a repair
+     * How many invoices name them, what those invoices came to, and which
+     * trades they were credited in. Reversed documents are excluded — a repair
      * that was billed and then cancelled is not work anybody did.
      *
-     * @return array{job_count: int, invoice_value: string}
+     * **An invoice counts once**, however many trades on it are theirs: the
+     * count is of motors that went out, not of boxes that were ticked.
+     *
+     * @return array{job_count: int, invoice_value: string, trades: array<int, array{designation: string, jobs: int}>}
      */
     public function workSummaryFor(int $employeeId, ?string $from = null, ?string $to = null): array;
+
+    /**
+     * The same summary for a list of people, in one pass.
+     *
+     * What the Insights people table reads, in place of a query per person.
+     * Keyed by employee id, with an entry for **every** id asked about — a
+     * person with no invoices against them is a row of zeroes, not a missing
+     * key, because that is a real answer and the caller is painting a table.
+     *
+     * @param  array<int, int>  $employeeIds
+     * @return array<int, array{job_count: int, invoice_value: string, trades: array<int, array{designation: string, jobs: int}>}>
+     */
+    public function workSummaryForMany(array $employeeIds, ?string $from = null, ?string $to = null): array;
+
+    /**
+     * How much of the period's invoicing carries a name at all.
+     *
+     * The figure that says whether the table above it can be read as a picture
+     * of the workshop or only of the documents somebody remembered to fill in.
+     * Both halves come from one place so the ratio cannot be struck between two
+     * differently-filtered sets.
+     *
+     * @return array{credited_invoices: int, credited_value: string, invoices: int}
+     */
+    public function attributionCoverage(?string $from, ?string $to): array;
 
     /**
      * The invoices behind those figures, newest first.

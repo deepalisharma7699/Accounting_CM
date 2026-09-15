@@ -2,16 +2,21 @@
 
 Who changed what, when — on the records underneath the figures.
 
-**Status:** ✅ done — **card switched off**, awaiting §2A conversion
+**Status:** ✅ done — **card on** since 7 September 2026, §2A.10 read-mostly
 **Depends on:** M2 (tenancy), and everything that owns master data
 **Test:** `php artisan test --filter='Audit'`
 
 > Items and the counterparty modules each read `/audit-logs` for **one record**
-> in their drawer's Activity tab, so per-record history is reachable. The trail
-> *across* the workshop — "what did this user do last Tuesday" — is not, and that
-> is the question this module exists to answer. It is also the whole safeguard on
-> `PATCH /transactions/{id}/staff`, the one write that edits a posted document.
-> See [hidden-modules.md](hidden-modules.md).
+> in their drawer's Activity tab. This module answers the opposite question — the
+> trail *across* the workshop, "what did this user do last Tuesday" — and the two
+> must not become one renderer of the other. It is also the whole safeguard on
+> `PATCH /transactions/{id}/staff`, the one write in this application that edits
+> a posted document, which is why it went on ahead of the rest of C7.
+>
+> **Read-mostly, and the strictest case of it.** `canCreate: false` here is not a
+> permission decision somebody could widen: there is no POST, PATCH or DELETE
+> anywhere in the API group and there cannot be — entries arrive through model
+> events, and the model refuses an UPDATE and a DELETE.
 
 ---
 
@@ -156,6 +161,22 @@ The write is wrapped in `TenantContext::runFor()` for the length of one insert,
 so `BelongsToTenant`'s cross-tenant guard is *satisfied* rather than worked
 around — that guard exists so a stray mass-assignment cannot plant a row in
 another workshop's books, and it should keep meaning exactly what it says.
+
+### A sign-in device reads its workshop through its owner
+
+`Passkey` is the one audited model with no `tenant_id` column of its own. A
+passkey belongs to a *person*, and the person belongs to a workshop, so
+`Passkey::auditTenantId()` reads through the user rather than off the row.
+
+Without that override the default returns null, which is not "unaudited" — it is
+worse. The entry is written, to no workshop, where the owner who needs it cannot
+see it. Null stays null for a platform administrator, who is in no workshop, and
+that is the correct answer for the same reason it is on their own user record.
+
+Enrolling a device and removing one are on the trail because they are the two
+acts that change who can open an account and leave no other mark: the user's row
+is untouched either way. The stored public key is deliberately not in the
+snapshot — a blob nobody can read is not evidence of anything.
 
 ### The chart provisioner is suppressed
 

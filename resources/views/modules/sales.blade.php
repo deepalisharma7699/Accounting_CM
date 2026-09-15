@@ -8,7 +8,7 @@
     per document kind lands straight on the right form.
 
     The form is not written here. It is `partials/bill-document.blade.php`, the
-    same document the counter at /bills/new and the Purchase module raise, and it
+    same document the Purchase and Jobs modules raise, and it
     must never be copied: the fields, the error slots and the `data-` hooks are a
     contract with `components/bill-document.js`, and a second copy is a second
     place for that contract to go stale.
@@ -35,7 +35,7 @@
             Correcting an invoice that is already in the books.
 
             Here rather than in the shared partial, for the same reason it is in
-            purchase.blade.php: the counter at /bills/new raises new documents
+            purchase.blade.php: the Jobs card raises new documents
             and has nothing to correct. The partial stays exactly the document
             all three screens share.
 
@@ -277,28 +277,6 @@
             <button type="button" class="btn btn-ghost" data-modal-close>Cancel</button>
             <button type="button" class="btn btn-primary" data-staff-save>Save</button>
         </footer>
-
-    </div>
-</div>
-
-<div id="sales-share-modal" class="modal-backdrop hidden" data-modal role="dialog" aria-modal="true"
-     aria-labelledby="sales-share-title" style="z-index: 55">
-    <div class="modal-panel max-w-lg">
-
-        <header class="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
-            <div>
-                <h2 class="text-base font-bold text-foreground" id="sales-share-title">Share this invoice</h2>
-                <p class="mt-0.5 text-[0.8125rem] text-muted-foreground" data-share-subtitle></p>
-            </div>
-
-            <button type="button" class="btn btn-ghost btn-icon" data-modal-close aria-label="Close">
-                <x-icon name="x" :size="18" />
-            </button>
-        </header>
-
-        <div class="px-5 py-4" data-share-body></div>
-
-        <footer class="flex flex-wrap gap-2 border-t border-border px-5 py-4" data-share-actions></footer>
 
     </div>
 </div>

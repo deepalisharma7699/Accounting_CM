@@ -218,6 +218,10 @@ class WorkspaceTest extends TestCase
     {
         $this->seedRoleCatalogue();
 
+        // Self-serve sign-up ships off; this test uses it only as the shortest
+        // route to a freshly provisioned workshop.
+        config()->set('tenancy.allow_public_signup', true);
+
         $this->postJson('/api/v1/auth/register', [
             'workshop_name' => 'Fresh Motors',
             'name' => 'New Owner',
@@ -272,6 +276,92 @@ class WorkspaceTest extends TestCase
             ->patchJson('/api/v1/workspace', ['timezone' => 'Mars/Olympus_Mons'])
             ->assertStatus(422)
             ->assertJsonStructure(['error' => ['details' => ['fields' => ['timezone']]]]);
+    }
+
+    /* ---------------------------------------------------------------------
+     | The rules
+     |
+     | Three settings the request has always accepted and no screen offered
+     | until C1. Each changes what the application refuses or how it reports,
+     | and what is asserted here is the round trip the settings form makes:
+     | PATCH, then read back what the next page load would show. The behaviour
+     | each one governs is covered where it happens — StockDisciplineTest,
+     | RoundOffTest and InsightTest.
+     |-------------------------------------------------------------------- */
+
+    #[Test]
+    public function an_owner_can_set_the_rules_that_govern_bills_and_stock(): void
+    {
+        $this->withHeaders($this->authHeader($this->owner))
+            ->patchJson('/api/v1/workspace', [
+                'payment_due_days' => 30,
+                'allow_negative_stock' => true,
+                'round_off_invoices' => true,
+            ])
+            ->assertOk()
+            ->assertJsonPath('data.settings.payment_due_days', 30)
+            ->assertJsonPath('data.settings.allow_negative_stock', true)
+            ->assertJsonPath('data.settings.round_off_invoices', true);
+
+        $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/workspace')
+            ->assertOk()
+            ->assertJsonPath('data.settings.payment_due_days', 30)
+            ->assertJsonPath('data.settings.allow_negative_stock', true)
+            ->assertJsonPath('data.settings.round_off_invoices', true);
+    }
+
+    /**
+     * Clearing the terms is a setting, not a missing value.
+     *
+     * Null means the workshop settles at the counter and wants no ageing
+     * measured against terms nobody agreed to — which is why the form sends an
+     * empty box as null and never as zero. Zero would be terms, and strict
+     * ones.
+     */
+    #[Test]
+    public function clearing_the_payment_terms_is_a_setting_rather_than_a_blank(): void
+    {
+        $this->withHeaders($this->authHeader($this->owner))
+            ->patchJson('/api/v1/workspace', ['payment_due_days' => 45])
+            ->assertOk()
+            ->assertJsonPath('data.settings.payment_due_days', 45);
+
+        $this->withHeaders($this->authHeader($this->owner))
+            ->patchJson('/api/v1/workspace', ['payment_due_days' => null])
+            ->assertOk()
+            ->assertJsonPath('data.settings.payment_due_days', null);
+
+        $this->assertNull($this->tenant->fresh()->payment_due_days);
+    }
+
+    #[Test]
+    public function it_rejects_payment_terms_beyond_the_accepted_range(): void
+    {
+        $this->withHeaders($this->authHeader($this->owner))
+            ->patchJson('/api/v1/workspace', ['payment_due_days' => 900])
+            ->assertStatus(422)
+            ->assertJsonStructure(['error' => ['details' => ['fields' => ['payment_due_days']]]]);
+    }
+
+    /**
+     * A reader may look and may not change.
+     *
+     * The settings form hides its save control for this caller, and that is
+     * presentation only: the grant is checked here too (CLAUDE.md §6.2).
+     */
+    #[Test]
+    public function a_reader_cannot_change_the_rules(): void
+    {
+        [, $reader] = $this->tenantWithUser([['READ', 'WORKSPACE']]);
+
+        $this->withHeaders($this->authHeader($reader))
+            ->getJson('/api/v1/workspace')
+            ->assertOk();
+
+        $this->withHeaders($this->authHeader($reader))
+            ->patchJson('/api/v1/workspace', ['allow_negative_stock' => true])
+            ->assertForbidden();
     }
 
     #[Test]

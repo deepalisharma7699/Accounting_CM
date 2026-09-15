@@ -6,7 +6,6 @@ use App\Enums\AccountType;
 use App\Enums\PartyRole;
 use App\Enums\PaymentStatus;
 use App\Enums\TenantStatus;
-use App\Enums\TransactionSource;
 use App\Enums\TransactionStatus;
 use App\Enums\TransactionType;
 use App\Enums\UserStatus;
@@ -43,7 +42,10 @@ use Tests\TestCase;
  *   is switched off in config/modules.php serves no fragment, but its markup is
  *   still shipped and still has to be right — deleting these assertions because
  *   a card is hidden would be losing the coverage rather than moving it.
- * - **The counter** at `/bills/new`, which is still a page of its own.
+ *
+ * There is no page shell left but the dashboard. The counter at `/bills/new` was
+ * the last one, and C4 retired it when the Jobs card took over raising a
+ * workshop bill.
  */
 class PagesRenderTest extends TestCase
 {
@@ -58,10 +60,11 @@ class PagesRenderTest extends TestCase
         $response = $this->get('/')->assertOk();
 
         // What a visitor came for: the trade, and how to reach the shop.
+        // Deeper coverage of the site itself is in tests/Feature/Site.
         $response->assertSee('Motor rewinding', escape: false)
-            ->assertSee('Submersible pump repairs', escape: false)
+            ->assertSee('Submersible &amp; openwell pumps', escape: false)
             ->assertSee('Visit the shop', escape: false)
-            ->assertSee('data-page="welcome"', escape: false);
+            ->assertSee('data-page="site"', escape: false);
 
         // And the way in, in a modal on the same page rather than on a screen
         // of its own. The ids are what initLogin() binds to, so they are
@@ -98,6 +101,8 @@ class PagesRenderTest extends TestCase
 
     public function test_the_register_page_renders_the_workshop_and_owner_fields(): void
     {
+        config()->set('tenancy.allow_public_signup', true);
+
         $response = $this->get('/register')->assertOk();
 
         // Sign-up provisions a workshop and its owner together, so the form
@@ -121,11 +126,13 @@ class PagesRenderTest extends TestCase
 
     public function test_the_sign_in_modal_only_offers_sign_up_when_it_is_enabled(): void
     {
-        $this->get('/')->assertOk()->assertSee('Create your workshop', escape: false);
-
-        config()->set('tenancy.allow_public_signup', false);
-
+        // Onboarding is sales-led, so the shipped default offers no sign-up
+        // link at all — the modal signs people in and does nothing else.
         $this->get('/')->assertOk()->assertDontSee('Create your workshop', escape: false);
+
+        config()->set('tenancy.allow_public_signup', true);
+
+        $this->get('/')->assertOk()->assertSee('Create your workshop', escape: false);
     }
 
     /* ---------------------------------------------------------------------
@@ -221,6 +228,100 @@ class PagesRenderTest extends TestCase
     }
 
     /**
+     * The favourites row is declared empty and holds no card of its own.
+     *
+     * The whole of it is the point: the section is markup with nothing in it, and
+     * resources/js/favourites.js *moves* card nodes into it. The assertion that
+     * matters is the one above — exactly one card per enabled module — and it is
+     * what a second copy rendered here would break. So this checks the host is
+     * present and that nothing has quietly started rendering cards into it.
+     *
+     * Nothing user-specific is in here either. Which cards are starred belongs to
+     * the workshop and arrives in /auth/me; this shell is public, and a workshop's
+     * arrangement baked into it would be one anybody could fetch.
+     */
+    public function test_the_dashboard_declares_an_empty_favourites_row(): void
+    {
+        $content = $this->get('/dashboard')->assertOk()->getContent();
+
+        $this->assertStringContainsString('data-favourites', $content);
+        $this->assertStringContainsString('data-favourites-grid', $content);
+
+        // One star per card, gated on the grant that may rearrange the screen.
+        $this->assertSame(
+            count(Modules::all()),
+            substr_count($content, 'data-star='),
+            'Every card carries exactly one star — no more, and none missing.',
+        );
+
+        // The grid is declared and closed with nothing between the two.
+        $this->assertMatchesRegularExpression(
+            '/data-favourites-grid><\/div>/',
+            preg_replace('/\s+/', '', $content),
+            'The favourites grid is populated by moving cards into it, never by rendering them twice.',
+        );
+    }
+
+    /**
+     * Home opens on a skeleton, and the skeleton is in the document.
+     *
+     * Every card starts hidden and is revealed only once /auth/me confirms the
+     * grant behind it, so for one round trip home is band headings over nothing.
+     * The fix only works if the loading state is the markup's own: anything
+     * JavaScript switches on arrives after the first paint, which is the paint
+     * it exists to prevent.
+     */
+    public function test_home_is_delivered_in_its_loading_state(): void
+    {
+        $html = (string) $this->get('/dashboard')->assertOk()->getContent();
+
+        $document = new DOMDocument;
+        libxml_use_internal_errors(true);
+        $document->loadHTML($html);
+        libxml_clear_errors();
+        $xpath = new DOMXPath($document);
+
+        $this->assertSame(
+            1,
+            $xpath->query('//*[@id="view-home"][@data-home-loading][@aria-busy="true"]')->length,
+            'Home must arrive already in its loading state — shell.js takes it off, and never puts it on.',
+        );
+
+        $this->assertSame(
+            1,
+            $xpath->query('//*[@id="view-home"]/*[@data-home-skeleton]')->length,
+            'The skeleton is a child of #view-home — the CSS that hides its siblings while loading depends on it.',
+        );
+    }
+
+    /**
+     * And the skeleton is not made of cards.
+     *
+     * Three separate things read the grid off `[data-module-card]` — shell.js's
+     * label registry, `permitted()`, and favourites.js recording each band's
+     * order — and every one of them would take a placeholder for a module. This
+     * is what keeps the count in
+     * {@see self::test_the_dashboard_offers_a_card_for_every_enabled_module()}
+     * honest as well.
+     */
+    public function test_the_home_skeleton_declares_no_cards_of_its_own(): void
+    {
+        $document = new DOMDocument;
+        libxml_use_internal_errors(true);
+        $document->loadHTML((string) $this->get('/dashboard')->assertOk()->getContent());
+        libxml_clear_errors();
+        $xpath = new DOMXPath($document);
+
+        foreach (['data-module-card', 'data-open', 'data-star', 'data-module-group'] as $attribute) {
+            $this->assertSame(
+                0,
+                $xpath->query('//*[@data-home-skeleton]//*[@'.$attribute.']')->length,
+                'The home skeleton must carry no '.$attribute.' — it is a shape, not a module.',
+            );
+        }
+    }
+
+    /**
      * A module switched off in config/modules.php is off, not merely unlisted.
      *
      * No card, and no fragment either — a URL somebody kept must not be a way
@@ -255,7 +356,7 @@ class PagesRenderTest extends TestCase
      */
     public static function declaredModules(): array
     {
-        return array_map(fn (string $key) => [$key], array_keys(config('modules.primary', []) + config('modules.admin', [])));
+        return array_map(fn (string $key) => [$key], array_keys(config('modules', [])));
     }
 
     #[DataProvider('declaredModules')]
@@ -323,6 +424,62 @@ class PagesRenderTest extends TestCase
         );
     }
 
+    /**
+     * There is one invoice sheet in the shell, and the preview borrows it.
+     *
+     * `components/invoice-delivery.js` moves that single node into
+     * `#invoice-preview` while
+     * somebody reads a freshly posted invoice, and hands it back before anything
+     * prints. The print rule keeps whichever child of `body` *contains* the
+     * document and hides every other one, so a second `[data-invoice-document]`
+     * rendered anywhere under `<main>` would make `<main>` worth keeping — and
+     * every print from then on would carry the whole application around the
+     * invoice, which nothing on the screen would show.
+     *
+     * So what is asserted is the precondition the moving depends on: the shell
+     * renders exactly one sheet, in one child of `body`, and the drawer that
+     * borrows it is a child of `body` too — nested inside a module it would be
+     * detached with that module, taking the document off the page with it.
+     */
+    public function test_the_shell_renders_one_invoice_sheet_and_a_body_level_preview_to_lend_it_to(): void
+    {
+        $html = (string) $this->get('/dashboard')->assertOk()->getContent();
+
+        $document = new DOMDocument;
+
+        libxml_use_internal_errors(true);
+        $document->loadHTML($html);
+        libxml_clear_errors();
+
+        $xpath = new DOMXPath($document);
+
+        $this->assertSame(
+            1,
+            $xpath->query('//*[@data-invoice-document]')->length,
+            'The shell must render exactly one invoice sheet — see the print rule in app.css.',
+        );
+
+        $this->assertSame(
+            1,
+            $xpath->query('/html/body/*[descendant-or-self::*[@data-invoice-document]]')->length,
+            'Exactly one child of <body> must hold the invoice — see the print rule in app.css.',
+        );
+
+        $this->assertSame(
+            1,
+            $xpath->query('/html/body/*[@id="invoice-preview"]')->length,
+            'The invoice preview must be a direct child of <body>, or the shell detaches it with its module.',
+        );
+
+        // It borrows the sheet; it never renders one. A copy here would be a
+        // second document, which is the failure the whole arrangement avoids.
+        $this->assertSame(
+            0,
+            $xpath->query('//*[@id="invoice-preview"]//*[@data-invoice-document]')->length,
+            'The preview must render no invoice markup of its own.',
+        );
+    }
+
     public function test_the_dashboard_shell_exposes_no_user_data_to_anonymous_visitors(): void
     {
         // The shell is public; every figure behind it comes from the JWT-guarded
@@ -377,18 +534,80 @@ class PagesRenderTest extends TestCase
         $this->assertStringContainsString('id="toast-host"', $content);
     }
 
-    public function test_every_page_shell_carries_a_sign_out_control(): void
+    /**
+     * The global activity bar — one, in the layout, above everything.
+     *
+     * It reports every request `auth.call()` makes, so it has to outlive the
+     * surface that made one: a drawer fetching its record, and the confirm over
+     * that drawer waiting on a delete, are both requests somebody is watching
+     * for, and neither could carry an indicator that survives being closed.
+     *
+     * A body child for that reason, and asserted structurally rather than by
+     * pattern, exactly as the invoice sheet above is. Declared inside `main` it
+     * would scroll away with the module under it, and inside a module it would
+     * be detached with that module by the shell's cache.
+     */
+    public function test_the_shell_mounts_one_global_activity_bar_as_a_child_of_body(): void
     {
-        // Two shells are left: the dashboard and the counter. Sign-out moved
-        // from the sidebar footer into the topbar's account menu; the handler is
-        // delegated from the document, so the only thing the markup has to
-        // guarantee is the hook and an accessible name.
-        foreach (['/dashboard', '/bills/new'] as $path) {
-            $this->get($path)
-                ->assertOk()
-                ->assertSee('data-logout', escape: false)
-                ->assertSee('aria-label="Sign out"', escape: false);
-        }
+        $html = (string) $this->get('/dashboard')->assertOk()->getContent();
+
+        // One. Two would be two counters, and whichever finished first would
+        // take its own bar down while the other was still working.
+        $this->assertSame(1, substr_count($html, 'id="global-loader"'));
+
+        $document = new DOMDocument;
+
+        libxml_use_internal_errors(true);
+        $document->loadHTML($html);
+        libxml_clear_errors();
+
+        $xpath = new DOMXPath($document);
+
+        $this->assertSame(
+            1,
+            $xpath->query('/html/body/*[@id="global-loader"]')->length,
+            'The activity bar must be a direct child of <body> — it has to outrank every drawer and modal.',
+        );
+
+        // Idle on arrival, and `hidden` rather than merely transparent: a
+        // progressbar permanently in the accessibility tree reading nothing is
+        // announced to a screen reader on every page it lands on.
+        $this->assertSame(
+            1,
+            $xpath->query('/html/body/*[@id="global-loader"][@hidden]')->length,
+            'The activity bar must start hidden — nothing is loading when the document arrives.',
+        );
+    }
+
+    public function test_the_one_page_shell_carries_a_sign_out_control(): void
+    {
+        // One shell is left. Sign-out moved from the sidebar footer into the
+        // topbar's account menu; the handler is delegated from the document, so
+        // the only thing the markup has to guarantee is the hook and an
+        // accessible name.
+        $this->get('/dashboard')
+            ->assertOk()
+            ->assertSee('data-logout', escape: false)
+            ->assertSee('aria-label="Sign out"', escape: false);
+    }
+
+    /**
+     * The counter is gone, and so is the last page shell.
+     *
+     * `/bills/new` existed for one reason once Purchase and Sales had taken over
+     * its ordinary work: it was the only screen that could raise a workshop
+     * bill. C4 moved that onto the Jobs card. The path now falls through to the
+     * catch-all, which is a 404 rather than a screen — and `route('bills.create')`
+     * no longer exists, which is what stops anything linking to it.
+     */
+    public function test_the_bill_counter_is_retired(): void
+    {
+        $this->assertFalse(app('router')->has('bills.create'));
+
+        $this->get('/bills/new')->assertNotFound();
+
+        // `/bills` itself is still the Expenses module's redirect.
+        $this->get('/bills')->assertRedirect('/dashboard#bills');
     }
 
     /* ---------------------------------------------------------------------
@@ -437,8 +656,19 @@ class PagesRenderTest extends TestCase
             // the row you came from.
             ->assertSee('id="item-drawer"', escape: false)
             ->assertSee('data-tab="variants"', escape: false)
-            ->assertSee('id="variant-form"', escape: false)
             ->assertSee('data-requires-permission="WRITE:ITEMS"', escape: false);
+
+        /*
+        | And there is no second variant form.
+        |
+        | `#variant-form` was a dialog of its own, and it had already drifted from
+        | the block on the create form: it could set a target markup the block
+        | could not, and the block could set a barcode, a purchase price and a
+        | minimum stock it dropped on the floor. One editor now — the block — with
+        | the drawer's pencil opening the item form on that variant (§5.1).
+        */
+        $response->assertDontSee('id="variant-form"', escape: false)
+            ->assertDontSee('id="variant-modal"', escape: false);
 
         /*
         | The categories and the units are *not* in the markup, and that is the
@@ -454,11 +684,94 @@ class PagesRenderTest extends TestCase
             ->assertDontSee('<option value="motor">', escape: false)
             ->assertDontSee('<option value="piece">', escape: false);
 
-        // The specification section the category's fields are drawn into, and
-        // the way to the masters that define them.
-        $response->assertSee('id="item-attributes"', escape: false)
+        // The specification section the category's fields are drawn into — one
+        // per variant block, so it is a hook rather than an id — and the way to
+        // the masters that define them.
+        $response->assertSee('data-variant-attributes', escape: false)
             ->assertSee('id="manage-catalogue"', escape: false)
             ->assertSee('id="catalogue-drawer"', escape: false);
+    }
+
+    public function test_the_items_form_repeats_its_variant_block_from_a_template(): void
+    {
+        $response = $this->get('/modules/items')->assertOk();
+
+        /*
+        | A product is added with the things on the shelf under it, and there are
+        | usually several — a motor family in three ratings. The block is
+        | declared once, in a <template>, and cloned per variant.
+        |
+        | Exactly one of it. Two would be two sets of fields drifting apart,
+        | which is the failure §5.1 exists to prevent and the one this module has
+        | already had to fix once for the party form.
+        */
+        $content = $response->getContent();
+
+        $this->assertSame(1, substr_count($content, 'id="item-variant-template"'));
+
+        $response->assertSee('id="item-variants"', escape: false)
+            ->assertSee('id="item-add-variant"', escape: false)
+            ->assertSee('data-variant-block', escape: false);
+
+        /*
+        | Nothing in the template carries an index of its own.
+        |
+        | pages/items.js stamps the position onto every name, id, `for` and error
+        | slot when a block is added or removed, which is what gives a 422 about
+        | `variants.2.sell_price` a box to land in. A `name="variants.0.sku"`
+        | written here would be a second place the numbering is decided, and the
+        | drift shows up as a refusal painted into the wrong block.
+        */
+        $response->assertDontSee('name="variants.0', escape: false)
+            ->assertDontSee('data-error-for="variants.0', escape: false);
+
+        /*
+        | Every field a variant has, by the API key each is declared under.
+        |
+        | The list is the assertion rather than a sample. This block is the only
+        | variant editor in the module, so a column the catalogue holds and this
+        | does not ask for is a column that can be set once, on a create, and
+        | never corrected — which is exactly what `barcode`, `min_stock` and
+        | `purchase_price` were while the editor was a dialog of its own.
+        */
+        foreach ([
+            'sku', 'barcode', 'label', 'purchase_price', 'sell_price',
+            'markup_percent', 'reorder_level', 'min_stock', 'opening_stock', 'opening_cost',
+        ] as $field) {
+            $response->assertSee('data-variant-field="'.$field.'"', escape: false);
+        }
+    }
+
+    public function test_the_items_form_carries_both_variant_panes(): void
+    {
+        $response = $this->get('/modules/items')->assertOk();
+
+        /*
+        | Two panes over one set of fields, and §2A.2's judgement one level down:
+        | a product with several variants gets the picker, one with exactly one
+        | gets that variant's block straight away, and a create gets the repeater.
+        |
+        | Both panes are declared here and neither is rendered here — the rows are
+        | drawn by pages/items.js from the same renderer the drawer's Variants tab
+        | uses, so this asserts the hosts and the controls between them.
+        */
+        $response->assertSee('id="item-variant-list"', escape: false)
+            ->assertSee('id="item-variants"', escape: false)
+            ->assertSee('id="item-variant-back"', escape: false);
+
+        /*
+        | What an edit withholds, marked once and in one way.
+        |
+        | Opening stock is a stock adjustment that posted on the day the shelf was
+        | counted; correcting it is a count, from the screen that counts. The
+        | date and both per-block boxes carry the same hook so that rule is
+        | applied in one place rather than by remembering three ids.
+        */
+        $this->assertSame(3, substr_count($response->getContent(), 'data-opening-field'));
+
+        // And nothing is hidden by the marker that used to hide the whole half:
+        // the variant fields are editable now, which is the point of the phase.
+        $response->assertDontSee('data-variant-half', escape: false);
     }
 
     public function test_the_items_module_carries_a_review_queue(): void
@@ -471,6 +784,30 @@ class PagesRenderTest extends TestCase
         $response->assertSee('id="draft-banner"', escape: false)
             ->assertSee('id="draft-banner-title"', escape: false)
             ->assertSee('Auto-created from an import or a capture', escape: false);
+
+        /*
+        | And a way *out* of the queue, beside the message that puts a record in
+        | it. The banner counted drafts from the day it was written and nothing
+        | anywhere could clear one, so the only worklist this application has was
+        | one that could never reach zero.
+        */
+        $response->assertSee('id="drawer-clear-draft"', escape: false);
+
+        /*
+        | Gated by the page module, never declaratively.
+        |
+        | `data-requires-permission` works by toggling `hidden`, and so does the
+        | condition that this control is only for a family still waiting — two
+        | writers of one class, with whichever ran last as the answer. The grant
+        | is checked in renderDrawerAlert() alongside the draft flag, and this is
+        | what stops the attribute being helpfully added back.
+        */
+        $this->assertDoesNotMatchRegularExpression(
+            '/id="drawer-clear-draft"[^>]*data-requires-permission/s',
+            $response->getContent(),
+            'The sign-off control must not carry data-requires-permission: that gate and the draft '
+            .'condition both write the `hidden` class, and the last one to run would win.',
+        );
     }
 
     public function test_every_stock_bearing_element_on_the_items_module_declares_its_gate(): void
@@ -508,7 +845,9 @@ class PagesRenderTest extends TestCase
         // motor saved without its rating.
         $response = $this->get('/modules/items')->assertOk();
 
-        $response->assertSee('id="variant-attributes"', escape: false)
+        // A hook rather than an id: the section is drawn once per variant block,
+        // and the create form puts up as many as the workshop is cataloguing.
+        $response->assertSee('data-variant-attributes', escape: false)
             ->assertDontSee('data-attribute="hp"', escape: false)
             ->assertDontSee('data-attribute="gauge"', escape: false);
     }
@@ -724,52 +1063,6 @@ class PagesRenderTest extends TestCase
     }
 
     /* ---------------------------------------------------------------------
-     | The counter — still a page of its own
-     | ------------------------------------------------------------------ */
-
-    /**
-     * The counter — M20, and the brief's §2, §4, §5, §12 and §26.
-     */
-    public function test_the_bill_counter_renders_its_pickers_and_its_confirmation(): void
-    {
-        $response = $this->get('/bills/new')->assertOk();
-
-        $response->assertSee('data-page="bill-counter"', escape: false)
-            // The document itself is the shared partial, and this is its root —
-            // the element components/bill-document.js scopes every query to.
-            // What is left of the counter around it is the kind chooser and the
-            // job picker, asserted below.
-            ->assertSee('data-bill-document', escape: false)
-            // The three mount points. Everything on this screen is a shared
-            // component, because the job card and the journal want the same ones.
-            ->assertSee('data-party-host', escape: false)
-            ->assertSee('data-item-host', escape: false)
-            ->assertSee('data-payments-host', escape: false)
-            ->assertSee('data-totals-host', escape: false);
-
-        // §12: a confirmation step, showing the server's own figures.
-        $response->assertSee('id="confirm-bill-modal"', escape: false)
-            ->assertSee('data-confirm-post', escape: false);
-
-        // §26: the unfinished bill survives a closed tab.
-        $response->assertSee('data-restored', escape: false)
-            ->assertSee('You had an unfinished bill', escape: false);
-
-        // §4: a customer who is not on the books yet, added without losing the
-        // bill — a drawer, so it opens over a form rather than as a second modal.
-        // A shared partial too, since the Purchase milestone: this was a copy of
-        // the counterparty screens' form with fewer fields and no validation.
-        $response->assertSee('id="quick-party-drawer"', escape: false);
-
-        // §5's quick-add, now a shared partial rather than a copy per screen.
-        $response->assertSee('id="quick-item-modal"', escape: false);
-
-        foreach (['sale', 'purchase', 'workshop'] as $kind) {
-            $response->assertSee('data-kind="'.$kind.'"', escape: false);
-        }
-    }
-
-    /* ---------------------------------------------------------------------
      | The modules that are shipped but not yet switched on
      |
      | Their markup is still in the build and still has to be right, so it is
@@ -777,46 +1070,155 @@ class PagesRenderTest extends TestCase
      | is `data-page`: a fragment has no page shell around it.
      | ------------------------------------------------------------------ */
 
-    public function test_the_accounting_module_renders_its_three_tabs_and_modal(): void
+    /* ---------------------------------------------------------------------
+     | Accounting — the chart and the trial balance, merged at C5
+     |
+     | Converted, so the markup is fetched through the fragment route rather
+     | than rendered directly: that asserts the route as well as the markup, and
+     | a module whose `enabled` flag was never flipped answers 404 here.
+     | ------------------------------------------------------------------ */
+
+    /**
+     * §2A — the module opens on its create form, with the books behind a switch.
+     */
+    public function test_the_accounting_module_opens_on_a_form_with_the_books_behind_a_switch(): void
     {
-        $view = $this->view('modules.accounts');
+        $content = $this->get('/modules/accounts')->assertOk()->getContent();
 
-        // The three views of the books, and the body each one paints into.
-        $view->assertSee('id="accounting-tabs"', escape: false)
-            ->assertSee('data-tab="ledger"', escape: false)
-            ->assertSee('data-tab="journal"', escape: false)
-            ->assertSee('data-tab="coa"', escape: false)
-            ->assertSee('id="ledger-body"', escape: false)
-            ->assertSee('id="journal-body"', escape: false)
-            ->assertSee('id="coa-groups"', escape: false);
+        $this->assertStringContainsString('data-ws-form', $content);
+        $this->assertStringContainsString('data-ws-list', $content);
 
-        $view->assertSee('id="ledger-drawer"', escape: false)
-            ->assertSee('id="journal-drawer"', escape: false)
-            ->assertSee('id="account-form"', escape: false)
-            ->assertSee('data-requires-permission="WRITE:ACCOUNTS"', escape: false);
+        // The heading and the one switch control belong to the workspace, so
+        // the markup carries no title of its own (§2A.3).
+        $this->assertStringNotContainsString('<h1', $content);
 
-        /*
-        | The three grants this screen spans. The journal tab and every balance
-        | are gated separately from the chart the page itself is gated on, and
-        | the markup has to carry those marks or the JS has nothing to strip for
-        | a caller who holds READ:ACCOUNTS alone.
-        */
-        $view->assertSee('data-requires-permission="READ:TRANSACTIONS"', escape: false)
-            ->assertSee('data-ledger-only', escape: false);
+        $form = $this->surfaceMarkup($content, 'data-ws-form');
+        $list = $this->surfaceMarkup($content, 'data-ws-list');
 
-        // Sources come from the enum, so the journal pills cannot drift from
-        // the sources a transaction can actually carry.
-        foreach (TransactionSource::cases() as $source) {
-            $view->assertSee('data-pill="'.$source->value.'"', escape: false)
-                ->assertSee($source->label(), escape: false);
-        }
+        $this->assertStringContainsString('id="account-form"', $form);
+        $this->assertStringNotContainsString('id="account-form"', $list);
 
-        // Type options come from the enum, so the filter and the create form
-        // cannot drift from the five types the ledger actually supports.
+        $this->assertStringContainsString('data-chart-groups', $list);
+        $this->assertStringNotContainsString('data-chart-groups', $form);
+
+        // Creating an account is what only this module can do, and the control
+        // is absent rather than disabled for a caller without the grant.
+        $this->assertStringContainsString('data-requires-permission="WRITE:ACCOUNTS"', $form);
+
+        // Type options come from the enum, so the create form cannot drift from
+        // the five types the ledger actually supports. They are code and not
+        // data: each one decides which side increases the account.
         foreach (AccountType::cases() as $type) {
-            $view->assertSee('value="'.$type->value.'"', escape: false)
-                ->assertSee($type->label(), escape: false);
+            $this->assertStringContainsString('value="'.$type->value.'"', $form);
+            $this->assertStringContainsString($type->label(), $form);
         }
+    }
+
+    /**
+     * Two views over one period picker, and the trial balance is one of them.
+     *
+     * That is the whole of the merge: the screen Ledger used to be is the second
+     * view here, reconciliation banner included. Two cards would have needed two
+     * period pickers and two renderers of this table (§5.1).
+     */
+    public function test_the_accounting_list_carries_the_chart_and_the_trial_balance(): void
+    {
+        $list = $this->surfaceMarkup(
+            $this->get('/modules/accounts')->assertOk()->getContent(),
+            'data-ws-list',
+        );
+
+        $this->assertStringContainsString('data-view="chart"', $list);
+        $this->assertStringContainsString('data-view="trial"', $list);
+        $this->assertStringContainsString('data-view-panel="chart"', $list);
+        $this->assertStringContainsString('data-view-panel="trial"', $list);
+
+        // The single most important figure on the screen: if the two sides
+        // differ, everything else on it is suspect.
+        $this->assertStringContainsString('data-reconciliation', $list);
+        $this->assertStringContainsString('data-trial-body', $list);
+        $this->assertStringContainsString('data-trial-foot', $list);
+
+        // One period, shared. Two would be the copy that drifts.
+        $this->assertSame(1, substr_count($list, 'data-filter-from'));
+        $this->assertSame(1, substr_count($list, 'data-filter-to'));
+    }
+
+    /**
+     * Two grants, and what the second one gates is *removed* rather than blanked.
+     *
+     * The card is READ:ACCOUNTS; every figure on it is READ:LEDGER, and neither
+     * implies the other. The markup has to carry those marks or `pages/accounts`
+     * has nothing to strip for a caller holding the first alone — and a column
+     * of dashes reads as "every account is at zero", which is a claim about the
+     * books rather than about the reader's permissions.
+     */
+    public function test_the_accounting_module_marks_every_figure_as_ledger_only(): void
+    {
+        $content = $this->get('/modules/accounts')->assertOk()->getContent();
+
+        $this->assertStringContainsString('data-ledger-only', $content);
+
+        // The trial balance, the period picker and the switch that reaches the
+        // trial balance are all behind that mark: with no figures anywhere,
+        // there is one view and nothing for a period to mean.
+        $this->assertStringContainsString('data-account-views', $content);
+        $this->assertSame(3, substr_count($content, 'data-ledger-only'));
+    }
+
+    /**
+     * One record over a list is level 2, and correcting it is a state of that
+     * surface — never a form stacked over a drawer (§2.2).
+     */
+    public function test_the_accounting_module_carries_one_drawer_and_one_set_of_fields(): void
+    {
+        $content = $this->get('/modules/accounts')->assertOk()->getContent();
+
+        $this->assertStringContainsString('id="account-drawer"', $content);
+        $this->assertStringContainsString('data-account-edit-slot', $content);
+
+        // `adoptForm()` moves the create form into that slot, so the fields are
+        // written once. A second `<form id="account-form">` is the bug this
+        // asserts against.
+        $this->assertSame(1, substr_count($content, 'id="account-form"'));
+
+        $this->assertStringContainsString('data-form-chrome="inline"', $content);
+        $this->assertStringContainsString('data-form-chrome="modal"', $content);
+
+        // The journal-entry list this screen used to carry is gone rather than
+        // moved: every row of it is on Insights' Day Book, and a fourth copy
+        // would be screens answering one question (§5.1).
+        $this->assertStringNotContainsString('data-tab="journal"', $content);
+        $this->assertStringNotContainsString('id="journal-drawer"', $content);
+        $this->assertStringNotContainsString('READ:TRANSACTIONS', $content);
+    }
+
+    /**
+     * C5 is the one step that removes a key rather than only flipping a flag.
+     *
+     * Accounting and Ledger were the same question at two zoom levels. The card
+     * is `accounts`; `ledger` is gone from the registry, and its path still
+     * lands somewhere — the route name is what the rest of the application links
+     * by, and a missing one is a 500 where a redirect is a shrug.
+     */
+    public function test_the_accounting_card_is_on_and_the_ledger_key_is_gone(): void
+    {
+        $declared = Modules::declared();
+
+        $this->assertArrayHasKey('accounts', $declared);
+        $this->assertTrue($declared['accounts']['enabled']);
+
+        $this->assertSame('READ:ACCOUNTS', $declared['accounts']['permission']);
+        $this->assertTrue($declared['accounts']['workspace']);
+
+        $this->assertArrayNotHasKey('ledger', $declared);
+
+        $this->get('/accounts')->assertRedirect('/dashboard#accounts');
+        $this->get('/ledger')->assertRedirect('/dashboard#accounts');
+
+        // Off means off: the fragment route is the whitelist, so a key nobody
+        // declares is not a way round it either.
+        $this->get('/modules/ledger')->assertNotFound();
     }
 
     /**
@@ -922,6 +1324,50 @@ class PagesRenderTest extends TestCase
     }
 
     /** "Add customer" for the Vendors module, and the other way round. */
+    /**
+     * The markup of one level-1 surface, so an assertion can say which side of
+     * the form/list split a panel is on.
+     *
+     * §2A.2 detaches whichever surface is not in use, so a panel on the wrong
+     * one is invisible at exactly the moment it matters — which makes the split
+     * a decision worth asserting rather than a layout accident.
+     */
+    private function surfaceMarkup(string $content, string $attribute): string
+    {
+        $start = strpos($content, '<div '.$attribute);
+
+        $this->assertNotFalse($start, "No [{$attribute}] surface in the markup.");
+
+        $depth = 0;
+        $offset = $start;
+        $length = strlen($content);
+
+        while ($offset < $length) {
+            $open = strpos($content, '<div', $offset);
+            $close = strpos($content, '</div>', $offset);
+
+            if ($close === false) {
+                break;
+            }
+
+            if ($open !== false && $open < $close) {
+                $depth++;
+                $offset = $open + 4;
+
+                continue;
+            }
+
+            $depth--;
+            $offset = $close + 6;
+
+            if ($depth === 0) {
+                return substr($content, $start, $offset - $start);
+            }
+        }
+
+        $this->fail("The [{$attribute}] surface is not closed.");
+    }
+
     private function otherCounterparty(string $addLabel): string
     {
         return $addLabel === 'Add vendor' ? 'Add customer' : 'Add vendor';
@@ -947,154 +1393,267 @@ class PagesRenderTest extends TestCase
         return $rendered instanceof TestResponse ? $rendered->getContent() : (string) $rendered;
     }
 
-    public function test_the_journal_module_renders_the_double_entry_grid(): void
+    /* ---------------------------------------------------------------------
+    | Transactions — C3. Converted, so it is fetched through the fragment route
+    | rather than rendered directly: that asserts the route as well as the
+    | markup, and a module whose `enabled` flag was never flipped answers 404
+    | here.
+    | ------------------------------------------------------------------ */
+
+    /**
+     * Three §2A workspaces under one card, built from the shared renderer.
+     *
+     * Receipt, Payment and Journal voucher are three write acts a workshop only
+     * ever does one after another, so they are one card with three sections —
+     * the Staff shape. Each carries exactly one `[data-ws-form]` and one
+     * `[data-ws-list]`, which is what `mountWorkspace()` looks for and what makes
+     * the swap, the switch control and the count badge free.
+     */
+    public function test_the_transactions_module_declares_three_sections_each_with_a_form_and_a_list(): void
     {
-        $view = $this->view('modules.journal');
+        $content = $this->get('/modules/journal')->assertOk()->getContent();
 
-        $view->assertSee('id="journal-rows"', escape: false)
-            ->assertSee('id="journal-form"', escape: false)
-            ->assertSee('id="journal-lines"', escape: false)
-            // A drawer rather than a centred modal: reading a voucher is a glance
-            // mid-scan, and the row it came from should stay visible behind it.
-            ->assertSee('id="voucher-drawer"', escape: false)
-            ->assertSee('data-requires-permission="WRITE:TRANSACTIONS"', escape: false);
-
-        // Saving a draft and posting are separate controls: committing to the
-        // ledger must never happen as a side effect of saving.
-        $view->assertSee('id="save-draft"', escape: false)
-            ->assertSee('Post entry', escape: false);
-
-        // Optional and genuinely so: a depreciation entry or a correcting
-        // journal has no counterparty.
-        $view->assertSee('id="journal-party"', escape: false)
-            ->assertSee('name="party_id"', escape: false)
-            ->assertSee('No counterparty', escape: false);
-
-        // Status options come from the enum, so the filter cannot drift from it.
-        foreach (TransactionStatus::cases() as $status) {
-            $view->assertSee('value="'.$status->value.'"', escape: false)
-                ->assertSee($status->label(), escape: false);
+        foreach (['receipt', 'payment', 'journal'] as $section) {
+            $this->assertStringContainsString('data-txn-section="'.$section.'"', $content);
+            $this->assertStringContainsString('data-txn-tab="'.$section.'"', $content);
         }
 
-        // Types too, so the filter cannot drift from what the engine can post.
-        foreach (TransactionType::cases() as $type) {
-            $view->assertSee('value="'.$type->value.'"', escape: false)
-                ->assertSee($type->label(), escape: false);
-        }
-    }
+        $this->assertSame(3, substr_count($content, 'data-ws-form'));
+        $this->assertSame(3, substr_count($content, 'data-ws-list'));
 
-    public function test_the_transactions_module_renders_four_tabs(): void
-    {
-        $view = $this->view('modules.journal');
-        $content = (string) $view;
+        // The heading and the one control that swaps the surfaces belong to the
+        // workspace, so the markup must not carry a second one of its own
+        // (§2A.3).
+        $this->assertStringNotContainsString('<h1', $content);
+        $this->assertStringNotContainsString('<h2', $content);
 
-        $view->assertSee('id="txn-tabs"', escape: false)
-            ->assertSee('role="tablist"', escape: false);
-
-        foreach (['sales', 'purchases', 'expenses', 'drafts'] as $tab) {
-            $view->assertSee('data-tab="'.$tab.'"', escape: false);
-        }
-
-        foreach (['Sales', 'Purchase Bills', 'Expenses', 'Drafts'] as $label) {
-            $view->assertSee($label, escape: false);
-        }
-
-        // Sales is the tab the module opens on, and exactly one tab is selected.
-        $this->assertSame(
-            1,
-            substr_count($content, 'aria-selected="true"'),
-            'Exactly one tab should be selected when the module is served.',
-        );
-
-        // The head is rendered from JS because the columns differ per tab, so
-        // the markup ships it empty rather than with one tab's columns hardcoded
-        // — those would flash the wrong headings before the rows arrive.
-        $view->assertSee('<thead id="journal-head"></thead>', escape: false);
-    }
-
-    public function test_the_transactions_module_offers_a_receipt_a_payment_and_a_journal(): void
-    {
-        // Three separate actions, not one "new transaction" that then asks what
-        // kind: collecting from a customer, paying a supplier and writing a
-        // correcting voucher are different jobs, and a receipt is much the
-        // commonest — it should be one click.
-        $this->view('modules.journal')
-            ->assertSee('id="new-receipt"', escape: false)
-            ->assertSee('id="new-payment"', escape: false)
-            ->assertSee('id="new-journal"', escape: false)
-            ->assertSee('Record receipt', escape: false)
-            ->assertSee('Record payment', escape: false);
-    }
-
-    public function test_the_settlement_form_collects_a_party_and_a_payment_split(): void
-    {
-        $view = $this->view('modules.journal');
-
-        $view->assertSee('id="settlement-modal"', escape: false)
-            ->assertSee('id="settlement-form"', escape: false)
-            // One row per tender: ₹2,000 from the till and ₹3,000 by UPI is one
-            // receipt moving two accounts, each reconciled separately.
-            ->assertSee('id="settlement-rows"', escape: false)
-            ->assertSee('id="add-payment-row"', escape: false)
-            // Required, where a journal's counterparty is optional.
-            ->assertSee('name="party_id"', escape: false)
-            // Saving a draft and recording are separate controls, as everywhere.
-            ->assertSee('id="save-settlement-draft"', escape: false);
-
-        // The payment modes are fetched from GET /transactions/meta rather than
-        // baked into the markup, so the form's reference labels cannot drift from
-        // the server's rules about which ones are required.
-        $view->assertDontSee('value="cheque"', escape: false);
-    }
-
-    public function test_the_ledger_module_renders_the_trial_balance_shell(): void
-    {
-        $this->view('modules.ledger')
-            ->assertSee('id="ledger-rows"', escape: false)
-            ->assertSee('id="reconciliation"', escape: false)
-            ->assertSee('id="filter-account"', escape: false)
-            // The default view is the trial balance over every account.
-            ->assertSee('Trial balance', escape: false);
+        // Receipt is the section the module lands on, and exactly one tab is
+        // selected when it is served.
+        $this->assertSame(1, substr_count($content, 'aria-selected="true"'));
     }
 
     /**
-     * The list — M20's §23 columns.
+     * The settlement section is written once and rendered twice.
      *
-     * The bill *form* is not here: it is `/bills/new`, a page rather than a modal
-     * (decision D8). What this module keeps is the list, the read-only bill view
-     * and the expense form, which stays separate because an expense is a
-     * different kind of money from a purchase.
+     * Receipt and Payment differ in wording, in the party's role and in the
+     * route the JS posts to — and in nothing else, because the server does not
+     * differ either: two routes over one `StoreSettlementRequest`. Two
+     * near-identical templates is how a rule gets added to one and left off the
+     * other, which here would mean a cheque number demanded of a customer and
+     * not of a supplier (§5.1).
      */
-    public function test_the_bills_module_renders_the_list_and_the_expense_form(): void
+    public function test_the_settlement_section_is_written_once_and_rendered_twice(): void
     {
-        $view = $this->view('modules.bills');
+        $content = $this->get('/modules/journal')->assertOk()->getContent();
 
-        $view->assertSee('id="bills-body"', escape: false)
-            ->assertSee('id="expense-form"', escape: false)
-            ->assertSee('id="bill-modal"', escape: false)
-            ->assertSee('data-requires-permission="WRITE:TRANSACTIONS"', escape: false);
+        $this->assertSame(2, substr_count($content, 'data-settlement-form'));
+        $this->assertSame(2, substr_count($content, 'data-party-host'));
+        $this->assertSame(2, substr_count($content, 'data-settlement-payments'));
 
-        // Straight to the counter. The two-step chooser it replaced asked "how
-        // would you like to enter it?" and had exactly one live answer.
-        $view->assertSee('href="'.route('bills.create').'"', escape: false)
-            ->assertSee('data-new-bill', escape: false)
-            ->assertDontSee('id="new-transaction-modal"', escape: false)
-            ->assertDontSee('id="bill-form"', escape: false);
+        $this->assertSame(1, substr_count($content, 'id="receipt-form"'));
+        $this->assertSame(1, substr_count($content, 'id="payment-form"'));
 
-        // §23's four money columns. They were impossible before M16 linked a
-        // receipt to the invoice it settled, and their presence is the whole
-        // reason this screen was rewritten.
-        foreach (['Total', 'Paid', 'Due', 'Status'] as $column) {
-            $view->assertSee('>'.$column.'</th>', escape: false);
+        // Both settlement forms and the voucher take a date and a note, so each
+        // field is written three times over the module and never twice.
+        foreach (['date', 'notes'] as $field) {
+            $this->assertSame(3, substr_count($content, 'name="'.$field.'"'));
         }
 
-        // Both status vocabularies come from their enums, so neither filter can
-        // drift from the thing it filters on.
-        foreach (TransactionStatus::cases() as $status) {
-            $view->assertSee('value="'.$status->value.'"', escape: false);
+        /*
+        | The split is the shared component's, mounted into a host — never a
+        | second set of payment rows written out here. The modes and their
+        | reference rules arrive from GET /transactions/meta, so the form asks
+        | for "Cheque number" without a copy of the mapping to keep in step.
+        */
+        $this->assertStringNotContainsString('value="cheque"', $content);
+        $this->assertStringNotContainsString('data-mode=', $content);
+
+        // Absent rather than blanked for a caller without the grant.
+        $this->assertStringContainsString('data-requires-permission="WRITE:TRANSACTIONS"', $content);
+    }
+
+    /**
+     * The voucher grid, and the chart it is emptied of.
+     *
+     * The accounts arrive from GET /accounts, never from this template — the
+     * catalogue's rule about vocabulary, applied to the chart. An expense head
+     * added from Accounting has to appear in this picker without a deployment.
+     */
+    public function test_the_transactions_module_renders_the_double_entry_grid(): void
+    {
+        $content = $this->get('/modules/journal')->assertOk()->getContent();
+
+        $this->assertStringContainsString('id="voucher-form"', $content);
+        $this->assertStringContainsString('data-voucher-lines', $content);
+        $this->assertStringContainsString('data-total-debit', $content);
+        $this->assertStringContainsString('data-total-credit', $content);
+        $this->assertStringContainsString('data-balance-note', $content);
+
+        // Optional, and genuinely so: a depreciation entry and a correcting
+        // journal have no counterparty. It is the shared picker, mounted without
+        // a role, rather than a select of every party this workshop has.
+        $this->assertStringContainsString('data-voucher-party-host', $content);
+
+        // Not one account, not one optgroup, and not one line of the grid.
+        $this->assertStringNotContainsString('<optgroup', $content);
+        $this->assertMatchesRegularExpression(
+            '/<tbody data-voucher-lines>\s*<\/tbody>/',
+            $content,
+            'The voucher grid must be drawn from the chart the server publishes.',
+        );
+
+        // A drawer rather than a centred modal: what a document settles is read
+        // while thinking about the row above it.
+        $this->assertStringContainsString('id="txn-drawer"', $content);
+    }
+
+    /**
+     * The transaction list is gone, and this is the assertion that keeps it
+     * gone.
+     *
+     * It was four tabs over every transaction. Sales lists invoices and credit
+     * notes, Purchase lists bills and debit notes, Expenses lists expenses, and
+     * Insights' Day Book lists every posted document — a fifth copy here would
+     * have been four screens answering one question (§5.1). What each section
+     * lists now is its own kind and nothing else, asked for by name so the page
+     * count agrees with the rows on it.
+     */
+    public function test_the_transactions_module_lists_nothing_another_card_already_draws(): void
+    {
+        $view = $this->get('/modules/journal')->assertOk();
+
+        $view->assertDontSee('id="txn-tabs"', escape: false)
+            ->assertDontSee('id="journal-rows"', escape: false)
+            ->assertDontSee('id="journal-head"', escape: false)
+            ->assertDontSee('id="filter-type"', escape: false)
+            ->assertDontSee('data-tab="sales"', escape: false)
+            ->assertDontSee('data-tab="purchases"', escape: false)
+            ->assertDontSee('data-tab="drafts"', escape: false);
+
+        $content = $view->getContent();
+
+        // No type filter, because no section lists more than one type.
+        foreach (TransactionType::cases() as $type) {
+            $this->assertStringNotContainsString(
+                '<option value="'.$type->value.'"',
+                $content,
+                'No section offers a choice of transaction type.',
+            );
         }
 
+        // And no "save as draft" anywhere: this was the last screen in the
+        // product that parked a transaction, and money that has moved is a fact.
+        $this->assertStringNotContainsString('id="save-draft"', $content);
+        $this->assertStringNotContainsString('id="save-settlement-draft"', $content);
+    }
+
+    public function test_the_transactions_module_is_declared_and_needs_the_transactions_grant(): void
+    {
+        $declared = Modules::declared();
+
+        $this->assertArrayHasKey('journal', $declared);
+        $this->assertTrue($declared['journal']['enabled']);
+
+        // The same grant Sales, Purchase and Expenses need, so switching this
+        // module on re-seeds nothing.
+        $this->assertSame('READ:TRANSACTIONS', $declared['journal']['permission']);
+        $this->assertTrue($declared['journal']['workspace']);
+
+        // The key is the module's address, and `journal` is what it has always
+        // been — the label says Transactions, which is what a workshop looks for.
+        $this->get('/journal')->assertRedirect('/dashboard#journal');
+    }
+
+    /*
+    | Expenses — C2. Converted, so it is fetched through the fragment route
+    | rather than rendered directly: that asserts the route as well as the
+    | markup, and a module whose `enabled` flag was never flipped answers 404
+    | here.
+    */
+
+    /**
+     * §2A's two surfaces, and which side of the split each part is on.
+     *
+     * The form is the create surface the module lands on; the list behind "Show
+     * list" is expenses and nothing else. §2A.2 detaches whichever is not in
+     * use, so a panel on the wrong one is invisible at exactly the moment it
+     * matters.
+     */
+    public function test_the_expenses_module_declares_a_form_surface_and_a_list_surface(): void
+    {
+        $content = $this->get('/modules/bills')->assertOk()->getContent();
+
+        $this->assertStringContainsString('data-ws-form', $content);
+        $this->assertStringContainsString('data-ws-list', $content);
+
+        // The heading and the one switch control belong to the workspace, so the
+        // markup must not carry a second one of its own (§2A.3).
+        $this->assertStringNotContainsString('<h2', $content);
+
+        $form = $this->surfaceMarkup($content, 'data-ws-form');
+        $list = $this->surfaceMarkup($content, 'data-ws-list');
+
+        $this->assertStringContainsString('id="expense-form"', $form);
+        $this->assertStringNotContainsString('id="expense-form"', $list);
+
+        $this->assertStringContainsString('data-expense-body', $list);
+        $this->assertStringNotContainsString('data-expense-body', $form);
+
+        /*
+        | And nothing pointing at the counter. C2 kept a link to /bills/new on
+        | this surface because it was then the only screen that could raise a
+        | workshop bill; C4 moved that onto the Jobs card and retired the page,
+        | so a link here would be a link to a 404.
+        */
+        $this->assertStringNotContainsString('data-new-bill', $content);
+    }
+
+    /**
+     * The whole of what the expense endpoint accepts, and nothing the module
+     * stopped being.
+     *
+     * Every field `StoreExpenseRequest` takes from a person is on the form: an
+     * expense entered without its claimable GST is one the workshop cannot
+     * reclaim, and one without a split is not an event at all.
+     */
+    public function test_the_expenses_module_offers_the_whole_expense_and_lists_nothing_else(): void
+    {
+        $view = $this->get('/modules/bills')->assertOk();
+
+        foreach (['date', 'account_id', 'amount', 'gst_amount', 'notes'] as $field) {
+            $view->assertSee('name="'.$field.'"', escape: false);
+        }
+
+        // The split is the shared component's, mounted into this host — never a
+        // second set of payment rows written out here (§5.1).
+        $view->assertSee('data-expense-payments', escape: false)
+            ->assertDontSee('id="settlement-rows"', escape: false);
+
+        // Absent rather than blanked for a caller without the grant.
+        $view->assertSee('data-requires-permission="WRITE:TRANSACTIONS"', escape: false);
+
+        /*
+        | The transaction list is gone, and this is the assertion that keeps it
+        | gone. Sales lists invoices and credit notes, Purchase lists bills and
+        | debit notes, and Insights' Day Book lists every posted document — a
+        | fourth copy here would be three screens answering one question, which
+        | is the §5.1 mistake this module invites.
+        */
+        $view->assertDontSee('id="bills-body"', escape: false)
+            ->assertDontSee('id="bill-modal"', escape: false)
+            ->assertDontSee('id="filter-type"', escape: false)
+            ->assertDontSee('id="filter-payment"', escape: false);
+
+        // Nothing but expenses is listed, so there is no kind filter and no
+        // payment-status filter: a document that is settled the moment it is
+        // written has no payment status to ask about.
         foreach (PaymentStatus::cases() as $status) {
+            $view->assertDontSee('value="'.$status->value.'"', escape: false);
+        }
+
+        // The lifecycle vocabulary does come from its enum, so the one filter
+        // that remains cannot drift from the thing it filters on.
+        foreach (TransactionStatus::cases() as $status) {
             $view->assertSee('value="'.$status->value.'"', escape: false);
         }
     }
@@ -1230,31 +1789,65 @@ class PagesRenderTest extends TestCase
     }
 
     /**
-     * Sending the customer their invoice — M20's level-3 dialog.
+     * Sending the customer their invoice — M20's level-3 dialog, in the shell.
      *
-     * Declared beside the drawer rather than inside either level-1 surface, for
-     * the reason the drawer is: the workspace's swap between the form and the
-     * list must not be able to detach it with one of them.
+     * It was `#sales-share-modal`, declared in the Sales fragment, for as long as
+     * Sales was the only screen that handed a customer a document. Jobs is the
+     * second, and the shell caches a module's root **detached** — so a dialog
+     * declared inside Sales is not in the page at all while the Jobs card is
+     * open. It is a child of `body` now, beside the preview that opens it and the
+     * sheet they both borrow, and neither module may declare one of its own.
      */
-    public function test_the_sales_module_carries_the_share_dialog_above_the_drawer(): void
+    public function test_the_shell_carries_one_invoice_share_dialog_above_the_preview(): void
     {
-        $html = $this->get('/modules/sales')->assertOk()->getContent();
+        $html = (string) $this->get('/dashboard')->assertOk()->getContent();
 
-        $this->assertStringContainsString('id="sales-share-modal"', (string) $html);
+        $document = new DOMDocument;
 
-        // Level 3 over the drawer's level 2, and below the confirmation's 60 —
+        libxml_use_internal_errors(true);
+        $document->loadHTML($html);
+        libxml_clear_errors();
+
+        $xpath = new DOMXPath($document);
+
+        $this->assertSame(
+            1,
+            $xpath->query('/html/body/*[@id="invoice-share-modal"]')->length,
+            'The share dialog must be a direct child of <body>, or the shell detaches it with a module.',
+        );
+
+        // Level 3 over the preview's level 2, and below the confirmation's 60 —
         // so revoking can put a confirm over this without either disappearing.
         $this->assertMatchesRegularExpression(
-            '/id="sales-share-modal".*?z-index:\s*55/s',
-            (string) $html,
+            '/id="invoice-share-modal".*?z-index:\s*55/s',
+            $html,
         );
 
-        // After both level-1 surfaces, never inside one.
-        $this->assertGreaterThan(
-            strpos((string) $html, 'data-ws-list'),
-            strpos((string) $html, 'id="sales-share-modal"'),
-            'The share dialog must be declared outside the swapped surfaces.',
+        $this->assertMatchesRegularExpression(
+            '/id="confirm-modal".*?z-index:\s*60/s',
+            $html,
+            'The confirmation is level 3 and nothing opens over it (§2.2).',
         );
+    }
+
+    /**
+     * And no module may keep a second one.
+     *
+     * The failure a copy causes is not a visible one: two dialogs, one live link,
+     * and whichever was bound last answers — so this is asserted rather than left
+     * to review. Sales is checked by name because it is where the dialog lived.
+     */
+    public function test_no_module_fragment_declares_a_share_dialog_of_its_own(): void
+    {
+        foreach (['sales', 'jobs'] as $module) {
+            $html = (string) $this->get('/modules/'.$module)->assertOk()->getContent();
+
+            $this->assertStringNotContainsString(
+                'data-share-body',
+                $html,
+                'The '.$module.' fragment must borrow the shared share dialog, never declare one.',
+            );
+        }
     }
 
     /**
@@ -1446,29 +2039,186 @@ class PagesRenderTest extends TestCase
         $this->assertTrue($declared['purchase']['workspace']);
     }
 
-    /**
-     * The bench — M19 and M21.
-     */
-    public function test_the_jobs_module_renders_its_list_and_its_booking_form(): void
-    {
-        $view = $this->view('modules.jobs');
+    /* ---------------------------------------------------------------------
+     | Jobs — the bench, converted at C4
+     | ------------------------------------------------------------------ */
 
-        $view->assertSee('id="jobs-body"', escape: false)
-            ->assertSee('id="job-modal"', escape: false)
-            ->assertSee('id="job-form"', escape: false)
-            // Gated on the workshop grant rather than on TRANSACTIONS: a job has
-            // nothing in the books until somebody bills it.
-            ->assertSee('data-requires-permission="WRITE:WORKSHOP_JOBS"', escape: false);
+    /**
+     * §2A — the module opens on its create form, with the list behind a switch.
+     */
+    public function test_the_jobs_module_opens_on_a_form_with_its_list_behind_a_switch(): void
+    {
+        $content = $this->get('/modules/jobs')->assertOk()->getContent();
+
+        $this->assertStringContainsString('data-ws-form', $content);
+        $this->assertStringContainsString('data-ws-list', $content);
+
+        // The heading and the one switch control belong to the workspace, so the
+        // markup must not carry a title of its own (§2A.3). `<h2` is not the
+        // test here, as it is on a module that writes its own form: the shared
+        // bill document brings the two quick-add dialogs, and a dialog has a
+        // heading.
+        $this->assertStringNotContainsString('<h1', $content);
+
+        $form = $this->surfaceMarkup($content, 'data-ws-form');
+        $list = $this->surfaceMarkup($content, 'data-ws-list');
+
+        $this->assertStringContainsString('id="job-form"', $form);
+        $this->assertStringNotContainsString('id="job-form"', $list);
+
+        $this->assertStringContainsString('data-job-body', $list);
+        $this->assertStringNotContainsString('data-job-body', $form);
 
         // §23's columns.
-        foreach (['Job', 'Customer', 'Motor', 'Complaint', 'Status'] as $column) {
-            $view->assertSee('>'.$column.'</th>', escape: false);
+        foreach (['Job', 'Customer', 'What came in', 'Complaint', 'Status'] as $column) {
+            $this->assertStringContainsString('>'.$column.'</th>', $list);
         }
 
-        // Every field of the motor is optional, and the form has to say so: a
-        // pump wheeled in by a driver who does not know its brand still has to be
-        // bookable, or the job card gets written on paper.
-        $view->assertSee('whatever is known', escape: false);
+        // Every field describing the thing is optional, and the form has to say
+        // so: a pump wheeled in by a driver who does not know its brand still
+        // has to be bookable, or the job card gets written on paper.
+        $this->assertStringContainsString('whatever is known', $form);
+    }
+
+    /**
+     * The bench takes in more than motors, and the markup must not name any kind
+     * of thing.
+     *
+     * `hp` and `phase` were two motor fields under a heading that said "The
+     * motor", which told the counter it had the wrong screen every time a cooler
+     * came in. What is asked now comes from the chosen category's own question
+     * set — `GET /workshop-jobs/meta`, drawn by `components/attribute-fields.js`
+     * — which is the catalogue's vocabulary rule applied one module along: never
+     * a product type in code, and never a list of them rendered into a Blade
+     * template, because a copy in the markup goes stale the moment an admin adds
+     * one.
+     */
+    public function test_the_jobs_intake_form_names_no_kind_of_thing(): void
+    {
+        $form = $this->surfaceMarkup(
+            $this->get('/modules/jobs')->assertOk()->getContent(),
+            'data-ws-form',
+        );
+
+        // The kind, and the host its fields are written into.
+        $this->assertStringContainsString('name="category_id"', $form);
+        $this->assertStringContainsString('data-job-specs', $form);
+
+        // The two that were columns, and the heading that assumed them.
+        $this->assertStringNotContainsString('name="hp"', $form);
+        $this->assertStringNotContainsString('name="phase"', $form);
+        $this->assertStringNotContainsString('3-phase', $form);
+
+        // Nor any other kind: the only option this file writes is the one that
+        // stands for "not answered".
+        $this->assertSame(1, substr_count($form, '<option'));
+        $this->assertStringContainsString('Not sure yet', $form);
+    }
+
+    /**
+     * The bill is a level-1 pane on the form surface, not a state of the drawer.
+     *
+     * A drawer would make the shared document — a searched item picker, a line
+     * table, a payment split and a sticky totals panel — into the scroll trap
+     * §2.1 refuses. So the create surface holds two panes and shows one, which
+     * is §2A.2's judgement applied one level down.
+     */
+    public function test_the_jobs_module_bills_through_the_shared_document(): void
+    {
+        $content = $this->get('/modules/jobs')->assertOk()->getContent();
+
+        $form = $this->surfaceMarkup($content, 'data-ws-form');
+
+        $this->assertStringContainsString('data-job-intake', $form);
+        $this->assertStringContainsString('data-job-bill', $form);
+
+        // The document itself is the shared partial, never a copy of its fields.
+        $this->assertStringContainsString('data-bill-document', $form);
+
+        foreach (['data-party-host', 'data-item-host', 'data-payments-host', 'data-totals-host'] as $hook) {
+            $this->assertStringContainsString($hook, $form);
+        }
+
+        // §12's confirmation, and the two quick-add dialogs the partial carries.
+        $this->assertStringContainsString('id="confirm-bill-modal"', $form);
+        $this->assertStringContainsString('id="quick-item-modal"', $form);
+        $this->assertStringContainsString('id="quick-party-drawer"', $form);
+
+        // Exactly one of each. Two nodes with one id is what a second copy of
+        // the partial would be, and the drawer deliberately carries none.
+        $this->assertSame(1, substr_count($content, 'id="quick-item-modal"'));
+        $this->assertSame(1, substr_count($content, 'data-bill-document'));
+    }
+
+    /**
+     * One record over a list is level 2, and correcting it is a state of that
+     * surface — never a form stacked over a drawer (§2.2).
+     */
+    public function test_the_jobs_module_carries_one_drawer_and_one_set_of_fields(): void
+    {
+        $content = $this->get('/modules/jobs')->assertOk()->getContent();
+
+        $this->assertStringContainsString('id="job-drawer"', $content);
+        $this->assertStringContainsString('data-job-edit-slot', $content);
+
+        // `adoptForm()` moves the create form into that slot, so the fields are
+        // written once. A second `<form id="job-form">` is the bug this asserts
+        // against.
+        $this->assertSame(1, substr_count($content, 'id="job-form"'));
+
+        // The customer and the date it arrived are inline-only: neither is
+        // editable once the job exists, and `UpdateJobRequest` accepts neither.
+        $this->assertStringContainsString('data-form-chrome="inline"', $content);
+        $this->assertStringContainsString('data-form-chrome="modal"', $content);
+    }
+
+    public function test_the_jobs_module_is_declared_and_needs_the_workshop_grant(): void
+    {
+        $declared = Modules::declared();
+
+        $this->assertArrayHasKey('jobs', $declared);
+        $this->assertTrue($declared['jobs']['enabled']);
+
+        // Gated on WORKSHOP_JOBS rather than on TRANSACTIONS: a job has nothing
+        // in the books until somebody bills it, and raising that invoice needs
+        // the second grant on top — which the route enforces, not the card.
+        $this->assertSame('READ:WORKSHOP_JOBS', $declared['jobs']['permission']);
+        $this->assertTrue($declared['jobs']['workspace']);
+
+        $this->get('/jobs')->assertRedirect('/dashboard#jobs');
+    }
+
+    /**
+     * One form writes to the stock ledger, and both screens that offer it
+     * include the same one.
+     *
+     * Stock counts a shelf and Items corrects one variant, which are the same
+     * act entered two ways — the difference, or the count with the difference
+     * worked out from the position. A second copy would be a second place the
+     * signed quantity, the client reference and the "post: true" are decided,
+     * and the sign is the whole meaning of the document (§5.1, §4.3).
+     */
+    public function test_both_stock_hosts_include_one_adjustment_form(): void
+    {
+        foreach (['stock', 'items'] as $module) {
+            $content = $this->get('/modules/'.$module)->assertOk()->getContent();
+
+            $this->assertStringContainsString('id="stock-adjust-form"', $content, $module);
+
+            // Both modes ship in both hosts. Which one is shown is the calling
+            // module's argument, not a second partial.
+            $this->assertStringContainsString('data-adjust-mode="count"', $content, $module);
+            $this->assertStringContainsString('data-adjust-mode="variant"', $content, $module);
+
+            /*
+            | And the error slots are the ones `showFormErrors()` actually
+            | paints. This form spent its whole life labelling them `data-error`,
+            | which nothing reads — so every 422 it ever took fell through to a
+            | toast that named no field and was gone before it was read.
+            */
+            $this->assertStringNotContainsString('data-error="', $content, $module);
+            $this->assertStringContainsString('data-error-for="adjustments"', $content, $module);
+        }
     }
 
     /**
@@ -1492,7 +2242,9 @@ class PagesRenderTest extends TestCase
         $view = $this->view('modules.stock');
 
         $view->assertSee('id="stock-body"', escape: false)
-            ->assertSee('id="adjustment-form"', escape: false)
+            // The shared dialog, included rather than written here — see
+            // test_both_stock_hosts_include_one_adjustment_form below.
+            ->assertSee('id="stock-adjust-form"', escape: false)
             // Level 2 — a drawer rather than a modal, because reading why a
             // figure is what it is is a glance mid-scan and the row you came
             // from should stay visible.
@@ -1517,6 +2269,19 @@ class PagesRenderTest extends TestCase
             $view->assertSee('data-stat-filter="'.$status.'"', escape: false)
                 ->assertSee('data-pill="'.$status.'"', escape: false);
         }
+
+        /*
+        | The second level has a pill and deliberately no tile.
+        |
+        | `min_stock` is the floor where `reorder_level` is the trigger, and a
+        | shelf can be under one without being under the other — so it has to be
+        | askable. A fifth tile leaves one alone on a row at every breakpoint
+        | this grid has, and the state already announces itself in the status
+        | column. Asserted so that "add the tile" stays a decision somebody
+        | takes rather than one they make by tidying.
+        */
+        $view->assertSee('data-pill="below_minimum"', escape: false)
+            ->assertDontSee('data-stat-filter="below_minimum"', escape: false);
 
         // The inventory report. Exported client-side from the rows the filters
         // matched, so the file and the table can never disagree.
@@ -1601,14 +2366,34 @@ class PagesRenderTest extends TestCase
      */
     public function test_the_reports_module_no_longer_exists_separately(): void
     {
-        $this->assertArrayNotHasKey('reports', \App\Support\Modules::declared());
+        $this->assertArrayNotHasKey('reports', Modules::declared());
 
         $this->get('/modules/reports')->assertNotFound();
     }
 
+    /**
+     * §2A.10 — History is read-mostly, so it opens on its list.
+     *
+     * The strictest case of it in the product: `canCreate: false` here is not a
+     * permission decision that could be widened later, because there is no POST,
+     * PATCH or DELETE anywhere in this module's API group and there cannot be.
+     * A `data-ws-form` in this markup would be a form for something nobody can
+     * create.
+     */
+    public function test_the_history_module_opens_on_its_list_and_declares_no_create_form(): void
+    {
+        $content = $this->get('/modules/audit')->assertOk()->getContent();
+
+        $this->assertStringContainsString('data-ws-list', $content);
+        $this->assertStringNotContainsString('data-ws-form', $content);
+    }
+
     public function test_the_history_module_renders_its_filters(): void
     {
-        $view = $this->view('modules.audit');
+        // Fetched rather than rendered, now the card is on: this asserts the
+        // fragment route as well as the markup, so a flag flipped without its
+        // route cannot ship.
+        $view = $this->get('/modules/audit')->assertOk();
 
         $view->assertSee('id="audit-rows"', escape: false)
             ->assertSee('id="filter-resource"', escape: false)
@@ -1647,9 +2432,47 @@ class PagesRenderTest extends TestCase
         $view->assertSee('checked in the background', escape: false);
     }
 
+    /*
+    | Settings and Opening balances — C1, the go-live pair. Converted, so both
+    | are fetched through the fragment route rather than rendered directly: that
+    | asserts the route as well as the markup, and a module whose `enabled` flag
+    | was never flipped answers 404 here.
+    */
+
+    public function test_the_opening_balances_module_declares_a_form_surface_and_a_list_surface(): void
+    {
+        $content = $this->get('/modules/opening')->assertOk()->getContent();
+
+        // §2A.1 — the module opens on the declaration, with every import ever
+        // run behind the one switch control the workspace paints.
+        $this->assertStringContainsString('data-ws-form', $content);
+        $this->assertStringContainsString('data-ws-list', $content);
+
+        // The heading and the switch belong to the workspace, so the markup must
+        // not carry a second one of its own.
+        $this->assertStringNotContainsString('<h2', $content);
+
+        /*
+        | The position travels with the *form*, not with the list. It is what
+        | somebody about to declare their whole financial history needs in front
+        | of them, and §2A.2 keeps only one surface attached — so which side of
+        | the split each panel is on is a decision, not a layout accident.
+        */
+        $form = $this->surfaceMarkup($content, 'data-ws-form');
+        $list = $this->surfaceMarkup($content, 'data-ws-list');
+
+        foreach (['id="reconciliation"', 'id="stat-stake"', 'id="opening-form"', 'id="preview-panel"'] as $onForm) {
+            $this->assertStringContainsString($onForm, $form);
+            $this->assertStringNotContainsString($onForm, $list);
+        }
+
+        $this->assertStringContainsString('id="history-rows"', $list);
+        $this->assertStringNotContainsString('id="history-rows"', $form);
+    }
+
     public function test_the_opening_balances_module_renders_its_two_step_flow(): void
     {
-        $view = $this->view('modules.opening');
+        $view = $this->get('/modules/opening')->assertOk();
 
         $view->assertSee('id="opening-form"', escape: false)
             ->assertSee('id="opening-csv"', escape: false)
@@ -1660,7 +2483,8 @@ class PagesRenderTest extends TestCase
 
         // Checking and posting are two controls, never one. Committing a
         // workshop's whole financial history must not be something that
-        // happened because a flag was left out.
+        // happened because a flag was left out. The conversion left this
+        // untouched: it is the module's whole safety property.
         $view->assertSee('id="preview-opening"', escape: false)
             ->assertSee('id="import-opening"', escape: false)
             ->assertSee('Post these balances', escape: false);
@@ -1679,7 +2503,7 @@ class PagesRenderTest extends TestCase
 
     public function test_the_workspace_module_renders_identity_and_book_settings(): void
     {
-        $view = $this->view('modules.workspace');
+        $view = $this->get('/modules/workspace')->assertOk();
 
         $view->assertSee('id="workspace-form"', escape: false)
             ->assertSee('id="welcome-banner"', escape: false);
@@ -1690,6 +2514,53 @@ class PagesRenderTest extends TestCase
 
         // Currency is displayed, never edited — the tax engine is India-specific.
         $view->assertDontSee('name="currency"', escape: false);
+    }
+
+    /**
+     * One record, so one surface.
+     *
+     * There is nothing to create on the settings screen, so it declares only
+     * `data-ws-list` and mounts with `canCreate: false`. Declaring a form
+     * surface as well would paint a switch control to a second surface that
+     * does not exist — and `workspace.js` deliberately grew no single-surface
+     * mode for this.
+     */
+    public function test_the_workspace_module_declares_one_surface_and_no_switch(): void
+    {
+        $content = $this->get('/modules/workspace')->assertOk()->getContent();
+
+        $this->assertStringContainsString('data-ws-list', $content);
+        $this->assertStringNotContainsString('data-ws-form', $content);
+
+        // The heading belongs to the workspace.
+        $this->assertStringNotContainsString('<h2', $content);
+    }
+
+    /**
+     * The three settings the API has always accepted and no screen offered.
+     *
+     * Re-flowing the seven fields that existed and leaving these behind would
+     * have made this the module that looks converted and is not: each one
+     * changes what the application refuses or how it reports, and until this
+     * section there was no way to set any of them.
+     */
+    public function test_the_workspace_module_offers_the_rules_the_api_accepts(): void
+    {
+        $view = $this->get('/modules/workspace')->assertOk();
+
+        foreach (['payment_due_days', 'allow_negative_stock', 'round_off_invoices'] as $setting) {
+            $view->assertSee('name="'.$setting.'"', escape: false);
+        }
+
+        // Each says what it does beside the control, because none of them is
+        // guessable from its name.
+        $view->assertSee('reported overdue', escape: false)
+            ->assertSee('below zero is refused', escape: false)
+            ->assertSee('the total a customer pays', escape: false);
+
+        // Absent rather than blanked for a reader: a disabled Save asks somebody
+        // to work out for themselves why it will not press.
+        $view->assertSee('data-requires-permission="UPDATE:WORKSPACE"', escape: false);
     }
 
     /*
@@ -1835,12 +2706,10 @@ class PagesRenderTest extends TestCase
             }
         }
 
-        foreach (['/dashboard', '/bills/new'] as $path) {
-            $content = $this->get($path)->assertOk()->getContent();
+        $content = $this->get('/dashboard')->assertOk()->getContent();
 
-            foreach ($secrets as $secret) {
-                $this->assertStringNotContainsString($secret, $content);
-            }
+        foreach ($secrets as $secret) {
+            $this->assertStringNotContainsString($secret, $content);
         }
     }
 }

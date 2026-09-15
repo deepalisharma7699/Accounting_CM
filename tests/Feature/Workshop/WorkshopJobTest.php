@@ -5,6 +5,8 @@ namespace Tests\Feature\Workshop;
 use App\Enums\PartyRole;
 use App\Enums\SystemAccount;
 use App\Enums\WorkshopJobStatus;
+use App\Models\ItemAttribute;
+use App\Models\ItemCategory;
 use App\Models\ItemVariant;
 use App\Models\Party;
 use App\Models\Tenant;
@@ -55,6 +57,8 @@ class WorkshopJobTest extends TestCase
 
     private Party $customer;
 
+    private ItemCategory $motorKind;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -69,6 +73,14 @@ class WorkshopJobTest extends TestCase
         $this->bearing = $this->variantFor($this->tenant, 'part', sellPrice: '450.00');
         $this->labour = $this->serviceVariantFor($this->tenant, '1200.00');
         $this->customer = $this->party(PartyRole::Customer);
+
+        // Provisioned by the first variant above. The bench takes its vocabulary
+        // from the catalogue rather than owning a second list of kinds, so this
+        // is the same row the Items form draws a motor's fields from.
+        $this->motorKind = $this->actingForTenant(
+            $this->tenant,
+            fn () => ItemCategory::where('code', 'motor')->firstOrFail(),
+        );
     }
 
     private function party(PartyRole ...$roles): Party
@@ -92,9 +104,9 @@ class WorkshopJobTest extends TestCase
         return $this->withHeaders($this->authHeader($this->owner))
             ->postJson('/api/v1/workshop-jobs', array_merge([
                 'party_id' => $this->customer->id,
-                'hp' => '7.5',
+                'category_id' => $this->motorKind->id,
+                'specs' => ['hp' => '7.5', 'phase' => '3'],
                 'brand' => 'Crompton',
-                'phase' => '3-phase',
                 'complaint' => 'Winding burnt, not starting',
             ], $overrides))
             ->assertCreated()
@@ -123,6 +135,23 @@ class WorkshopJobTest extends TestCase
     {
         return $this->withHeaders($this->authHeader($this->owner))
             ->postJson("/api/v1/workshop-jobs/{$jobId}/bill", $body);
+    }
+
+    /**
+     * A page of the bench, as a listing serialises it.
+     *
+     * Distinct from {@see show()} on purpose: a listing does not load the parts,
+     * so anything derived from them here is derived from the repository's counts
+     * instead — which is exactly what a badge on a row depends on.
+     *
+     * @return array<string, mixed>
+     */
+    private function index(array $query = []): array
+    {
+        return $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/workshop-jobs?'.http_build_query($query))
+            ->assertOk()
+            ->json();
     }
 
     private function show(int $jobId): array
@@ -164,12 +193,253 @@ class WorkshopJobTest extends TestCase
 
         $this->assertSame(WorkshopJobStatus::Received->value, $job['status']);
         $this->assertStringStartsWith('JOB/', $job['job_no']);
-        $this->assertSame('7.5 HP Crompton 3-phase', $job['motor']);
+
+        // What it is, then whose it is. The specification is the category's own
+        // first two fields with the category's own units — never a rating and a
+        // phase this module knows the names of.
+        $this->assertSame('Motor 7.5 HP, 3 ph · Crompton', $job['equipment']);
+        $this->assertSame('Motor', $job['kind_label']);
+        $this->assertEquals(['hp' => '7.5', 'phase' => '3'], $job['specs']);
 
         // The whole point of D1 and D2 in one assertion: booking a motor in is
         // not an accounting event, so nothing at all has reached the books.
         $this->assertSame(0, Transaction::withoutGlobalScopes()->count());
         $this->assertStockAgreesWithInventoryAccount($this->tenant, 'after booking a job in');
+    }
+
+    /* ---------------------------------------------------------------------
+     | What comes in is not always a motor
+     |
+     | The bench used to record `hp` and `phase` as columns, under a heading that
+     | said "The motor" — a product type in the schema and in a Blade template,
+     | which is the failure the catalogue's vocabulary rule already records. Most
+     | of what a motor workshop takes in is a motor; a good deal of it is a
+     | cooler, a table fan or a pump, and now and then it is something nobody
+     | expected. These hold that shut.
+     |-------------------------------------------------------------------- */
+
+    /**
+     * A workshop that starts repairing coolers defines the kind and the bench
+     * asks the right questions — no column, no migration, no deployment.
+     */
+    #[Test]
+    public function anything_the_workshop_defines_a_kind_for_can_be_booked_in(): void
+    {
+        $cooler = $this->kind('Cooler', [
+            ['key' => 'capacity', 'label' => 'Tank capacity', 'data_type' => 'number', 'unit_code' => 'litre'],
+            ['key' => 'body', 'label' => 'Body', 'data_type' => 'dropdown', 'options' => ['Plastic', 'Metal']],
+        ]);
+
+        $job = $this->bookIn([
+            'category_id' => $cooler->id,
+            'specs' => ['capacity' => '65', 'body' => 'Plastic'],
+            'brand' => 'Symphony',
+            'complaint' => 'Pump not lifting water',
+        ]);
+
+        $this->assertSame('Cooler', $job['kind_label']);
+
+        // `assertEquals`, not `assertSame`: MySQL's JSON type normalises an
+        // object's key order, so a stored bag never comes back in the order it
+        // was written. That is the whole reason `resolvedSpecs()` sorts by the
+        // schema instead of trusting the bag — the assertion below is the one
+        // that has to be in order.
+        $this->assertEquals(['capacity' => '65', 'body' => 'Plastic'], $job['specs']);
+
+        // Labelled and unitised from the category that asked, so a job card can
+        // print it without knowing what a cooler is.
+        $this->assertSame(
+            [
+                ['key' => 'capacity', 'label' => 'Tank capacity', 'value' => '65', 'suffix' => 'L'],
+                ['key' => 'body', 'label' => 'Body', 'value' => 'Plastic', 'suffix' => null],
+            ],
+            $job['specs_display'],
+        );
+
+        $this->assertSame('Cooler 65 L, Plastic · Symphony', $job['equipment']);
+    }
+
+    /**
+     * Nothing about the thing is compulsory — its kind included.
+     *
+     * A pump is wheeled in at four in the afternoon by a driver who does not
+     * know what it is, and a form that refused to book it in would be a form
+     * that got a job card written on paper instead.
+     */
+    #[Test]
+    public function something_nobody_can_identify_is_still_booked_in(): void
+    {
+        $job = $this->bookIn([
+            'category_id' => null,
+            'specs' => null,
+            'brand' => null,
+            'complaint' => 'Sparking when switched on',
+        ]);
+
+        $this->assertNull($job['kind_label']);
+        $this->assertSame([], (array) $job['specs']);
+        $this->assertSame([], $job['specs_display']);
+
+        // The job number, because there is nothing else to call it by — and not
+        // an empty string, which would leave a blank cell on the bench.
+        $this->assertSame($job['job_no'], $job['equipment']);
+    }
+
+    /**
+     * A category demanding a rating demands it of a *product*. This is a
+     * physical object that is already on the bench.
+     */
+    #[Test]
+    public function a_kind_that_insists_on_a_field_does_not_insist_here(): void
+    {
+        // `hp`, `phase` and `rpm` are all `is_required` on the seeded Motor
+        // category — an item variant cannot be saved without them.
+        $this->assertNotEmpty($this->actingForTenant(
+            $this->tenant,
+            fn () => $this->motorKind->requiredAttributeKeys(),
+        ));
+
+        $job = $this->bookIn(['specs' => []]);
+
+        $this->assertSame('Motor', $job['kind_label']);
+        $this->assertSame([], (array) $job['specs']);
+        $this->assertSame('Motor · Crompton', $job['equipment']);
+    }
+
+    /**
+     * The bag is filtered to what the kind actually asks about.
+     *
+     * A key no schema explains cannot be labelled, printed or edited back into
+     * the form, so it is dropped rather than stored as something nobody can read.
+     */
+    #[Test]
+    public function a_specification_the_kind_never_asked_for_is_not_kept(): void
+    {
+        $job = $this->bookIn([
+            'specs' => ['hp' => '5', 'colour' => 'Blue', 'lumens' => '900'],
+        ]);
+
+        $this->assertEquals(['hp' => '5'], $job['specs']);
+    }
+
+    /**
+     * Correcting a motor to a cooler cannot leave a motor's answers behind:
+     * `hp` is not a field a cooler has, and a bag its kind cannot read is one
+     * nothing can print.
+     */
+    #[Test]
+    public function changing_the_kind_takes_the_old_specification_with_it(): void
+    {
+        $cooler = $this->kind('Cooler', [
+            ['key' => 'capacity', 'label' => 'Tank capacity', 'data_type' => 'number', 'unit_code' => 'litre'],
+        ]);
+
+        $job = $this->bookIn();
+
+        $corrected = $this->withHeaders($this->authHeader($this->owner))
+            ->patchJson("/api/v1/workshop-jobs/{$job['id']}", [
+                'category_id' => $cooler->id,
+                'specs' => ['capacity' => '65'],
+            ])
+            ->assertOk()
+            ->json('data');
+
+        $this->assertSame('Cooler', $corrected['kind_label']);
+        $this->assertEquals(['capacity' => '65'], $corrected['specs']);
+    }
+
+    /**
+     * The intake form draws its fields from the server, and asks the route the
+     * counter clerk actually holds a grant for.
+     *
+     * Fetching them from `GET /items/meta` would 403 the form for its main user:
+     * booking a motor in needs WORKSHOP_JOBS and nothing says it needs ITEMS.
+     */
+    #[Test]
+    public function the_bench_publishes_the_kinds_it_can_take_in(): void
+    {
+        $benchOnly = User::factory()
+            ->forTenant($this->tenant)
+            ->withRole($this->roleWith([['READ', 'WORKSHOP_JOBS']], 'Bench only'))
+            ->create();
+
+        $kinds = $this->withHeaders($this->authHeader($benchOnly))
+            ->getJson('/api/v1/workshop-jobs/meta')
+            ->assertOk()
+            ->json('data.kinds');
+
+        $labels = array_column($kinds, 'label');
+
+        $this->assertContains('Motor', $labels);
+
+        // Labour is produced at the moment it is sold — nobody wheels an hour
+        // onto a bench — and `holds_stock` already says so, which is why there
+        // is no second flag to keep in step with it.
+        $this->assertNotContains('Service', $labels);
+
+        $motor = collect($kinds)->firstWhere('label', 'Motor');
+
+        $this->assertArrayHasKey('hp', (array) $motor['attributes']);
+        $this->assertSame('Rating', ((array) $motor['attributes'])['hp']['label']);
+    }
+
+    /**
+     * The kind is copied onto the row, so searching finds the coolers without a
+     * join and a renamed category leaves old cards saying what came in.
+     */
+    #[Test]
+    public function the_kind_is_searchable_and_survives_a_rename(): void
+    {
+        $cooler = $this->kind('Cooler');
+
+        $this->bookIn(['category_id' => $cooler->id, 'specs' => null]);
+        $this->bookIn();
+
+        $found = $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/workshop-jobs?search=cooler')
+            ->assertOk()
+            ->json('data');
+
+        $this->assertCount(1, $found);
+        $this->assertSame('Cooler', $found[0]['kind_label']);
+
+        $this->actingForTenant($this->tenant, fn () => $cooler->update(['name' => 'Air cooler']));
+
+        $this->assertSame(
+            'Cooler',
+            $this->withHeaders($this->authHeader($this->owner))
+                ->getJson("/api/v1/workshop-jobs/{$found[0]['id']}")
+                ->json('data.kind_label'),
+        );
+    }
+
+    /**
+     * A kind the workshop defines, with the fields it asks about.
+     *
+     * @param  array<int, array<string, mixed>>  $attributes
+     */
+    private function kind(string $name, array $attributes = []): ItemCategory
+    {
+        return $this->actingForTenant($this->tenant, function () use ($name, $attributes) {
+            $category = ItemCategory::create([
+                'name' => $name,
+                'holds_stock' => true,
+                'uses_sac_code' => false,
+                'default_unit_code' => 'piece',
+                'is_active' => true,
+            ]);
+
+            foreach ($attributes as $order => $attribute) {
+                ItemAttribute::create(array_merge([
+                    'category_id' => $category->id,
+                    'is_required' => false,
+                    'is_active' => true,
+                    'display_order' => $order,
+                ], $attribute));
+            }
+
+            return $category->refresh();
+        });
     }
 
     #[Test]
@@ -524,6 +794,256 @@ class WorkshopJobTest extends TestCase
         $this->assertSame('7.000', $this->stockPositionOf($this->tenant, $this->bearing)['quantity']);
 
         $this->assertSame(2, $this->show($job['id'])['billed']['count']);
+    }
+
+    /* ---------------------------------------------------------------------
+     | Whether the job has been invoiced
+     |
+     | A second signal beside the status and never folded into it: a job's status
+     | is about the motor and this is about the money. Before it, a repair that
+     | had been charged for looked on the list exactly like one that had not —
+     | the status still read "In progress", because that is where the motor was,
+     | and nothing anywhere said an invoice existed.
+     |-------------------------------------------------------------------- */
+
+    #[Test]
+    public function a_job_says_whether_it_has_been_invoiced(): void
+    {
+        $this->buyBearings('10', '300.00');
+
+        $job = $this->bookIn();
+        $this->advance($job['id'], WorkshopJobStatus::InProgress)->assertOk();
+
+        // Nothing on it yet, and nothing billed.
+        $this->assertSame('unbilled', $this->show($job['id'])['billing_state']);
+
+        $this->addPart($job['id'], [
+            'variant_id' => $this->bearing->id, 'quantity' => '2', 'unit_price' => '450.00',
+        ])->assertCreated();
+        $this->addPart($job['id'], [
+            'variant_id' => $this->labour->id, 'quantity' => '1', 'unit_price' => '1200.00',
+        ])->assertCreated();
+
+        $this->assertSame('unbilled', $this->show($job['id'])['billing_state']);
+
+        $this->bill($job['id'])->assertCreated();
+
+        $billed = $this->show($job['id']);
+
+        $this->assertSame('billed', $billed['billing_state']);
+        $this->assertSame('Invoiced', $billed['billing_state_label']);
+        // The tone travels with it, so a screen never maps a state to a colour.
+        $this->assertSame('success', $billed['billing_state_tone']);
+
+        // The status is untouched. The motor is still on the bench, and saying
+        // otherwise because an invoice exists would be a lie about the workshop.
+        $this->assertSame(WorkshopJobStatus::InProgress->value, $billed['status']);
+
+        // Something more fitted afterwards puts it back to part billed: there is
+        // work on the card the customer has not been charged for.
+        $this->addPart($job['id'], [
+            'variant_id' => $this->bearing->id, 'quantity' => '1', 'unit_price' => '450.00',
+        ])->assertCreated();
+
+        $this->assertSame('part_billed', $this->show($job['id'])['billing_state']);
+    }
+
+    #[Test]
+    public function the_listing_says_it_too_without_loading_every_part(): void
+    {
+        $this->buyBearings('10', '300.00');
+
+        $job = $this->billableJobWithTwoBearings();
+
+        $row = collect($this->index()['data'])->firstWhere('id', $job);
+
+        $this->assertSame('unbilled', $row['billing_state']);
+
+        $this->bill($job)->assertCreated();
+
+        $row = collect($this->index()['data'])->firstWhere('id', $job);
+
+        $this->assertSame('billed', $row['billing_state']);
+        // Derived from a count on the listing rather than from the parts, which a
+        // page of twenty-five jobs does not load — see the repository.
+        $this->assertSame('Invoiced', $row['billing_state_label']);
+    }
+
+    /**
+     * Reversing the only invoice off a job puts it back to not billed.
+     *
+     * Which is the whole reason the state is derived rather than stored: nothing
+     * in the Jobs module knows the invoice was reversed, and nothing has to.
+     */
+    public function test_reversing_the_invoice_takes_the_badge_away(): void
+    {
+        $this->buyBearings('10', '300.00');
+
+        $job = $this->billableJobWithTwoBearings();
+        $bill = $this->bill($job)->assertCreated()->json('data');
+
+        $this->assertSame('billed', $this->show($job)['billing_state']);
+
+        $this->withHeaders($this->authHeader($this->owner))
+            ->postJson("/api/v1/transactions/{$bill['id']}/reverse")
+            ->assertCreated();
+
+        $reread = $this->show($job);
+
+        $this->assertSame('unbilled', $reread['billing_state']);
+        // The document itself stays on the card — the reversal is part of the
+        // record of what happened, and the job lists both halves of the pair.
+        $this->assertSame(1, $reread['billed']['count']);
+        $this->assertSame(0, $reread['billed']['live']);
+        $this->assertSame('0.00', $reread['billed']['total']);
+    }
+
+    /* ---------------------------------------------------------------------
+     | What the counter changed on the way out
+     |
+     | `items` is an override, and sending it costs the pairing between a part
+     | and the line it became — so `bill()` marks nothing when it is present.
+     | That branch had no coverage at all until C4, and the Jobs card is the
+     | first screen that can reach either half of it: it omits `items` while the
+     | lines are the ones the job produced, and sends them when a rate was
+     | argued down at the counter.
+     |-------------------------------------------------------------------- */
+
+    #[Test]
+    public function a_bill_whose_lines_were_replaced_posts_and_leaves_the_parts_on_the_card(): void
+    {
+        $this->buyBearings('10', '300.00');
+
+        $job = $this->bookIn();
+        $this->advance($job['id'], WorkshopJobStatus::InProgress)->assertOk();
+        $this->addPart($job['id'], [
+            'variant_id' => $this->bearing->id, 'quantity' => '2', 'unit_price' => '450.00',
+        ])->assertCreated();
+
+        // The customer argued the rate down while the motor was on the counter.
+        $response = $this->bill($job['id'], [
+            'items' => [[
+                'variant_id' => $this->bearing->id, 'quantity' => '2', 'unit_price' => '400.00',
+            ]],
+        ])->assertCreated();
+
+        $bill = $response->json('data');
+
+        // The invoice is real, at the agreed rate, and stamped with the job.
+        $this->assertSame('800.00', $response->json('meta.tax.taxable'));
+        $this->assertSame(
+            (int) $job['id'],
+            (int) Transaction::withoutGlobalScopes()->find($bill['id'])->workshop_job_id,
+        );
+
+        // The stock moved, because the invoice posted.
+        $this->assertSame('8.000', $this->stockPositionOf($this->tenant, $this->bearing)['quantity']);
+
+        /*
+        | And the parts stayed on the card, deliberately. Line three of the
+        | operator's list is no longer part three of the job, so nothing is
+        | paired — which is the safe way to be wrong: somebody sees the bearings
+        | again rather than them vanishing off the job silently.
+        */
+        $reread = $this->show($job['id']);
+
+        $this->assertSame(1, $reread['billed']['count']);
+        $this->assertTrue(collect($reread['parts'])->every(fn (array $part) => ! $part['is_billed']));
+    }
+
+    #[Test]
+    public function a_workshop_bill_takes_a_discount_on_the_whole_repair(): void
+    {
+        $this->buyBearings('20', '300.00');
+
+        $plain = $this->billableJobWithTwoBearings();
+        $discounted = $this->billableJobWithTwoBearings();
+
+        $before = $this->bill($plain)->assertCreated()->json('meta.tax.taxable');
+        $after = $this->bill($discounted, ['bill_discount' => '100.00'])
+            ->assertCreated()
+            ->json('meta.tax.taxable');
+
+        // Apportioned across the lines *before* tax, so the tax falls with it.
+        // Until C4 this endpoint named no such key and the figure was dropped on
+        // the floor, which meant the two totals came back identical.
+        $this->assertSame('900.00', $before);
+        $this->assertSame('800.00', $after);
+    }
+
+    #[Test]
+    public function a_line_quoted_with_the_tax_already_in_it_is_billed_that_way(): void
+    {
+        $this->buyBearings('10', '300.00');
+
+        $this->actingForTenant($this->tenant, fn () => $this->bearing->item->update(['gst_rate' => '18.00']));
+
+        $job = $this->bookIn();
+        $this->advance($job['id'], WorkshopJobStatus::InProgress)->assertOk();
+        $this->addPart($job['id'], [
+            'variant_id' => $this->bearing->id, 'quantity' => '1', 'unit_price' => '118.00',
+        ])->assertCreated();
+
+        $taxable = $this->bill($job['id'], [
+            'items' => [[
+                'variant_id' => $this->bearing->id,
+                'quantity' => '1',
+                'unit_price' => '118.00',
+                'price_includes_tax' => true,
+            ]],
+        ])->assertCreated()->json('meta.tax.taxable');
+
+        // The tax is what is left over, never a second multiplication — a
+        // customer handing over a hundred and eighteen for a hundred-and-
+        // eighteen price is the whole point of the mode.
+        $this->assertSame('100.00', $taxable);
+    }
+
+    #[Test]
+    public function a_workshop_bill_records_who_did_the_work(): void
+    {
+        $this->buyBearings('10', '300.00');
+
+        [$fitter, $ramesh] = $this->actingForTenant($this->tenant, function () {
+            $designation = \App\Models\StaffDesignation::create([
+                'name' => 'Fitter',
+                'track_on_sales' => true,
+            ]);
+
+            return [$designation, \App\Models\Employee::create([
+                'name' => 'Ramesh',
+                'designation_id' => $designation->id,
+                'salary_basis' => 'monthly',
+                'pay_rate' => '18000.00',
+                'joined_on' => '2026-01-01',
+            ])];
+        });
+
+        $bill = $this->bill($this->billableJobWithTwoBearings(), [
+            'staff' => [['designation_id' => $fitter->id, 'employee_id' => $ramesh->id]],
+        ])->assertCreated()->json('data');
+
+        /*
+        | A rewind is the canonical case for attribution — "Ramesh fitted it,
+        | Sunil wound it" is a sentence about a job. It reached this endpoint
+        | from the shared bill document and was dropped, silently, because
+        | nothing here named the key.
+        */
+        $this->assertSame('Ramesh', $bill['staff'][0]['employee']);
+        $this->assertSame('Fitter', $bill['staff'][0]['designation']);
+    }
+
+    /** A job in progress with two bearings on it, ready to bill. */
+    private function billableJobWithTwoBearings(): int
+    {
+        $job = $this->bookIn();
+
+        $this->advance($job['id'], WorkshopJobStatus::InProgress)->assertOk();
+        $this->addPart($job['id'], [
+            'variant_id' => $this->bearing->id, 'quantity' => '2', 'unit_price' => '450.00',
+        ])->assertCreated();
+
+        return (int) $job['id'];
     }
 
     /**

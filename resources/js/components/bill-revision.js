@@ -131,6 +131,12 @@ export function mountBillRevision(root, { doc, workspace, direction, nouns }) {
             label: line.description ?? `Line ${line.line_no}`,
             unit_symbol: line.unit_symbol ?? '',
             gst_rate: line.gst_rate ?? '0',
+            // Which basis the rate above was struck on. Carried for the same
+            // reason the rate is, and it matters more: price and rate together
+            // cannot say whether ₹118 meant ₹118 or ₹139.24, so a correction
+            // reloaded without this restates the whole document at a total the
+            // original never carried.
+            price_includes_tax: line.price_includes_tax === true,
         }, {
             quantity: line.quantity,
             // See the docblock: omitted on a repeated purchase, and only there.

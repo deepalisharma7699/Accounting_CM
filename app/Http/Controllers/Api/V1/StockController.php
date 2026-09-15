@@ -142,6 +142,11 @@ class StockController extends Controller
             'statuses' => [
                 ['value' => 'in_stock', 'label' => 'In stock'],
                 ['value' => 'low', 'label' => 'At or below reorder level'],
+                // The other level, and a different question: `low` is when to
+                // order and this is when to stop what you are doing and go and
+                // get some. Published beside it rather than folded into it, for
+                // the reason the two columns exist at all.
+                ['value' => 'below_minimum', 'label' => 'Below the minimum set'],
                 ['value' => 'out', 'label' => 'Out of stock'],
                 // Named plainly. It is a data problem, not a shortage, and a
                 // label that softened it would get ignored.

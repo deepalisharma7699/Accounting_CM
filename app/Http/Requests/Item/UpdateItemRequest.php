@@ -39,6 +39,10 @@ class UpdateItemRequest extends FormRequest
             'brand_id' => ['sometimes', 'nullable', 'integer', 'min:1'],
             'hsn_sac' => ['sometimes', 'nullable', 'string', 'regex:/^\d{4,8}$/'],
             'gst_rate' => ['sometimes', 'numeric', 'decimal:0,2', 'between:0,100'],
+
+            // See StoreItemRequest: a prefill for the bill form's toggle, never
+            // the thing that decides what a posted line was taxed on.
+            'price_includes_tax' => ['sometimes', 'boolean'],
             'is_stock' => ['sometimes', 'boolean'],
             // Clearing this is how the review queue is worked through.
             'is_draft' => ['sometimes', 'boolean'],
@@ -91,7 +95,7 @@ class UpdateItemRequest extends FormRequest
             $payload['gst_rate'] = $this->input('gst_rate');
         }
 
-        foreach (['is_stock', 'is_draft', 'is_active'] as $flag) {
+        foreach (['is_stock', 'is_draft', 'is_active', 'price_includes_tax'] as $flag) {
             if ($this->has($flag)) {
                 $payload[$flag] = $this->boolean($flag);
             }

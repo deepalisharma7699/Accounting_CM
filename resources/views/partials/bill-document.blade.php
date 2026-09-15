@@ -7,10 +7,11 @@
 | the pickers, the payment rows and the totals footer are all written by the
 | engine, because the job screen and the journal want the same three.
 |
-| Included by the counter at `/bills/new` and by the Purchase module's level-1
-| create form. Neither owns it, and neither may copy it: the fields, the error
-| slots and the `data-` hooks are a contract with one JavaScript file, and a
-| second copy of the markup is a second place for that contract to go stale.
+| Included by the Purchase and Sales modules' level-1 create forms, and by the
+| Jobs module's bill pane. None of them owns it, and none may copy it: the
+| fields, the error slots and the `data-` hooks are a contract with one
+| JavaScript file, and a second copy of the markup is a second place for that
+| contract to go stale.
 |
 | The whole of it sits in one `data-bill-document` element, which is the root the
 | engine scopes every query to — including the dialogs, so a level-1 surface that
@@ -61,8 +62,8 @@
                  asks about is data, published by GET /transactions/meta, and
                  writing "Fitter" and "Winder" here would be the hard-coded
                  vocabulary the catalogue module was rebuilt to remove. Rendered
-                 unconditionally because the counter at /bills/new flips its
-                 direction at runtime — the engine decides whether it paints. --}}
+                 unconditionally because a host can flip its direction at
+                 runtime — the engine decides whether it paints. --}}
             <div class="mt-3 hidden" data-staff-host></div>
 
             <label class="field mt-3">

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\Workspace\UpdateFavouriteModulesRequest;
 use App\Http\Requests\Workspace\UpdateWorkspaceRequest;
 use App\Http\Resources\TenantResource;
 use App\Services\Tenancy\TenantService;
@@ -46,6 +47,31 @@ class WorkspaceController extends Controller
         return ApiResponse::success(
             new TenantResource($this->tenants->updateOwnWorkspace($request->payload())),
             'Workshop details updated successfully.'
+        );
+    }
+
+    /**
+     * PUT /api/v1/workspace/favourites
+     *
+     * Which module cards sit at the top of the workshop's home screen.
+     *
+     * PUT rather than PATCH because the body is the whole list — starring the
+     * fourth card sends all four, and unstarring the last one sends an empty
+     * array, which is a real answer rather than an omission. It is the reasoning
+     * the settlement allocator already uses: a replacement is sent in full, so
+     * there is no way for "nothing" to read as "unchanged".
+     *
+     * Its own route rather than a field on `update()` above, so that starring a
+     * card does not announce that the ledger moved — see
+     * UpdateFavouriteModulesRequest for the whole of why.
+     */
+    public function favourites(UpdateFavouriteModulesRequest $request): JsonResponse
+    {
+        return ApiResponse::success(
+            new TenantResource($this->tenants->updateOwnWorkspace([
+                'favourite_modules' => $request->favourites(),
+            ])),
+            'Home screen updated.'
         );
     }
 }

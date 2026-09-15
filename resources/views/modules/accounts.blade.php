@@ -1,515 +1,342 @@
-
 {{--
-    The Accounting screen from the design: three views of the books behind one
-    tab strip — the ledgers and what they stand at, the journal entries that put
-    them there, and the chart those ledgers are arranged into.
+    Accounting — C5, and the merge is the point.
 
-    They are one screen rather than three because they are one question asked at
-    three zoom levels, and the answer to each is derived from the same rows. But
-    they are *not* one grant. The chart is READ:ACCOUNTS, which is what this page
-    is gated on; every balance on it comes from READ:LEDGER and every journal row
-    from READ:TRANSACTIONS, and neither is implied by the first.
+    Accounting and Ledger were two cards answering one question at two zoom
+    levels: "what does this account stand at". Two cards would have meant two
+    period pickers and two trial-balance renderers, and the second copy of each
+    is the one that drifts — so there is one card, keyed `accounts`, and the
+    `ledger` key is gone from the registry (§5.1, §4.4).
 
-    So, exactly as the catalogue does with stock: elements that need a grant this
-    page does not itself carry are marked `data-ledger-only` or carry
-    `data-requires-permission`, and are **removed** rather than blanked. A column
-    of dashes would read as "these accounts are all at zero" when it means "not
-    yours to see", and that is a worse answer than no column at all.
+    ```
+    card → CREATE ACCOUNT            ← always lands here (§2A.1, §2A.5)
+         → "Show list (37)"          → the books, in two views over one period
+              ├── Chart of accounts  — every account, grouped, what it stands at
+              └── Trial balance      — with the reconciliation stated, not implied
+         → row → drawer (level 2)    → the running statement, the CSV, Edit
+         → confirm (level 3)
+    ```
+
+    ## Two grants, one card
+
+    The chart is `READ:ACCOUNTS`, which is what the card itself is gated on.
+    Every *figure* on this screen — the balance column, the type totals, the
+    trial balance, the running statement — is `READ:LEDGER`, and neither grant
+    implies the other. So a holder of the first without the second gets the
+    chart with **no figures at all**: the marks below are `data-ledger-only` and
+    `pages/accounts.js` **removes** them rather than blanking them. A column of
+    dashes reads as "every account is at zero", which is a claim about the books
+    rather than about the reader's permissions — the same judgement Insights'
+    People tab makes about the wage tile.
+
+    ## What is deliberately not here
+
+    **The journal-entry list.** It was this screen's second tab, and every row of
+    it is on the Day Book, which lists every posted document including the
+    journals Sales and Purchase do not show. A fourth copy would be screens
+    answering one question (§5.1). **A party's ledger and statement** likewise:
+    Customers and Vendors carry those, gated the same way.
+
+    ## Why search and the archived filter narrow the chart and not the balance
+
+    A trial balance whose rows were filtered would not reconcile. Its totals come
+    from the server, over every account with movement in the period — narrow the
+    rows in the browser and the column no longer adds up to the figure under it,
+    with nothing on screen saying so. So those two controls belong to the chart
+    view and are hidden on the other; the **period** is the one control both
+    share, because it changes what every figure means rather than which of them
+    are shown.
 --}}
-<div class="mx-auto max-w-[1280px]">
+<div class="mx-auto max-w-[1180px]">
 
-    <header class="mb-6 flex flex-wrap items-start justify-between gap-4">
-        <div>
-            <h2 class="text-2xl font-bold leading-tight tracking-tight text-foreground">Accounting</h2>
-            <p class="mt-1 text-sm text-muted-foreground">
-                View accounting records, ledger balances, and manage the chart of accounts.
-            </p>
-        </div>
+    {{-- ==================================================================
+         Level 1, form mode — where the module lands (§2A.1).
 
-        <div class="flex flex-wrap items-center gap-2">
-            {{-- One search box for three tabs, and it is cleared when the tab
-                 changes: the placeholder names what is being searched, so a term
-                 carried over would silently be matched against a different
-                 kind of record. --}}
-            <div class="search-pill w-60">
-                <x-icon name="search" :size="15" />
-                <input type="search" id="filter-search" class="w-full"
-                       placeholder="Search ledgers, account code…" aria-label="Search">
-            </div>
+         Creating an expense head is a real create act, and until this card was
+         switched on no workshop could perform it: `POST /accounts` has exactly
+         one caller in the whole front end and it is this module. The seeded
+         fifteen were all a workshop would ever get.
+         ================================================================== --}}
+    <div data-ws-form>
 
-            {{-- Type and archived-state live behind this rather than on the
-                 toolbar. They are set once and left alone, and two permanent
-                 selects would crowd out the pills people actually reach for. --}}
-            <div class="relative" data-panel-for="ledger coa">
-                <button type="button" id="filter-toggle" class="btn btn-secondary btn-sm h-[2.375rem]"
-                        aria-expanded="false" aria-haspopup="true">
-                    <x-icon name="sliders-horizontal" :size="14" />
-                    Filter
-                    <span id="filter-count"
-                          class="hidden rounded-full bg-accent px-1.5 text-[0.6875rem] font-semibold text-primary"></span>
-                </button>
+        {{-- What the last save did. A line above the cleared form rather than a
+             toast, for C3's reason: §2A.8 empties the form the instant it posts,
+             and a toast is gone before somebody has read the code. --}}
+        <div data-account-outcome role="status"
+             class="mb-4 hidden items-start gap-3 rounded-[10px] border border-emerald-200 bg-emerald-50
+                    px-4 py-3 text-[0.8125rem] text-emerald-900"></div>
 
-                <div id="filter-panel" class="surface absolute right-0 top-full z-30 mt-1 hidden w-64 p-3">
-                    <label for="filter-status" class="field-label">Archived</label>
-                    <select id="filter-status" class="field-input mb-3" aria-label="Filter by archived state">
-                        <option value="1">Active only</option>
-                        <option value="0">Archived only</option>
-                        <option value="">Active &amp; archived</option>
-                    </select>
+        {{-- The form's home when it is the create surface. `adoptForm()` moves
+             this one node into the drawer for an edit and back again — the
+             fields are written once, so a validation rule cannot be added to one
+             copy and left off the other (§4.4, §5.1). --}}
+        <div data-account-form-slot>
+            <form id="account-form" novalidate class="space-y-4">
+                <input type="hidden" name="id">
 
-                    <label for="filter-side" class="field-label">Normal balance</label>
-                    <select id="filter-side" class="field-input" aria-label="Filter by normal balance">
-                        <option value="">Debit &amp; credit</option>
-                        <option value="debit">Increases on debit</option>
-                        <option value="credit">Increases on credit</option>
-                    </select>
-                </div>
-            </div>
-
-            {{-- Dates, for the journal tab only — a period means nothing to a
-                 chart of accounts. --}}
-            <div class="relative hidden" data-panel-for="journal" data-requires-permission="READ:TRANSACTIONS">
-                <button type="button" id="period-toggle" class="btn btn-secondary btn-sm h-[2.375rem]"
-                        aria-expanded="false" aria-haspopup="true">
-                    <x-icon name="clock" :size="14" />
-                    Period
-                    <span id="period-count"
-                          class="hidden rounded-full bg-accent px-1.5 text-[0.6875rem] font-semibold text-primary"></span>
-                </button>
-
-                <div id="period-panel" class="surface absolute right-0 top-full z-30 mt-1 hidden w-64 p-3">
-                    <label for="filter-from" class="field-label">From</label>
-                    <input type="date" id="filter-from" class="field-input mb-3" aria-label="From date">
-
-                    <label for="filter-to" class="field-label">To</label>
-                    <input type="date" id="filter-to" class="field-input mb-3" aria-label="To date">
-
-                    <button type="button" id="clear-period" class="btn btn-secondary btn-sm w-full">
-                        Clear period
-                    </button>
-                </div>
-            </div>
-
-            {{-- Exports what is on screen, not what is in the books: the rows the
-                 current tab, search and filters have narrowed to. Anything else
-                 would hand somebody a file that disagrees with the table they
-                 were looking at when they asked for it. --}}
-            <button type="button" id="export-csv" class="btn btn-secondary btn-sm h-[2.375rem]">
-                <x-icon name="download" :size="14" />
-                Export
-            </button>
-
-            <button type="button" id="new-account" class="btn btn-primary btn-sm hidden h-[2.375rem]"
-                    data-requires-permission="WRITE:ACCOUNTS">
-                <x-icon name="plus" :size="15" />
-                New account
-            </button>
-        </div>
-    </header>
-
-    <div class="tab-strip mb-6" id="accounting-tabs" role="tablist" aria-label="Accounting views">
-        <button type="button" class="tab" role="tab" data-tab="ledger" aria-selected="true"
-                aria-controls="panel-ledger">
-            <x-icon name="book-open" :size="14" />
-            Ledger Accounts
-        </button>
-
-        {{-- Journal entries are transactions, which is a different grant from the
-             chart this page is gated on. Removed outright for a user without it,
-             rather than shown and then failing on the fetch. --}}
-        <button type="button" class="tab" role="tab" data-tab="journal" aria-selected="false"
-                aria-controls="panel-journal" data-requires-permission="READ:TRANSACTIONS">
-            <x-icon name="file-text" :size="14" />
-            Journal Entries
-        </button>
-
-        <button type="button" class="tab" role="tab" data-tab="coa" aria-selected="false"
-                aria-controls="panel-coa">
-            <x-icon name="layers" :size="14" />
-            Chart of Accounts
-        </button>
-    </div>
-
-    {{-- ================================================================== --}}
-    {{-- Tab 1 — Ledger Accounts                                            --}}
-    {{-- ================================================================== --}}
-    <section id="panel-ledger" role="tabpanel" aria-label="Ledger accounts">
-
-        {{-- Counts, not balances, so these four survive a user who holds
-             READ:ACCOUNTS without READ:LEDGER. --}}
-        <div class="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <div class="stat-tile">
-                <span class="grid size-9 shrink-0 place-items-center rounded-[9px] bg-blue-50 text-blue-600">
-                    <x-icon name="book-open" :size="16" />
-                </span>
-                <span>
-                    <span class="block text-[22px] font-bold leading-none text-foreground" id="stat-ledgers">—</span>
-                    <span class="mt-0.5 block text-xs text-muted-foreground">Total Ledgers</span>
-                </span>
-            </div>
-
-            <button type="button" class="stat-tile stat-tile-action" data-stat-filter="asset">
-                <span class="grid size-9 shrink-0 place-items-center rounded-[9px] bg-emerald-50 text-emerald-600">
-                    <x-icon name="dollar-sign" :size="16" />
-                </span>
-                <span>
-                    <span class="block text-[22px] font-bold leading-none text-foreground" id="stat-assets">—</span>
-                    <span class="mt-0.5 block text-xs text-muted-foreground">Asset Accounts</span>
-                </span>
-                <span class="ml-auto text-border"><x-icon name="chevron-right" :size="14" /></span>
-            </button>
-
-            <button type="button" class="stat-tile stat-tile-action" data-stat-filter="liability">
-                <span class="grid size-9 shrink-0 place-items-center rounded-[9px] bg-rose-50 text-rose-500">
-                    <x-icon name="credit-card" :size="16" />
-                </span>
-                <span>
-                    <span class="block text-[22px] font-bold leading-none text-foreground" id="stat-liabilities">—</span>
-                    <span class="mt-0.5 block text-xs text-muted-foreground">Liability Accounts</span>
-                </span>
-                <span class="ml-auto text-border"><x-icon name="chevron-right" :size="14" /></span>
-            </button>
-
-            <button type="button" class="stat-tile stat-tile-action" data-stat-filter="pl">
-                <span class="grid size-9 shrink-0 place-items-center rounded-[9px] bg-purple-50 text-purple-600">
-                    <x-icon name="bar-chart" :size="16" />
-                </span>
-                <span>
-                    <span class="block text-[22px] font-bold leading-none text-foreground" id="stat-pl">—</span>
-                    <span class="mt-0.5 block text-xs text-muted-foreground">Income &amp; Expenses</span>
-                </span>
-                <span class="ml-auto text-border"><x-icon name="chevron-right" :size="14" /></span>
-            </button>
-        </div>
-
-        <div class="mb-5 flex flex-wrap items-center gap-2" id="ledger-pills">
-            <button type="button" class="pill" data-pill="all" aria-pressed="true">All Accounts</button>
-            <button type="button" class="pill" data-pill="asset" aria-pressed="false">Assets</button>
-            <button type="button" class="pill" data-pill="liability" aria-pressed="false">Liabilities</button>
-            <button type="button" class="pill" data-pill="income" aria-pressed="false">Income</button>
-            <button type="button" class="pill" data-pill="expense" aria-pressed="false">Expenses</button>
-            <button type="button" class="pill" data-pill="equity" aria-pressed="false">Equity</button>
-        </div>
-
-        <div class="surface overflow-visible rounded-[14px]">
-            <div class="overflow-x-auto rounded-t-[14px]">
-                <table class="w-full min-w-[860px] border-collapse">
-                    <thead>
-                        <tr class="border-b border-border bg-background text-left">
-                            <th class="px-4 py-3 text-[11.5px] font-semibold whitespace-nowrap text-muted-foreground"
-                                scope="col">Ledger Name</th>
-                            <th class="px-4 py-3 text-[11.5px] font-semibold whitespace-nowrap text-muted-foreground"
-                                scope="col">Account Type</th>
-                            <th class="px-4 py-3 text-right text-[11.5px] font-semibold whitespace-nowrap text-muted-foreground"
-                                scope="col" data-ledger-only>Balance</th>
-                            <th class="px-4 py-3 text-[11.5px] font-semibold whitespace-nowrap text-muted-foreground"
-                                scope="col">Last Updated</th>
-                            <th class="px-4 py-3 text-[11.5px] font-semibold whitespace-nowrap text-muted-foreground"
-                                scope="col">Status</th>
-                            <th class="px-4 py-3" scope="col"><span class="sr-only">Actions</span></th>
-                        </tr>
-                    </thead>
-                    <tbody id="ledger-body" class="divide-y divide-muted"></tbody>
-                </table>
-            </div>
-
-            <div class="flex flex-wrap items-center justify-between gap-3 border-t border-muted px-4 py-3">
-                <p id="ledger-summary" class="text-[0.78125rem] text-muted-foreground"></p>
-
-                <button type="button" id="add-ledger" class="btn btn-secondary btn-sm hidden"
-                        data-requires-permission="WRITE:ACCOUNTS">
-                    <x-icon name="plus" :size="13" />
-                    Add Ledger
-                </button>
-            </div>
-        </div>
-    </section>
-
-    {{-- ================================================================== --}}
-    {{-- Tab 2 — Journal Entries                                            --}}
-    {{-- ================================================================== --}}
-    <section id="panel-journal" role="tabpanel" aria-label="Journal entries" class="hidden">
-
-        <div class="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <div class="stat-tile">
-                <span class="grid size-9 shrink-0 place-items-center rounded-[9px] bg-blue-50 text-blue-600">
-                    <x-icon name="file-text" :size="16" />
-                </span>
-                <span>
-                    <span class="block text-[22px] font-bold leading-none text-foreground" id="stat-entries">—</span>
-                    <span class="mt-0.5 block text-xs text-muted-foreground">Total Entries</span>
-                </span>
-            </div>
-
-            <div class="stat-tile">
-                <span class="grid size-9 shrink-0 place-items-center rounded-[9px] bg-emerald-50 text-emerald-600">
-                    <x-icon name="check-circle" :size="16" />
-                </span>
-                <span>
-                    <span class="block text-[22px] font-bold leading-none text-foreground" id="stat-posted">—</span>
-                    <span class="mt-0.5 block text-xs text-muted-foreground">Posted</span>
-                </span>
-            </div>
-
-            <div class="stat-tile">
-                <span class="grid size-9 shrink-0 place-items-center rounded-[9px] bg-amber-50 text-amber-500">
-                    <x-icon name="clipboard-list" :size="16" />
-                </span>
-                <span>
-                    <span class="block text-[22px] font-bold leading-none text-foreground" id="stat-drafts">—</span>
-                    <span class="mt-0.5 block text-xs text-muted-foreground">Drafts</span>
-                </span>
-            </div>
-
-            {{-- Reversed rather than the design's "AI Generated". The counts
-                 endpoint publishes a breakdown by type and by status and not by
-                 source, so an AI tile here could only ever show a zero it had
-                 not counted — and a fabricated zero on a tile is worse than a
-                 tile that answers a slightly different question. Filtering by
-                 source is still available on the pills below, which is a filter
-                 rather than a claim about a total. --}}
-            <div class="stat-tile">
-                <span class="grid size-9 shrink-0 place-items-center rounded-[9px] bg-purple-50 text-purple-600">
-                    <x-icon name="refresh-cw" :size="16" />
-                </span>
-                <span>
-                    <span class="block text-[22px] font-bold leading-none text-foreground" id="stat-reversed">—</span>
-                    <span class="mt-0.5 block text-xs text-muted-foreground">Reversed</span>
-                </span>
-            </div>
-        </div>
-
-        {{-- Sources rather than the design's mix of types and sources: "AI
-             Generated" there is a source and "Sale" is a type, and one pill row
-             that switched meaning halfway along would filter on whichever the
-             last click happened to mean. Types are on the Transactions screen,
-             which is the screen organised around them. --}}
-        <div class="mb-5 flex flex-wrap items-center gap-2" id="journal-pills">
-            <button type="button" class="pill" data-pill="all" aria-pressed="true">All Entries</button>
-            @foreach (\App\Enums\TransactionSource::cases() as $source)
-                <button type="button" class="pill" data-pill="{{ $source->value }}"
-                        aria-pressed="false">{{ $source->label() }}</button>
-            @endforeach
-        </div>
-
-        <div class="surface overflow-visible rounded-[14px]">
-            <div class="overflow-x-auto rounded-t-[14px]">
-                <table class="w-full min-w-[920px] border-collapse">
-                    <thead>
-                        <tr class="border-b border-border bg-background text-left">
-                            <th class="px-4 py-3 text-[11.5px] font-semibold whitespace-nowrap text-muted-foreground"
-                                scope="col">Journal ID</th>
-                            <th class="px-4 py-3 text-[11.5px] font-semibold whitespace-nowrap text-muted-foreground"
-                                scope="col">Date</th>
-                            <th class="px-4 py-3 text-[11.5px] font-semibold whitespace-nowrap text-muted-foreground"
-                                scope="col">Particulars</th>
-                            <th class="px-4 py-3 text-right text-[11.5px] font-semibold whitespace-nowrap text-muted-foreground"
-                                scope="col">Debit</th>
-                            <th class="px-4 py-3 text-right text-[11.5px] font-semibold whitespace-nowrap text-muted-foreground"
-                                scope="col">Credit</th>
-                            <th class="px-4 py-3 text-[11.5px] font-semibold whitespace-nowrap text-muted-foreground"
-                                scope="col">Status</th>
-                            <th class="px-4 py-3 text-[11.5px] font-semibold whitespace-nowrap text-muted-foreground"
-                                scope="col">Source</th>
-                            <th class="px-4 py-3" scope="col"><span class="sr-only">Actions</span></th>
-                        </tr>
-                    </thead>
-                    <tbody id="journal-body" class="divide-y divide-muted"></tbody>
-                </table>
-            </div>
-
-            <div class="flex flex-wrap items-center justify-between gap-3 border-t border-muted px-4 py-3">
-                <p id="journal-summary" class="text-[0.78125rem] text-muted-foreground"></p>
-
-                <div class="flex items-center gap-2">
-                    <div class="flex items-center gap-1" id="journal-pager"></div>
-
-                    {{-- Says what this screen is: a reader. Writing a voucher
-                         happens on Transactions, where the forms live. --}}
-                    <span class="flex items-center gap-2 rounded-[8px] border border-border bg-background px-3 py-1.5">
-                        <x-icon name="lock" :size="11" class="text-muted-foreground" />
-                        <span class="text-[0.71875rem] text-muted-foreground">Read only — post entries from Transactions</span>
-                    </span>
-                </div>
-            </div>
-        </div>
-    </section>
-
-    {{-- ================================================================== --}}
-    {{-- Tab 3 — Chart of Accounts                                          --}}
-    {{-- ================================================================== --}}
-    <section id="panel-coa" role="tabpanel" aria-label="Chart of accounts" class="hidden">
-        <div class="mb-3 grid grid-cols-2 gap-3 lg:grid-cols-5" id="coa-tiles" data-ledger-only></div>
-
-        <div class="space-y-3" id="coa-groups"></div>
-
-        <p id="coa-summary" class="mt-4 text-[0.78125rem] text-muted-foreground"></p>
-    </section>
-</div>
-
-{{--
-    One ledger, read without leaving the list.
-
-    A drawer rather than a page: the balance is looked at while thinking about
-    the row above it, and losing the list to see it is what makes people stop
-    checking.
---}}
-<div id="ledger-drawer" class="drawer-backdrop hidden" data-modal role="dialog" aria-modal="true"
-     aria-labelledby="ledger-drawer-title">
-    <div class="drawer-panel max-w-[560px]">
-        <div class="border-b border-muted px-6 py-4">
-            <div class="flex items-start justify-between gap-2">
-                <div class="flex min-w-0 items-center gap-2.5">
-                    <span class="grid size-9 shrink-0 place-items-center rounded-[10px] bg-blue-50 text-blue-600">
-                        <x-icon name="book-open" :size="16" />
-                    </span>
-                    <div class="min-w-0">
-                        <h3 id="ledger-drawer-title"
-                            class="truncate text-[15.5px] font-bold leading-tight text-foreground"></h3>
-                        <p id="ledger-drawer-subtitle" class="truncate text-xs text-muted-foreground"></p>
+                {{-- Only in the drawer, where the same node is the edit form. --}}
+                <header class="hidden items-start justify-between gap-4 border-b border-border pb-3"
+                        data-form-chrome="modal">
+                    <div>
+                        <h3 class="text-sm font-bold text-foreground">Edit account</h3>
+                        <p class="mt-0.5 text-[0.8125rem] text-muted-foreground">
+                            The name, the number and what belongs in it. The <em>type</em> is fixed once an
+                            account exists: reclassifying it would move every entry already posted to it
+                            onto a different financial statement.
+                        </p>
                     </div>
-                </div>
+                </header>
 
-                <div class="flex shrink-0 items-center gap-2">
-                    <span id="ledger-drawer-status"></span>
-                    <button type="button" class="btn btn-ghost btn-icon" data-modal-close aria-label="Close">
-                        <x-icon name="x" :size="16" />
-                    </button>
-                </div>
-            </div>
-        </div>
-
-        <div class="flex-1 overflow-y-auto px-6 py-5" id="ledger-drawer-body"></div>
-
-        <div class="flex gap-2 border-t border-muted px-6 py-4">
-            <button type="button" id="ledger-drawer-edit" class="btn btn-secondary btn-sm hidden"
-                    data-requires-permission="UPDATE:ACCOUNTS">
-                <x-icon name="pencil" :size="13" />
-                Edit
-            </button>
-            <button type="button" id="ledger-drawer-statement" class="btn btn-secondary btn-sm hidden" data-ledger-only>
-                <x-icon name="download" :size="13" />
-                Statement
-            </button>
-            <button type="button" class="btn btn-secondary btn-sm ml-auto" data-modal-close>Close</button>
-        </div>
-    </div>
-</div>
-
-{{-- One journal entry: what it did to the books, line by line. --}}
-<div id="journal-drawer" class="drawer-backdrop hidden" data-modal role="dialog" aria-modal="true"
-     aria-labelledby="journal-drawer-title">
-    <div class="drawer-panel max-w-[560px]">
-        <div class="border-b border-muted px-6 py-4">
-            <div class="flex items-start justify-between gap-2">
-                <div class="flex min-w-0 items-center gap-2.5">
-                    <span class="grid size-9 shrink-0 place-items-center rounded-[10px] bg-blue-50 text-blue-600">
-                        <x-icon name="file-text" :size="16" />
-                    </span>
-                    <div class="min-w-0">
-                        <h3 id="journal-drawer-title"
-                            class="truncate text-[15.5px] font-bold leading-tight text-foreground"></h3>
-                        <p id="journal-drawer-subtitle" class="truncate text-xs text-muted-foreground"></p>
-                    </div>
-                </div>
-
-                <div class="flex shrink-0 items-center gap-2">
-                    <span id="journal-drawer-status"></span>
-                    <button type="button" class="btn btn-ghost btn-icon" data-modal-close aria-label="Close">
-                        <x-icon name="x" :size="16" />
-                    </button>
-                </div>
-            </div>
-        </div>
-
-        <div class="flex-1 overflow-y-auto px-6 py-5" id="journal-drawer-body"></div>
-
-        <div class="flex gap-2 border-t border-muted px-6 py-4">
-            <a id="journal-drawer-open" href="#" class="btn btn-secondary btn-sm">
-                <x-icon name="arrow-up-right" :size="13" />
-                Open in Transactions
-            </a>
-            <button type="button" class="btn btn-secondary btn-sm ml-auto" data-modal-close>Close</button>
-        </div>
-    </div>
-</div>
-
-{{-- Create / edit an account --}}
-<div id="account-modal" class="modal-backdrop hidden" data-modal role="dialog" aria-modal="true"
-     aria-labelledby="account-modal-title">
-    <div class="modal-panel max-w-lg">
-        <form id="account-form" novalidate>
-            <input type="hidden" name="id">
-
-            <div class="flex items-center justify-between border-b border-border px-6 py-4">
-                <h2 id="account-modal-title" class="text-base font-bold text-foreground">New account</h2>
-                <button type="button" class="btn btn-ghost btn-icon" data-modal-close aria-label="Close">
-                    <x-icon name="x" :size="18" />
-                </button>
-            </div>
-
-            <div class="max-h-[65vh] space-y-4 overflow-y-auto px-6 py-5">
-                <p class="hidden rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-3 text-[0.8125rem] text-rose-700"
-                   data-form-banner role="alert"></p>
-
-                {{-- Shown for system accounts, whose structure is fixed. --}}
-                <p id="account-system-note"
-                   class="hidden items-start gap-2 rounded-[10px] border border-amber-200 bg-amber-50/60 px-3.5 py-3
-                          text-[0.8125rem] text-amber-800">
+                {{-- Shown when the account being edited is one the posting engine
+                     resolves by key. Its locked controls are disabled with this
+                     as their reason rather than hidden: the answer belongs where
+                     the question is asked. --}}
+                <p data-account-system-note
+                   class="hidden items-start gap-2 rounded-[10px] border border-amber-200 bg-amber-50/60
+                          px-3.5 py-3 text-[0.8125rem] text-amber-800">
                     <x-icon name="lock" :size="16" class="mt-0.5 shrink-0" />
                     <span>
                         This is a system account. You may rename it and edit its description — the posting
-                        engine finds it by an internal key, not by its name — but its number and type are fixed.
+                        engine finds it by an internal key, not by its name — but its number and type are
+                        fixed.
                     </span>
                 </p>
 
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <div>
-                        <label for="account-type" class="field-label">Type</label>
-                        <select id="account-type" name="type" class="field-input" required>
-                            <option value="">Select a type…</option>
-                            @foreach (\App\Enums\AccountType::cases() as $type)
-                                <option value="{{ $type->value }}">{{ $type->label() }}</option>
-                            @endforeach
-                        </select>
-                        <p class="mt-1.5 text-xs text-muted-foreground" id="account-type-hint">
-                            Decides which side increases the account.
+                <section class="surface p-5 sm:p-6">
+                    <div data-form-chrome="inline">
+                        <h3 class="text-sm font-bold text-foreground">A new account on the chart</h3>
+                        <p class="mt-1 text-[0.8125rem] text-muted-foreground">
+                            An expense head of the workshop's own — Diesel, Workshop rent, rewinding wire
+                            scrap — or any other account the seeded chart does not cover. Nothing is ever
+                            deleted from a chart of accounts: an account that has been posted to is
+                            archived instead, so its entries keep their name.
                         </p>
-                        <p class="field-error hidden" data-error-for="type"></p>
                     </div>
 
-                    <div>
-                        <label for="account-code" class="field-label">Code</label>
-                        <input id="account-code" name="code" type="text" inputmode="numeric" maxlength="4"
-                               class="field-input font-mono" required autocomplete="off" placeholder="5300">
-                        <p class="mt-1.5 text-xs text-muted-foreground" id="account-code-hint">
-                            Four digits, inside the band for the chosen type.
-                        </p>
-                        <p class="field-error hidden" data-error-for="code"></p>
+                    <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                        <div>
+                            <label for="account-type" class="field-label">Type <span class="req">*</span></label>
+                            <select id="account-type" name="type" class="field-input" required>
+                                <option value="">Select a type…</option>
+                                {{-- From the enum. The five types are code, not data: each one decides
+                                     which side increases the account and which statement it lands on,
+                                     so a sixth is a change to the arithmetic and not a row somebody
+                                     adds. That is the catalogue's vocabulary test, applied in the
+                                     other direction. --}}
+                                @foreach (\App\Enums\AccountType::cases() as $type)
+                                    <option value="{{ $type->value }}">{{ $type->label() }}</option>
+                                @endforeach
+                            </select>
+                            <p class="mt-1.5 text-xs text-muted-foreground" data-type-hint>
+                                Decides which side increases the account.
+                            </p>
+                            <p class="field-error hidden" data-error-for="type"></p>
+                        </div>
+
+                        {{-- The band comes from GET /accounts/types, never from a
+                             copy here: the ranges are the server's rule, and a
+                             second copy of them would be wrong the day one moved. --}}
+                        <div>
+                            <label for="account-code" class="field-label">Code <span class="req">*</span></label>
+                            <input id="account-code" name="code" type="text" inputmode="numeric" maxlength="4"
+                                   class="field-input font-mono" required autocomplete="off" placeholder="5300">
+                            <p class="mt-1.5 text-xs text-muted-foreground" data-code-hint>
+                                Four digits, inside the band for the chosen type.
+                            </p>
+                            <p class="field-error hidden" data-error-for="code"></p>
+                        </div>
                     </div>
+
+                    <div class="mt-4">
+                        <label for="account-name" class="field-label">Name <span class="req">*</span></label>
+                        <input id="account-name" name="name" type="text" class="field-input" required
+                               autocomplete="off" maxlength="120" placeholder="Workshop Rent">
+                        <p class="field-error hidden" data-error-for="name"></p>
+                    </div>
+
+                    <div class="mt-4">
+                        <label for="account-description" class="field-label">Description</label>
+                        <textarea id="account-description" name="description" rows="2" maxlength="255"
+                                  class="field-input !h-auto py-2"
+                                  placeholder="What belongs in this account?"></textarea>
+                        <p class="field-error hidden" data-error-for="description"></p>
+                    </div>
+                </section>
+
+                {{-- Absent rather than blanked for a caller without the grant: a
+                     disabled Save asks somebody to work out for themselves why it
+                     will not press, and the workspace lands them on the list so
+                     this surface is never the one they are looking at. --}}
+                <div class="flex items-center justify-end gap-3" data-form-chrome="inline"
+                     data-requires-permission="WRITE:ACCOUNTS">
+                    <button type="submit" class="btn btn-primary">Create account</button>
                 </div>
 
-                <div>
-                    <label for="account-name" class="field-label">Name</label>
-                    <input id="account-name" name="name" type="text" class="field-input" required
-                           autocomplete="off" placeholder="Workshop Rent">
-                    <p class="field-error hidden" data-error-for="name"></p>
+                <div class="hidden items-center justify-end gap-2 border-t border-border pt-4"
+                     data-form-chrome="modal">
+                    <button type="button" class="btn btn-ghost" data-account-edit-cancel>Cancel</button>
+                    <button type="submit" class="btn btn-primary">Save changes</button>
                 </div>
-
-                <div>
-                    <label for="account-description" class="field-label">Description</label>
-                    <textarea id="account-description" name="description" rows="2" class="field-input !h-auto py-2"
-                              placeholder="What belongs in this account?"></textarea>
-                    <p class="field-error hidden" data-error-for="description"></p>
-                </div>
-            </div>
-
-            <div class="flex justify-end gap-2 border-t border-border px-6 py-4">
-                <button type="button" class="btn btn-secondary" data-modal-close>Cancel</button>
-                <button type="submit" class="btn btn-primary">Save account</button>
-            </div>
-        </form>
+            </form>
+        </div>
     </div>
+
+    {{-- ==================================================================
+         Level 1, list mode. Exactly one of the two is in the DOM at a time —
+         the other is held detached by the workspace, so a half-typed account
+         and the list's period both survive every trip between them (§2A.2,
+         §2A.6).
+         ================================================================== --}}
+    <div data-ws-list>
+
+        {{-- Two views, one period. Removed outright for a caller without
+             READ:LEDGER: with no figures anywhere there is only the chart, and a
+             switch to a view that would be blank is a switch to nothing. --}}
+        <div class="tab-strip mb-4" data-account-views role="tablist" aria-label="Accounting views"
+             data-ledger-only>
+            <button type="button" class="tab" role="tab" data-view="chart" aria-selected="true">
+                <x-icon name="layers" :size="14" />
+                Chart of accounts
+            </button>
+            <button type="button" class="tab" role="tab" data-view="trial" aria-selected="false">
+                <x-icon name="bar-chart" :size="14" />
+                Trial balance
+            </button>
+        </div>
+
+        <div class="surface mb-4 flex flex-wrap items-center gap-3 p-3">
+
+            {{-- Both of these narrow the chart, and both are hidden on the trial
+                 balance. See the note at the top of this file: a statement whose
+                 rows are filtered no longer adds up to the total under them. --}}
+            <div class="search-pill min-w-52 flex-1" data-view-for="chart">
+                <x-icon name="search" :size="16" />
+                <input type="search" data-filter-search class="w-full bg-transparent text-sm outline-none"
+                       placeholder="Account name or code…" aria-label="Search the chart of accounts">
+            </div>
+
+            <select data-filter-status class="field-input w-auto min-w-40" data-view-for="chart"
+                    aria-label="Filter by archived state">
+                <option value="1">Active only</option>
+                <option value="0">Archived only</option>
+                <option value="">Active &amp; archived</option>
+            </select>
+
+            {{-- The one control both views share, and the reason they are one
+                 screen: it decides what every figure on either of them means. --}}
+            <div class="flex flex-wrap items-center gap-2" data-ledger-only>
+                <label class="flex items-center gap-2 text-[0.8125rem] text-muted-foreground">
+                    From
+                    <input type="date" data-filter-from class="field-input w-auto" aria-label="Period from">
+                </label>
+
+                <label class="flex items-center gap-2 text-[0.8125rem] text-muted-foreground">
+                    To
+                    <input type="date" data-filter-to class="field-input w-auto" aria-label="Period to">
+                </label>
+
+                <button type="button" data-clear-period class="btn btn-ghost btn-sm">Whole history</button>
+            </div>
+
+            <button type="button" data-export class="btn btn-secondary btn-sm ml-auto">
+                <x-icon name="download" :size="14" />
+                Export
+            </button>
+        </div>
+
+        {{-- ---------------------------------------------------------------
+             View 1 — the chart of accounts.
+             --------------------------------------------------------------- --}}
+        <div data-view-panel="chart">
+            {{-- One tile per type: how many accounts, and what they come to.
+                 There is deliberately no grand total — assets plus expenses is
+                 not a number anybody wants. --}}
+            <div class="mb-3 grid grid-cols-2 gap-3 lg:grid-cols-5" data-chart-tiles></div>
+
+            <div class="space-y-3" data-chart-groups></div>
+
+            <p data-chart-summary class="mt-4 text-[0.78125rem] text-muted-foreground"></p>
+        </div>
+
+        {{-- ---------------------------------------------------------------
+             View 2 — the trial balance.
+
+             The single most important figure in the module: if the two sides
+             differ, everything else on this screen is suspect. So the
+             reconciliation is *stated* above the table rather than left to be
+             worked out by comparing two columns.
+             --------------------------------------------------------------- --}}
+        <div data-view-panel="trial" class="hidden" data-ledger-only>
+            <div data-reconciliation class="mb-4"></div>
+
+            <div class="surface overflow-hidden">
+                <div class="overflow-x-auto">
+                    <table class="w-full min-w-[760px] border-collapse">
+                        <thead>
+                            <tr class="border-b border-border bg-secondary/40 text-left text-xs uppercase
+                                       tracking-wide text-muted-foreground">
+                                <th class="px-4 py-3 font-semibold">Account</th>
+                                <th class="px-4 py-3 font-semibold">Type</th>
+                                <th class="px-4 py-3 text-right font-semibold">Debits</th>
+                                <th class="px-4 py-3 text-right font-semibold">Credits</th>
+                                <th class="px-4 py-3 text-right font-semibold">Balance</th>
+                            </tr>
+                        </thead>
+                        <tbody data-trial-body></tbody>
+                        <tfoot data-trial-foot></tfoot>
+                    </table>
+                </div>
+
+                <div class="border-t border-border px-4 py-3">
+                    <p data-trial-summary class="text-[0.8125rem] text-muted-foreground"></p>
+                </div>
+            </div>
+        </div>
+
+    </div>{{-- /data-ws-list --}}
 </div>
 
+{{--
+    One account, read without leaving the list — level 2.
 
+    A drawer rather than a page: a balance is looked at while thinking about the
+    row above it, and losing the list to see it is what makes people stop
+    checking. It holds the running statement over the period the list is set to,
+    the CSV of the whole of it, and — as a *state* of the same drawer, with the
+    create form adopted into it — the edit.
+--}}
+<div id="account-drawer" class="drawer-backdrop hidden" data-modal role="dialog" aria-modal="true"
+     aria-labelledby="account-drawer-title">
+    <div class="drawer-panel max-w-[620px]">
+        <div class="border-b border-muted px-6 py-4">
+            <div class="flex items-start justify-between gap-2">
+                <div class="flex min-w-0 items-center gap-2.5">
+                    <span class="grid size-9 shrink-0 place-items-center rounded-[10px] bg-emerald-50 text-emerald-600">
+                        <x-icon name="book-open" :size="16" />
+                    </span>
+                    <div class="min-w-0">
+                        <h3 id="account-drawer-title"
+                            class="truncate text-[15.5px] font-bold leading-tight text-foreground"></h3>
+                        <p data-drawer-subtitle class="truncate text-xs text-muted-foreground"></p>
+                    </div>
+                </div>
+
+                <div class="flex shrink-0 items-center gap-2">
+                    <span data-drawer-status></span>
+                    <button type="button" class="btn btn-ghost btn-icon" data-modal-close aria-label="Close">
+                        <x-icon name="x" :size="16" />
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex-1 overflow-y-auto">
+            <div class="px-6 py-5" data-drawer-body></div>
+
+            {{-- Where the create form is adopted for an edit. Empty otherwise —
+                 the fields live in exactly one place in this module. --}}
+            <div class="hidden px-6 py-5" data-account-edit-slot></div>
+        </div>
+
+        <div class="flex flex-wrap gap-2 border-t border-muted px-6 py-4" data-drawer-actions></div>
+    </div>
+</div>

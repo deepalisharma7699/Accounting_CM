@@ -73,6 +73,7 @@ class PeopleInsights
             'advances' => $this->advances($employees),
             'attendance' => $this->attendance($period, $employees),
             'people' => $this->people($period, $employees),
+            'work' => $this->work($period),
         ];
     }
 
@@ -309,6 +310,16 @@ class PeopleInsights
      * winder with no invoices against them is the person who does the stripping;
      * divided, the same fact becomes a number that says they earn nothing.
      *
+     * ## An invoice is counted once per person, and the trades are named beside it
+     *
+     * `work_jobs` is **distinct invoices**, not attribution rows. A fitter who
+     * also wound the motor is one job on one document; counting the rows made a
+     * two-trade person look twice as productive as a one-trade person doing the
+     * same work, and added the same invoice into `work_value` twice — reporting
+     * money the workshop never billed. `work_trades` carries what that count
+     * was accidentally saying: which benches this person covered, and on how
+     * many invoices each.
+     *
      * @param  \Illuminate\Support\Collection<int, Employee>  $employees
      * @return array<int, array<string, mixed>>
      */
@@ -320,17 +331,22 @@ class PeopleInsights
             ->get()
             ->keyBy('employee_id');
 
+        // The whole roster in one pass rather than a query per person. It was
+        // the latter, defensibly, while there was one figure to fetch; asking
+        // for the trades as well would have made it two queries per person, and
+        // a grouped read of the same table is where that stops being a trade.
+        $work = $this->attribution->workForMany(
+            $employees->map(fn (Employee $employee) => (int) $employee->id)->all(),
+            $period->from,
+            $period->to,
+        );
+
         $rows = [];
 
         foreach ($employees as $employee) {
             $id = (int) $employee->id;
             $cost = $costs->get($id);
-
-            // One query per person, and it is the right trade here: a workshop
-            // has nine or twenty people, not nine thousand, and the alternative
-            // is a fourth grouped query joined across three tables to save a few
-            // milliseconds on a screen opened twice a month.
-            $work = $this->attribution->workFor($id, $period->from, $period->to);
+            $credited = $work[$id] ?? ['job_count' => 0, 'invoice_value' => '0.00', 'trades' => []];
 
             $rows[] = [
                 'employee_id' => $id,
@@ -339,8 +355,9 @@ class PeopleInsights
                 'is_active' => (bool) $employee->is_active,
                 'cost' => Money::of($cost?->gross ?? 0)->amount(),
                 'payslips' => (int) ($cost?->payslips ?? 0),
-                'work_jobs' => $work['job_count'],
-                'work_value' => $work['invoice_value'],
+                'work_jobs' => $credited['job_count'],
+                'work_value' => $credited['invoice_value'],
+                'work_trades' => $credited['trades'],
             ];
         }
 
@@ -348,6 +365,34 @@ class PeopleInsights
             ?: bccomp($b['work_value'], $a['work_value'], 2));
 
         return $rows;
+    }
+
+    /**
+     * How much of the period's invoicing carries a name at all.
+     *
+     * The one thing a column of per-person figures cannot say about itself. Two
+     * different readings of a light-looking table — "the bench was quiet" and
+     * "nobody filled the pickers in" — are indistinguishable without it, and the
+     * second is much the more common in a workshop that has just ticked the
+     * boxes in the Designation Master.
+     *
+     * It is also the disclaimer that has to sit under this table. An invoice
+     * naming a fitter *and* a winder appears whole in both their rows, because
+     * neither did a stated share of it and the schema records none — so the
+     * column deliberately does not add up to `credited_value`, and stating the
+     * real total beneath it is what stops somebody summing the column instead.
+     *
+     * @return array<string, mixed>
+     */
+    private function work(ReportPeriod $period): array
+    {
+        $coverage = $this->attribution->coverage($period->from, $period->to);
+
+        return $coverage + [
+            'share_of_invoices' => $coverage['invoices'] > 0
+                ? number_format(($coverage['credited_invoices'] / $coverage['invoices']) * 100, 2, '.', '')
+                : null,
+        ];
     }
 
     /* ---------------------------------------------------------------------

@@ -2,6 +2,7 @@ import auth from '../auth-client';
 import {
     $, debounce, esc, formatDate, tableMessage,
 } from '../ui';
+import { mountWorkspace } from '../workspace';
 
 /**
  * The trail — M13.
@@ -10,6 +11,13 @@ import {
  * *is* its detail, so the changed fields are shown inline on the row that
  * describes them. A modal would put one click between somebody and the only
  * thing they came to read.
+ *
+ * **Read-mostly, and the strictest case of it in the product.** §2A.10 lands it
+ * on its list with `canCreate: false` and no switch control — and here that is
+ * not a permission decision somebody could widen later. There is no POST, PATCH
+ * or DELETE anywhere in this module's API group and there cannot be: entries
+ * arrive through model events, and the model itself refuses an UPDATE and a
+ * DELETE. A create form here would be a form for something nobody can create.
  */
 
 const PAGE_SIZE = 50;
@@ -45,14 +53,29 @@ async function loadMeta() {
     ]);
 }
 
+/**
+ * Rebuilt rather than appended to.
+ *
+ * Meta is fetched again whenever the trail has gone stale — somebody changed a
+ * party in another module and came back here — and appending would offer every
+ * option a second time. `length = 1` keeps the leading "Everything" / "Any
+ * change" / "Anyone" option, which is written in the markup rather than
+ * published by the server, and the current choice is put back afterwards so a
+ * refresh does not silently widen the filter somebody is reading through.
+ */
 function fill(selector, rows, mapper) {
     const select = $(selector);
+    const chosen = select.value;
+
+    select.length = 1;
 
     select.insertAdjacentHTML('beforeend', (rows ?? []).map((row) => {
         const [value, label] = mapper(row);
 
         return `<option value="${esc(String(value))}">${esc(label)}</option>`;
     }).join(''));
+
+    select.value = chosen;
 }
 
 function query() {
@@ -223,14 +246,37 @@ function timeOf(iso) {
  | ---------------------------------------------------------------------- */
 
 export default async function initAudit() {
-    try {
-        await loadMeta();
-    } catch {
-        // Without meta the dropdowns stay empty; the list below still loads and
-        // reports its own failure if it has one.
-    }
+    const root = $('[data-ws-list]').closest('[data-module-root]');
 
-    await load();
+    mountWorkspace(root, {
+        key: 'audit',
+        title: 'History',
+        formSubtitle: '',
+        listSubtitle: () => 'Who changed what, and when, across the whole workshop.',
+        createLabel: '',
+        canCreate: false,
+        /*
+        | The trail is a copy of what has been changed, so a write in any module
+        | that keeps records leaves it behind. `transactions` is in the list for
+        | one entry only, and it is the one that matters most: attributing work
+        | on a posted sale is the single write in this application that edits a
+        | posted document, and this trail is the whole of its safeguard.
+        |
+        | `stock` is deliberately absent. A stock movement is a posted document's
+        | consequence, and a posted document has no entry here.
+        */
+        refreshOn: ['items', 'parties', 'staff', 'ledger', 'transactions'],
+        onShowList: async () => {
+            try {
+                await loadMeta();
+            } catch {
+                // Without meta the dropdowns stay as they were; the list below
+                // still loads and reports its own failure if it has one.
+            }
+
+            await load();
+        },
+    });
 
     $('#filter-search').addEventListener('input', debounce((event) => {
         state.search = event.target.value.trim();

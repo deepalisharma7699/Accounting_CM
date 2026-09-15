@@ -1,13 +1,18 @@
 # Accounting Module
 
-> **Card status: switched off.** The Accounting screen is complete and tested,
-> but it still opens on a list with a modal create, so it waits for the §2A
-> conversion and has no card on the dashboard. It is the only place a ledger
-> account can be **created or edited** — `POST /accounts` and
-> `PATCH /accounts/{id}` have one caller in the whole front end — so no workshop
-> can add an expense head of its own today. Convert it together with the Ledger
-> screen: they are the same question at two zoom levels. See
-> [hidden-modules.md](hidden-modules.md).
+> **Card status: on, since C5 — and it absorbed the Ledger card.** The two were
+> the same question at two zoom levels, so there is one card keyed `accounts`:
+> it opens on the **account form**, and behind "Show list" are two views over one
+> period picker — the chart of accounts, and the **trial balance** with its
+> reconciliation stated. A workshop can now add an expense head of its own, which
+> nothing else in the product can do: `POST /accounts` has exactly one caller in
+> the whole front end and it is
+> [pages/accounts.js](../resources/js/pages/accounts.js). The `ledger` key is
+> gone from the registry; `/ledger` redirects to `#accounts`. The screen's own
+> decisions — what the two grants remove, why the filters narrow the chart and
+> never the trial balance, and why the chart is fetched with archived accounts in
+> it — are recorded in **C5** of
+> [implementation-roadmap.md](implementation-roadmap.md).
 
 The functional accounting core. Built in slices; this document grows with them.
 
@@ -192,25 +197,36 @@ entering a transaction means choosing accounts from the chart.
 
 ### The screen
 
-`/accounts` — Blade shell + a lazily loaded ES module, following the same
-pattern as the users and roles pages.
+The **Accounting** card — key `accounts`, a fragment at `/modules/accounts` and
+[pages/accounts.js](../resources/js/pages/accounts.js), mounted in the shell.
+Since C5 it is also the Ledger screen: see [ledger-module.md](ledger-module.md).
 
-Rendered as **five typed blocks, not a paginated list**. A chart of accounts is
-small by nature and an accountant reads it as five groups, so the page fetches
-the whole thing (`per_page=200`) and groups it in statement order — asset,
-liability, equity, income, expense. Each group header carries its code band and
-which side increases it, which makes the numbering scheme self-explanatory
-instead of something to look up.
+It is a §2A workspace, so it opens on the **account form** and the books are
+behind "Show list", where two views share one period picker:
+
+- **Chart of accounts** — **five typed blocks, not a paginated list.** A chart is
+  small by nature and an accountant reads it as five groups, so the whole of it
+  is fetched (`per_page=200`) and grouped in statement order — asset, liability,
+  equity, income, expense. Each group header carries its code band, its count and
+  its total, which makes the numbering scheme self-explanatory instead of
+  something to look up.
+- **Trial balance** — every account with movement in the period, its debits,
+  credits and net position, with the reconciliation stated above it.
+
+A row on either view opens the same drawer (level 2): the account's running
+statement over that period, the CSV of the whole of it, Edit, and Archive.
 
 | Behaviour | Detail |
 | --- | --- |
 | Code suggestion | Choosing a type fills the next free code in its band, stepping by 10 so related accounts can sit together |
 | Band feedback | The band is shown as a hint and checked client-side, so the rule is explained before a round trip rather than after a 409 |
-| System accounts | Locked controls stay **visible but disabled**, with the reason in the tooltip — the option does not silently vanish |
+| The chart is fetched whole | `is_active` is deliberately not sent. **An archived account still owns its code**, so filtering server-side would let the suggestion offer a number the server then refuses. The archived select narrows what is drawn |
+| System accounts | Locked controls stay **visible but disabled, with the reason beside them** — the option does not silently vanish, and the answer sits where the question is asked |
 | Type | Disabled when editing anything, system or not |
-| Archive | Confirmation explains that history is kept and the account can be restored |
-| Reveal | The sidebar's Accounting entry needs **both** `READ:ACCOUNTS` and workshop membership — a platform admin holds every grant but has no books |
-| No workshop | A platform admin who types the URL gets an explanatory empty state, not a red error |
+| Archive | Confirmation explains that history is kept and the account can be restored. There is no delete and no route for one |
+| Two grants | The card needs `READ:ACCOUNTS`; every figure on it needs `READ:LEDGER` as well. Without the second, the balance column, the period picker and the whole trial-balance view are **removed** rather than blanked |
+| Reveal | The card needs **both** `READ:ACCOUNTS` and workshop membership — a platform admin holds every grant but has no books |
+| No workshop | A platform admin who opens it gets an explanatory empty state, not a red error |
 
 Type metadata comes from `GET /accounts/types`, so the bands and normal
 balances are never duplicated in JavaScript.
@@ -229,7 +245,7 @@ mid-request. The memo is dropped wholesale on any write.
 | `tests/Unit/AccountTypeTest.php` | The accounting rules themselves — normal balances, band disjointness, the catalogue's internal consistency. No database. |
 | `ChartOfAccountProvisioningTest` | Every workshop is born with all fifteen accounts, correctly typed and banded; backfill is idempotent and never clobbers a rename. |
 | `ChartOfAccountApiTest` | The HTTP surface, tenant scoping, and every immutability rule above. |
-| `PagesRenderTest` | The `/accounts` shell compiles, is permission-gated, and leaks no ledger data to anonymous visitors. |
+| `PagesRenderTest` | The `/modules/accounts` fragment compiles, declares both §2A surfaces, marks every figure `data-ledger-only`, carries one set of form fields, and leaks no ledger data to anonymous visitors. It also holds the `ledger` key shut. |
 
 ```bash
 php artisan test --filter='Accounting|AccountType'

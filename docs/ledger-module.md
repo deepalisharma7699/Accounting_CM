@@ -1,12 +1,22 @@
 # Ledger & Posting Engine
 
-> **The engine runs everywhere; the screen is switched off.** Nothing here is
-> dormant — the posting engine is under every enabled module, and `journal_entries`
-> is written on every sale, purchase, receipt, payroll run and adjustment. What
-> has no card is the **Ledger screen**: the trial balance over a chosen period,
-> its reconciliation banner, and one account's ledger with a running balance. No
-> enabled card shows a trial balance, which means nothing on screen currently
-> proves the books balance. See [hidden-modules.md](hidden-modules.md).
+> **The engine runs everywhere, and the screen is now part of another card.**
+> Nothing here was ever dormant — the posting engine is under every enabled
+> module, and `journal_entries` is written on every sale, purchase, receipt,
+> payroll run and adjustment. What had no card was the **Ledger screen**: the
+> trial balance over a chosen period, its reconciliation, and one account's
+> ledger with a running balance.
+>
+> **C5 merged it into Accounting rather than converting it.** They were the same
+> question at two zoom levels, and two cards would both have answered "what does
+> this account stand at" — with two period pickers and two trial-balance
+> renderers between them, the second copy of each being the one that drifts
+> (§5.1). So the trial balance is the second view of the **Accounting** card,
+> one account's running ledger is that card's drawer, and the `ledger` key is
+> gone from the registry. `/ledger` redirects to `#accounts`. The endpoints below
+> are unchanged and still answer under `READ:LEDGER`; what moved is the screen
+> that reads them. See **C5** of
+> [implementation-roadmap.md](implementation-roadmap.md).
 
 The accounting core. Every number this product will ever report — an account
 balance, a party's outstanding, stock value, GST payable, the P&L — is a sum
@@ -353,14 +363,24 @@ ledger except the engine, so there is nothing else to grant.
 
 ## Screens
 
-| Path | Who | What |
-| --- | --- | --- |
-| `/journal` | `READ:TRANSACTIONS` + membership | The transaction list and the double-entry screen |
-| `/ledger` | `READ:LEDGER` + membership | Trial balance, and any account's ledger |
+There are no paths any more: both of these are cards in the mounted shell, and
+neither is the screen this section was first written about.
 
-### The four tabs
+| Card | Key | Who | What |
+| --- | --- | --- | --- |
+| Transactions | `journal` | `READ:TRANSACTIONS` + membership | Receipt, Payment and the journal voucher — three §2A workspaces under one card (C3) |
+| Accounting | `accounts` | `READ:ACCOUNTS` + membership, and `READ:LEDGER` for every figure | The chart of accounts, the trial balance, and any account's running ledger (C5) |
 
-`/journal` is four views of one list, each with its own columns:
+**Everything under this heading below is a historical record.** The four-tab
+transaction list it describes was removed by C3 and the Ledger screen by C5;
+neither is being rebuilt, and the paragraphs are kept because the judgements in
+them — why a tab is a set of types, why the columns are per tab, why a row opens
+a drawer — are the reasoning any future list of documents inherits. The rows
+themselves are drawn today by Sales, Purchase, Expenses and Insights' Day Book.
+
+### The four tabs, as they were
+
+`/journal` was four views of one list, each with its own columns:
 
 | Tab | Types | Columns |
 | --- | --- | --- |

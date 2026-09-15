@@ -98,6 +98,21 @@ roles by the enum.
 A form submits every field it renders. Storing an untouched optional box as `""`
 is noise that then has to be filtered out everywhere it is read.
 
+## How the price is quoted
+
+`items.price_includes_tax` says whether the selling price is written with the GST
+already in it — a tick under the GST rate on the item form, for a shop that
+prices parts at the figure printed on the box.
+
+It is a **default and nothing more**. It prefills the toggle beside a bill line's
+rate box; the line carries its own copy and is what actually decides the
+arithmetic, so flipping this restates no document already issued. There is
+deliberately no category default: what a shop charges on a kind of thing is a
+property of the tax code, and whether it folds the tax into the figure is a habit
+it applies to some products and not others.
+
+See [inclusive-pricing.md](inclusive-pricing.md).
+
 ## Stock capability
 
 Two flags, and the asymmetry between them is the point:
@@ -183,10 +198,12 @@ error becomes a figure on a government return.
 ### `item_variants`
 
 ```
-id, tenant_id, item_id, sku, label, attributes, sell_price,
-markup_percent, reorder_level, is_draft, is_active, timestamps
+id, tenant_id, item_id, sku, barcode, label, attributes,
+sell_price, purchase_price, markup_percent,
+reorder_level, min_stock, is_draft, is_active, timestamps
 
   unique (tenant_id, sku)
+  unique (tenant_id, barcode)
   index  (tenant_id, item_id, is_active)  the variant picker
   index  (tenant_id, is_draft)
 
@@ -216,6 +233,290 @@ line.
 **`sell_price` is nullable and never defaulted to zero.** A motor rewind is quoted
 per job; a zero would say "free".
 
+**`purchase_price` is not the exception to the rule above.** It is what the
+workshop *expects* to pay, written down beside what it charges, and nothing in
+the books reads it: it never reaches a valuation, and it never prefills a
+purchase line — a rate suggested from here would restate the weighted average
+every time somebody tabbed past it, which is the failure
+[purchase-module.md](purchase-module.md) exists to prevent. What stock actually
+cost is the weighted average of the movements, and only that. The one thing it
+legitimately values is opening stock on a variant that has never been purchased
+through this product, which is the single moment there is no average to offer.
+
+That promise is prose everywhere it is written down, and prose does not fail a
+build — so `ItemTest::a_buying_price_is_recorded_and_never_becomes_a_cost` holds
+it against the shelf: a bearing noted at ₹410, bought at ₹700 and ₹800, is worth
+₹750 apiece and issues at ₹750. It also asserts that `suggestedPriceFrom()` still
+takes its cost as an **argument**, because the day that falls back to this column
+is the day a price quoted from a stale note becomes a price quoted from the
+books.
+
+**A barcode is not case-folded and a SKU is.** A SKU is typed, so folding it
+makes `bl-6205` and `BL-6205` the same code; a barcode is scanned, and folding it
+would stop the stored value matching the label it was read from.
+
+**`min_stock` is the floor and `reorder_level` is the trigger.** A shop orders at
+20 and panics at 5. Both are read: `StockPosition::isLow()` is at or below the
+trigger, `isBelowMinimum()` is **strictly** under the floor, and a row carries
+both levels and both verdicts rather than one status a screen has to unpick.
+
+The asymmetry between the two comparisons is deliberate. A trigger has to fire on
+the day the shelf reaches it — running out is the case the reminder exists for.
+A floor is a line the stock is still standing on when it is exactly there, and a
+workshop told it had broken its own rule at precisely the number it wrote down
+would stop reading the alarm.
+
+They are not the same set, which is why the second one had to be read. A variant
+with a floor and no trigger is never `is_low`, correctly — nobody said what low
+means for it — so until `isBelowMinimum()` existed, a part somebody had written
+"never below 5" against could sit at 2 with **no screen in the product**
+mentioning it. `StockApiTest::the_floor_is_a_second_level_and_a_shortage_of_its_own`
+walks a shelf down through both levels and holds that shut.
+
+## Adding a product
+
+One submission produces the product, **every variant declared on it**, and their
+opening stock. `ItemService::createWithVariants()`, inside one database
+transaction, because the parts are not independently useful: a product with no
+variant cannot be sold, priced or counted, and a variant whose opening stock
+failed to post would show zero on the shelf while the workshop has five.
+
+A motor family is bought in three ratings and catalogued in one sitting. Making
+that one save and two trips through a drawer is the two-screen shape this
+endpoint exists to remove — and it is also how the *specification* gets skipped:
+by the third rating nobody is re-typing the HP.
+
+### Two shapes, one meaning
+
+```jsonc
+// The longhand. What the create form sends, one entry per block.
+{ "name": "Crompton Induction Motor", "category_id": 3, "variants": [
+    { "sku": "MOT-3",   "attributes": {"hp": "3", "phase": "3", "rpm": "1440"} },
+    { "sku": "MOT-5",   "attributes": {"hp": "5", "phase": "3", "rpm": "1440"},
+      "opening_stock": "4", "opening_cost": "13500.00" }
+] }
+
+// The shorthand. One variant, flat.
+{ "name": "Ball Bearing 6205", "category_id": 4, "with_variant": true,
+  "sku": "BRG-6205", "attributes": {"size": "6205"} }
+```
+
+Every key inside a `variants[]` entry is the flat key, `variant_label` included,
+ungainly as that reads in an array. The two shapes are **one shape**: the flat
+keys are the one-variant shorthand, and a divergence in a single key name is the
+sort of thing that is discovered by an importer having saved a hundred rows with
+no label on any of them. `variantPayload()` reads both without knowing which it
+was handed.
+
+The shorthand is kept because most callers are one. The importer walks a
+spreadsheet a row at a time, and an API client adding a single bearing should not
+have to wrap it in an array to say so. `variants[]` wins when it is present **and
+non-empty** — an empty array is not "no variants", because a client that sent one
+by accident alongside `with_variant` asked for a variant.
+
+### A refusal names the block it is about
+
+A duplicate SKU, a missing required attribute and an unvalued opening quantity
+are each raised where their rule lives, and none of those layers knows it was
+called for the third block of a repeater. `ApiException::underField()` is where
+that is added: `sku` becomes `variants.2.sku`, written into `details.fields`
+because [only the map reaches a form input](#refusals). A refusal that named no
+field at all is pinned to `variants.2` itself, which the form gives a footer.
+
+Only for a caller that sent `variants[]`. A flat submission gets `sku` back,
+because `sku` is what it sent — which is also what keeps the shorthand's refusals
+exactly as they were.
+
+`showFormErrors()` in `ui.js` tries a key whole and then shortens it a segment at
+a time, so `variants.2.sku` lands on that box, `variants.2` on the block's
+footer, and `permission_ids.0` still collapses onto `permission_ids` as it always
+did.
+
+## Correcting a product
+
+`PATCH /items/{id}` for the family and `PATCH /items/{id}/variants/{vid}` for one
+thing under it. The form sends **both, one after the other, under a single busy
+state** — it looks like one save and it is two requests, because a combined
+endpoint would be a second write path into the catalogue: a second place a SKU is
+checked for uniqueness, a second place an attribute bag is validated (§4.4).
+
+The product call goes **first**, because the second may be a `POST`: a product
+that had no variants gets its first one from this form, and a create that ran
+ahead of a refusal above it would be created twice on the retry. Nothing after
+the product call can be retried into a duplicate.
+
+Which leaves one state the screen has to say out loud — the product saved and the
+variant did not, which is what a SKU somebody else already used looks like. The
+dialog stays open, the refusal paints on the box it is about, and a toast says
+the first half went through; otherwise Cancel reads as though it cancelled both.
+
+### What an edit withholds, and it is one thing
+
+**Opening stock.** It is a stock adjustment that posted on the day the shelf was
+counted, and there is no second one to be had by retyping the figure — correcting
+it is a count, from the screen that counts. The date and both per-block boxes
+carry `data-opening-field` so that rule is applied in one place.
+
+Everything else about a variant is an ordinary edit and reaches the form:
+the specification, the SKU, the barcode, both prices, the target markup, the
+reorder level, the floor, and the variant's own name. Until this phase none of it
+did — the form hid the whole variant half on an edit, and half those fields could
+be set on a create and never corrected afterwards.
+
+### One editor, two panes
+
+The variant half is one set of fields with two panes over it, and which is up
+depends on how many things are on the shelf:
+
+| | Pane |
+| --- | --- |
+| Create | The repeater — a block per variant, submitted together as `variants[]` |
+| Edit, one variant | That variant's block, straight away |
+| Edit, none or several | The picker, and a pencil opens the block for the one chosen |
+
+The one-variant case is the overwhelming majority, and it is the reason the pane
+exists: for those products the family and the thing on the shelf are one record
+in the user's head, and splitting them over a dialog, a drawer, a tab and a
+second dialog was five clicks to correct a SKU.
+
+**The block is the only variant editor in the module.** The drawer's pencil opens
+this form on that variant rather than a dialog of its own. There was a second
+editor — `#variant-modal` — and the pair had already drifted exactly as §5.1
+says they do: the dialog could set a target markup the create form could not, and
+the create form could set a barcode, a purchase price and a minimum stock the
+dialog dropped on the floor. It is deleted rather than extended.
+
+Two things follow from the panes being panes rather than sections. The blocks are
+**emptied and rebuilt** on the way into either one, because whatever is in
+`#item-variants` is what gets submitted and a hidden block still holding the
+previous variant's SKU is the kind of thing that is eventually saved onto this
+one. And a **disabled control is one the form is not asking about**:
+`variantValue()` returns `undefined` for it, `JSON.stringify` drops the key, and
+`StoreVariantRequest::payload()` leaves that column exactly as it was. Sending
+null instead would wipe the reorder level and the floor of every product somebody
+ever unticked "keep stock of this" on.
+
+## Correcting what is on the shelf
+
+Opening stock is recorded once, on the create form, and after that a variant's
+position is corrected the same way every other position in the workshop is: by
+posting a stock adjustment. The drawer's variant rows carry the control, and what
+it opens is **the Stock screen's own count dialog** —
+`partials/stock-adjust.blade.php` and `components/stock-adjust.js`, mounted here
+in its second mode.
+
+There is deliberately no "edit quantity" on this screen or on any other. A field
+that wrote a position directly would be a second write path into the stock
+ledger, and every guarantee M8 makes rests on there not being one (§4.3).
+
+### The two modes are the same act, entered from opposite ends
+
+| Host | The operator types | The component sends |
+| --- | --- | --- |
+| Stock, `count` | the difference the count found, signed | that, unchanged |
+| Items, `variant` | what is actually on the shelf | it, minus what the books say |
+
+Which way round the number goes is not presentation. "Two fewer than the books
+say" and "two on the shelf" are different figures that post different documents,
+and a screen that let them be confused would post the wrong one — so each mode
+labels its own box and neither offers the other's. Items types the count because
+that is what somebody standing at a shelf has; Stock types the difference because
+a stock-take sheet is a list of variances.
+
+The subtraction between them is done in **integer thousandths**, not by
+subtracting two parsed floats: the column is `DECIMAL(15, 3)`, `12.3 - 4.1` is
+`8.199999999999999` in IEEE 754, and `decimal:0,3` would refuse it. It is the one
+piece of arithmetic this component adds, and it is the reason the two modes are
+one component rather than two (§4.4).
+
+**The difference is shown before it is posted.** It is the number that actually
+reaches the ledger and the one thing this mode never asks anybody to work out, so
+it is spelled out under the box as the count is typed, along with which way it
+goes and how the value is decided.
+
+### Found stock says what it will be worth
+
+A shortage is written off at what the books were carrying it at, which is not the
+counter's number to choose — so the cost box only appears once the difference is
+positive.
+
+When there is nothing on the shelf to average against, the dialog says so. The
+service falls back to whatever the variant last cost, and a variant that has never
+been bought has no such rate — which makes the whole document worth nothing and
+gets it refused as `STOCK_ADJUSTMENT_VALUELESS`. That refusal is the right one;
+finding out about it after pressing Post is not.
+
+### What the row control needs, and why it is two grants
+
+Removed rather than blanked, the treatment `data-stock-only` already gives the
+rest of this screen, and gated on **`WRITE:TRANSACTIONS`** because posting an
+adjustment is writing a transaction, plus **`READ:STOCK`** because this mode
+subtracts the position and without the position there is nothing to subtract
+from. A product whose category holds no stock has no control at all.
+
+## Opening stock
+
+The universal create form records what is already on the shelf, in the same
+submission as the product and the variants under it. It is an **input**, never a
+column: what it produces is an ordinary stock adjustment, posted through
+`TransactionService` and the stock ledger exactly as the Stock screen's own
+adjustment is, so there is no second way for stock to come into existence
+(CLAUDE.md §4.3).
+
+**An adjustment and not an `opening` transaction**, and the difference is not
+cosmetic. An opening balance is the go-live declaration posted against Opening
+Balance Equity; routing a product added in November through it would restate what
+the workshop was worth in April. An adjustment is the workshop saying what is on
+the shelf *today*, which is exactly the claim being made.
+
+**One document per create, however many variants declared a quantity.**
+Cataloguing a motor family with three ratings is one act and reads on the day
+book as one, where three vouchers stamped the same minute read as three separate
+stock-takes. Each line names its own variant, so the document's note names the
+product.
+
+**The count is dated when it was taken.** `opening_date` defaults to today; a
+workshop entering its catalogue in the evenings of a week it counted on the
+Sunday says so.
+
+### Stock cannot arrive worth nothing
+
+`StockLedgerService::adjustment()` values a stated increase at the last rate the
+workshop actually paid when nobody says otherwise. That is the right default
+everywhere except here: a variant created *by this request* has no movements at
+all, so the fallback is zero every single time.
+
+So an opening quantity above zero with no cost resolvable — neither
+`opening_cost` nor `purchase_price` — is refused with
+`OPENING_STOCK_NEEDS_A_COST`, and a stated zero is refused on the same ground. A
+free sample carried at nothing is a real thing, but it is a stock-take somebody
+goes to the Stock screen to record having decided it; reached through a catalogue
+form, a zero in a cost box is a box somebody tabbed past. The consequence either
+way is a shelf the Inventory account never learns about and a first sale
+reporting the whole price as profit.
+
+The rule lives in `ItemService::openingCostFor()` rather than in a form request,
+because M11's importer and M15's capture agent create variants without passing
+through one. The form asks the same question before the round trip; that copy is
+a courtesy and the service is the rule (§6.1).
+
+What it replaced was not a quiet zero. `StockAdjustmentTemplate` throws out a
+voucher whose every line is worthless, so the whole create rolled back and the
+message was `STOCK_ADJUSTMENT_VALUELESS`, about a field called `adjustments`
+that the form does not have.
+
+### Two things it skips rather than refuses
+
+* **A category that holds no stock.** An hour of labour with an opening quantity
+  typed against it is saved and warned about — refusing the product over a field
+  that could never have applied to it would be worse.
+* **A caller without `WRITE:TRANSACTIONS`.** Cataloguing is an ITEMS grant and
+  recording a quantity is a TRANSACTIONS one. A clerk who may add a bearing but
+  not write to the ledger gets the bearing, with a warning naming how many
+  quantities were not recorded.
+
+Both answer `201` with an `OPENING_STOCK_SKIPPED` warning in `meta`.
+
 ## Draft items
 
 `is_draft` is a flag, not a separate table. A draft item is a **real item that
@@ -232,6 +533,48 @@ surfaces its variants too.
 The count comes back on `GET /items/meta` alongside the schema, because every
 screen showing the catalogue wants the badge and a second round trip for one
 integer is waste.
+
+### The queue counts both, and both can be cleared
+
+`draft_counts` has always carried `items` **and** `variants`, and the banner read
+only the first — so a workshop whose import left forty unchecked ratings under
+products somebody had confirmed was told there was nothing to review. Both are
+counted now, and named separately in the banner, because they are cleared in
+different places.
+
+Nothing could clear either of them from the UI at all until this phase. The
+endpoints existed, the flag was documented as "cleared with
+`PATCH {"is_draft": false}`", and no screen sent it: the badge went on, the queue
+grew, and the only route back out was a database client. A worklist that cannot
+reach zero is not a worklist — it is a permanent warning, and a permanent warning
+is one people stop seeing.
+
+| | Cleared from | Confirmation |
+| --- | --- | --- |
+| **A family** | the row menu, or the drawer's own alert while it is open | none |
+| **A rating** | the drawer's Variants tab, one row at a time | none |
+
+Neither confirms, and that is the judgement rather than an omission: §3.5 asks
+for a dialog where something is taken away, and signing off takes nothing away.
+Nothing can put the flag *back* on from these screens either. Returning a record
+to the queue is not something anybody wants; correcting it is, and that is the
+pencil beside the control.
+
+**One rating at a time, and never a family's worth at once.** A "confirm all"
+over an import is one click that claims somebody read every row of it, which is
+the single claim this flag exists to stop being made by accident.
+
+The two flags are **independent in both directions**. Signing off a family leaves
+its ratings in the queue — a variant inherits `is_draft` from the item it was
+invented under, and an importer that guessed the product guessed every rating
+below it too. Signing off a rating does not confirm the family above it.
+`ItemApiTest::a_variant_is_archived_restored_and_signed_off_one_flag_at_a_time`
+is what holds that shut.
+
+The row badge and the queue filter follow the same rule: a family is in the queue
+when **it** is waiting *or* anything under it is. Without that, confirming the
+product removed its unchecked ratings from the only list that would ever have
+shown them.
 
 ## Duplicates
 
@@ -252,6 +595,36 @@ two.
 The match is on the attributes *named*, not on the whole document, so a second row
 is a duplicate whether or not somebody typed its optional frame size.
 
+**Within one create, the same warning is raised between the blocks themselves.**
+On that path there is nothing else to collide with — the product did not exist a
+moment ago — so `ItemService::duplicateSpecifications()` groups the variants it
+just wrote by their **stored** attributes, which `normaliseAttributes()` has
+already put in schema order. Two blocks described in different sequences still
+compare equal.
+
+```json
+"meta": { "warnings": [{
+  "code": "ITEM_VARIANT_DUPLICATE",
+  "message": "Variants 1 and 3 are described the same way — 5 HP / 3 / 1440. …",
+  "positions": [1, 3],
+  "variant_ids": [7, 9]
+}]}
+```
+
+They are named by **position**, because their specifications are identical by
+definition and there is nothing else telling them apart. `positions` counts from
+one, as the form's own headings do.
+
+A variant with no specification at all is skipped rather than matched against
+every other one like it. Labour has no attribute bag — an hour of rewinding is an
+hour of rewinding — so a rule that paired empty against empty would warn about
+every second block on that category, every time. What tells two of those apart is
+the SKU, and a repeated SKU is refused outright.
+
+Warnings **accumulate rather than replace**: a clerk who added three ratings,
+typed one of them twice and holds no `WRITE:TRANSACTIONS` grant has two separate
+things to be told, and the form toasts each.
+
 ## Archiving and deletion
 
 Same rule as an account and a party, for the same reason.
@@ -270,6 +643,36 @@ M8's stock movements and M9's bill lines are what make this a real protection, a
 both will back it with `restrictOnDelete` for anything that does not come through
 the service.
 
+### A variant is archived from the row, not from the editor
+
+`PATCH /items/{id}/variants/{vid}` with `is_active: false`, from the Variants tab
+of the drawer. A status change rather than an edit — everything already recorded
+against the variant stays exactly as it is, and only what a picker offers changes
+— so it belongs beside the row like the family's own archive does (§7.4), not
+inside the form that corrects the fields. Archiving from within a form holding
+unsaved edits would have to answer what happens to them.
+
+Restoring is the same call with `is_active: true` and asks nothing first: it puts
+something back.
+
+### Archived ratings are hidden by default, and counted out loud
+
+A workshop that has dealt in a part for ten years has archived more ratings than
+it still stocks, and a panel where the live ones are three rows in twenty is a
+panel nobody reads. So `variantRows()` shows the active ones and puts the rest
+behind **"Show 4 archived"**.
+
+What it never does is hide them silently. The footer states the number whether
+they are shown or not, so the panel cannot claim a family has less under it than
+it does — and where every rating has been archived it says so, rather than
+rendering blank above a button, which would read as a product with nothing on the
+shelf instead of one whose shelf was cleared.
+
+The preference is **module-level, not per surface**. The drawer's Variants tab
+and the item form's picker are the same list through the same renderer and are
+never on screen together; two flags would be one preference somebody had to set
+twice, and they would disagree.
+
 ## Refusals
 
 | Refusal | Error code | Status |
@@ -281,9 +684,16 @@ the service.
 | Duplicate item code | `ITEM_CODE_TAKEN` | 409 |
 | Duplicate variant SKU | `ITEM_SKU_TAKEN` | 409 |
 | Deleting an item with variants | `ITEM_IN_USE` | 409 |
+| Opening stock with nothing to value it at | `OPENING_STOCK_NEEDS_A_COST` | 422 |
 
 Every message names the fix rather than only the refusal — "a motor needs its
 rating", "add the variant to the existing item instead".
+
+**A refusal reaches a form input only through `details.fields`.** `auth-client.js`
+maps `error.fields` from `details.fields`, so the singular `details.field` that
+several of these carry has never got past the banner. On a create carrying
+`variants[]` the field is re-keyed per block — see
+[A refusal names the block it is about](#a-refusal-names-the-block-it-is-about).
 
 ## Endpoints
 
@@ -359,6 +769,40 @@ on the item's type, so `renderAttributeFields()` reads `GET /items/meta`: a sele
 where the values are genuinely fixed, a text box where the range is open, and the
 required ones unmarked while the optional ones say so.
 
+**The create form repeats that block per variant.** One `<template>` in the
+markup, cloned by `addVariantBlock()`, with "Add another variant" beneath and a
+Remove control that appears from the second block — a product with nothing on the
+shelf under it cannot be sold, priced or counted.
+
+Nothing in the template carries an index. `indexVariantBlock()` stamps the
+position onto every `name`, `id`, `for` and `data-error-for` when a block is added
+or removed, so the numbering is decided in one place: a `name="variants.0.sku"`
+written into the markup would be a second, and the drift shows up as a refusal
+painted into the wrong block. The attribute inputs are repainted with it, because
+their ids carry the index too — and their **typed values survive the repaint**,
+which matters because "Configure fields" is opened *from* this form, halfway
+through filling it in, and with three blocks up a wipe costs three
+specifications.
+
+What stays outside the repeater is what belongs to the family: the name, the
+category, the brand, the HSN code, the rate, the unit, "Keep stock of this" — and
+`opening_date`, because every quantity posts on one stock adjustment and a
+document has one date.
+
+**On an edit that same block is the variant editor**, and beside it is a picker
+for choosing which variant it stands for — see
+[One editor, two panes](#one-editor-two-panes). Both panes live in
+`#item-variants-section`, one on screen at a time: §2A.2's judgement applied a
+level down, the same shape Jobs uses for its billing pane. The picker's rows and
+the drawer's Variants tab come from **one renderer**, `variantRows()`, because
+they show the same four facts — what it is, its code, its price, and what is on
+the shelf — and two copies would drift on the first column either of them gained.
+
+A bound block also prints **what is on the shelf under that variant right now**,
+read-only and from M8. Only when the block stands for something that exists: a
+quantity printed beside the boxes that create one reads as a figure somebody may
+type over.
+
 **The type is reflected into the form as it is chosen** — the tax code relabels
 itself HSN or SAC, the unit switches to the type's default, and the stock checkbox
 disables itself for a service with a sentence saying why. Telling somebody as they
@@ -371,19 +815,29 @@ filters the list.
 
 Variants open as a panel over the list rather than a page of their own: they are
 read and edited while thinking about the family, and losing the list to see them is
-what makes people stop looking.
+what makes people stop looking. The drawer's pencil hands off to the item form —
+level 3 over level 2, which is where one record's fields belong — rather than
+opening a dialog over a dialog (§2.2). The clipboard beside it opens the shared
+count dialog at the same level, carrying the icon Stock's "Record a count" carries
+because it is the same act and should not look like a second one (§7.4).
+
+A row that is still waiting to be checked gets one more control, ahead of the
+others: while a rating is unchecked it is the only thing on that row worth doing.
+It disappears the moment it is used, which is the feedback — there is no state to
+toggle back into.
 
 ## Tests
 
 ```bash
-php artisan test --filter='Item|PagesRender'
+php artisan test --filter='Item|Stock|PagesRender'
 ```
 
 | File | Proves |
 | --- | --- |
-| `ItemTest` | The record: the four types coexisting, attribute validation per type, labels, stock capability, immutable type and unit, naming, duplicates, drafts, deletion, prices, tenancy |
+| `ItemTest` | The record: the four types coexisting, attribute validation per type, labels, stock capability, immutable type and unit, naming, duplicates, drafts, deletion, prices, tenancy — and that the **buying price reaches no valuation**, asserted against the shelf rather than against the column |
 | `ItemApiTest` | The HTTP surface, the published schema, permissions, tenant isolation — and that **no endpoint reports a quantity or a cost** |
-| `PagesRenderTest` | The shell, the review queue, and that the attribute schema is not hardcoded in the markup |
+| `StockApiTest` | That the drawer's count posts the document the Stock screen posts. Adding the second host changed no server code, so this is the only thing that records the contract is shared |
+| `PagesRenderTest` | The shell, the review queue, that the queue has a control to clear a draft and that the control is not gated declaratively, that the attribute schema is not hardcoded in the markup, that the variant block is declared once and carries no index of its own, that it asks for **every** field a variant has, that there is no second variant form, and that both Items and Stock include one count dialog |
 
 `ItemFactory::ofType()` sets the unit and the stock flag from the type together, so
 a factory cannot produce the one combination the service refuses — a service item

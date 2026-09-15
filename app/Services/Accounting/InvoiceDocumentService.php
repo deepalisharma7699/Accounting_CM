@@ -4,6 +4,7 @@ namespace App\Services\Accounting;
 
 use App\Models\Tenant;
 use App\Models\Transaction;
+use App\Models\TransactionLine;
 use App\Repositories\Contracts\TenantRepositoryInterface;
 use App\Support\AmountInWords;
 use App\Support\Money;
@@ -197,8 +198,29 @@ class InvoiceDocumentService
             'hsn_sac' => $line->hsn_sac,
             'quantity' => $line->quantityValue()->amount(),
             'unit_symbol' => $line->unit->symbol(),
-            'unit_price' => $line->unitPriceMoney()->amount(),
-            'discount_amount' => $line->discountMoney()->amount(),
+            /*
+            | The rate **before** GST, always — including on a line whose price
+            | was quoted with the tax in it.
+            |
+            | A tax invoice's rate column is a rate excluding tax; it sits beside
+            | a taxable value and a tax column and has to be the same kind of
+            | figure as the one it explains. Printing the ₹118 that was typed
+            | next to a taxable value of ₹100 gives the recipient's accounts
+            | department a row that does not multiply out, on the one document
+            | whose whole job is to be their evidence for an input tax credit.
+            |
+            | So the quoted figure is converted here rather than carried through.
+            | The **taxable value is the authoritative column** — it is what the
+            | return is filed on and it is exact — and on an awkward quantity the
+            | rate can be the odd paisa off multiplying into it, which is inherent
+            | to quoting inclusive and is why the two are not derived from each
+            | other. The customer's total is unaffected either way.
+            |
+            | The discount is converted with it, so both sides of the subtraction
+            | are on the basis the column heading claims.
+            */
+            'unit_price' => $this->beforeTax($line, $line->unitPriceMoney())->amount(),
+            'discount_amount' => $this->beforeTax($line, $line->discountMoney())->amount(),
             'taxable_value' => $line->taxableMoney()->amount(),
             'gst_rate' => (string) $line->gst_rate,
             'cgst_amount' => (string) $line->cgst_amount,
@@ -207,6 +229,20 @@ class InvoiceDocumentService
             'line_total' => $line->totalMoney()->amount(),
             'memo' => $line->memo,
         ])->all();
+    }
+
+    /**
+     * An amount from a line, stated before tax.
+     *
+     * The line's own figure where it was quoted before tax already, and the
+     * extracted base where it was not. `GstRate::baseWithin()` is the one place
+     * that arithmetic lives — the same call the posting engine made when it
+     * priced this line, so the document cannot disagree with the ledger behind
+     * it about what the tax was.
+     */
+    private function beforeTax(TransactionLine $line, Money $amount): Money
+    {
+        return $line->price_includes_tax ? $line->rate()->baseWithin($amount) : $amount;
     }
 
     /* ---------------------------------------------------------------------

@@ -5,7 +5,8 @@ namespace App\Http\Requests\WorkshopJob;
 use Illuminate\Foundation\Http\FormRequest;
 
 /**
- * Correcting the details of a job already on the bench.
+ * Correcting the details of a job already on the bench — what came in, what its
+ * kind asked about it, the complaint and the promise.
  *
  * `sometimes` throughout, so a PATCH that only moves the promised date leaves
  * everything else exactly as it was — and so an explicit `null` genuinely clears
@@ -23,6 +24,10 @@ use Illuminate\Foundation\Http\FormRequest;
  * pipeline move is an event rather than an edit, and because a status arriving
  * on the same request as a typo correction would let a mis-click deliver a motor
  * that is still on the bench.
+ *
+ * One pair is not independent. `category_id` decides which keys `specs` may
+ * carry, so sending the kind without the answers clears them — the service says
+ * why, and the form always sends both together.
  */
 class UpdateJobRequest extends FormRequest
 {
@@ -38,11 +43,12 @@ class UpdateJobRequest extends FormRequest
     {
         return [
             'item_id' => ['sometimes', 'nullable', 'integer', 'min:1'],
-            'hp' => ['sometimes', 'nullable', 'string', 'max:20'],
+            'category_id' => ['sometimes', 'nullable', 'integer', 'min:1'],
+            'specs' => ['sometimes', 'nullable', 'array', 'max:40'],
+            'specs.*' => ['nullable', 'string', 'max:120'],
             'brand' => ['sometimes', 'nullable', 'string', 'max:60'],
             'model' => ['sometimes', 'nullable', 'string', 'max:60'],
             'serial_no' => ['sometimes', 'nullable', 'string', 'max:60'],
-            'phase' => ['sometimes', 'nullable', 'string', 'max:20'],
             'complaint' => ['sometimes', 'required', 'string', 'max:1000'],
             'promised_date' => ['sometimes', 'nullable', 'date_format:Y-m-d'],
             'notes' => ['sometimes', 'nullable', 'string', 'max:1000'],
@@ -67,7 +73,11 @@ class UpdateJobRequest extends FormRequest
      */
     public function payload(): array
     {
-        $fields = ['item_id', 'hp', 'brand', 'model', 'serial_no', 'phase', 'complaint', 'promised_date', 'notes'];
+        $fields = [
+            'item_id', 'category_id', 'specs',
+            'brand', 'model', 'serial_no',
+            'complaint', 'promised_date', 'notes',
+        ];
 
         $payload = [];
 

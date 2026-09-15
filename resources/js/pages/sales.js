@@ -2,14 +2,17 @@ import auth from '../auth-client';
 import { badge, formatQuantity, kindBadge, lifecycleTone } from '../components/badge';
 import { mountBillDocument } from '../components/bill-document';
 import { mountBillRevision } from '../components/bill-revision';
-import { renderInvoice } from '../components/invoice-document';
+import {
+    bindDelivery, deliver, openInvoicePreview, openShare, printInvoice,
+} from '../components/invoice-delivery';
 import { mountPaymentRows } from '../components/payment-rows';
 import { describeAttribution, mountStaffAttribution } from '../components/staff-attribution';
 import { describeShortfalls } from '../components/stock-position';
 import { can } from '../permissions';
+import { clearModuleParams, moduleParams } from '../shell';
 import {
     $, $$, confirmAction, debounce, esc, formatDate, formatMoney,
-    hideModal, showFormErrors, showModal, tableMessage, toast,
+    hideModal, showActionError, showFormErrors, showModal, tableMessage, toast,
 } from '../ui';
 import { mountWorkspace } from '../workspace';
 
@@ -283,18 +286,13 @@ const drawer = {
     */
     returnRef: null,
     /*
-    | The customer's copy of this document, once anything has asked for it.
+    | The customer's copy of this document lives in `delivery`, not here.
     |
-    | Fetched at most once per opened drawer and then held, because two things
-    | want it and neither should pay for the other: Print renders it, and Share
-    | needs the customer's phone number to address a WhatsApp message with. It is
-    | a *different payload* from `bill` — see InvoiceDocumentService for why the
-    | customer's document is built from its own list of fields rather than by
-    | filtering this one.
+    | Two surfaces hand it over — this drawer, and the preview a freshly posted
+    | invoice lands on — and they are the same act on the same document. Holding
+    | the payload, the link and the WhatsApp address on the drawer meant the
+    | preview could only have them by keeping a second copy of all three.
     */
-    invoice: null,
-    /** The live link for this document, or null. From the invoice call's meta. */
-    share: null,
     /** The correction dialog's pickers while it is open — M22. */
     staffEditor: null,
     busy: false,
@@ -309,10 +307,6 @@ async function openDrawer(id) {
     // next would make a return on B come back as the credit note already raised
     // on A.
     drawer.returnRef = null;
-    // Per document, like everything else here: showing invoice B's link on
-    // invoice A is how a customer is sent somebody else's bill.
-    drawer.invoice = null;
-    drawer.share = null;
 
     el('[data-drawer-subtitle]').textContent = '';
     el('[data-drawer-status]').innerHTML = '';
@@ -333,6 +327,12 @@ async function loadDocument() {
 
         drawer.bill = data;
         drawer.meta = meta ?? {};
+
+        // Whatever the customer's copy of the *last* document was, it is not
+        // this one's. Re-pointed here rather than in `openDrawer` because this
+        // also runs after a draft is posted, which is exactly when a held copy
+        // stops being right — the document had no number a moment ago.
+        deliver(data);
 
         paint();
     } catch (error) {
@@ -616,7 +616,7 @@ async function submitReceipt() {
     const split = drawer.payments.value();
 
     if (split.length === 0) {
-        toast('Say how the money arrived — cash, bank, UPI or cheque.', 'error');
+        showActionError(el('[data-drawer-submit]'), 'Say how the money arrived — cash, bank, UPI or cheque.');
 
         return;
     }
@@ -743,7 +743,7 @@ async function submitReturn() {
         .filter((line) => line.quantity !== '' && Number(line.quantity) > 0);
 
     if (lines.length === 0) {
-        toast('Say which lines came back, and how many of each.', 'error');
+        showActionError(el('[data-drawer-submit]'), 'Say which lines came back, and how many of each.');
 
         return;
     }
@@ -757,7 +757,10 @@ async function submitReturn() {
     });
 
     if (over) {
-        toast('One line is taking back more than was sold. Check the "Left" column.', 'error');
+        showActionError(
+            el('[data-drawer-submit]'),
+            'One line is taking back more than was sold. Check the "Left" column.'
+        );
 
         return;
     }
@@ -1026,7 +1029,7 @@ async function run(hook, busyLabel, work) {
 
     drawer.busy = true;
 
-    const button = hook ? el(hook) : null;
+    const button = hook === null ? null : el(hook);
     const idle = button?.textContent;
 
     if (button) {
@@ -1052,190 +1055,21 @@ async function run(hook, busyLabel, work) {
 }
 
 /* -------------------------------------------------------------------------
- | The customer's copy — printing it, and sharing it
+ | The customer's copy — previewing it, printing it, and sharing it
+ |
+ | All of it is `components/invoice-delivery.js` now. It was written here, and
+ | stayed here for as long as Sales was the only screen that handed a customer a
+ | document; Jobs is the second, and the one-sheet rule that block records cannot
+ | be satisfied by a second copy of any of it. So this module keeps the three
+ | decisions that are genuinely its own — when to point the delivery at a
+ | document, when to open the preview, and what happens on the way out — and the
+ | component keeps the rest.
  | ---------------------------------------------------------------------- */
 
-/**
- * The document as the customer would see it, fetched once per opened drawer.
- *
- * Its `meta` carries whether it is already shared and where, so opening the
- * share dialog costs nothing extra once Print has been pressed, and the other
- * way round.
- */
-async function loadInvoice() {
-    if (drawer.invoice) return drawer.invoice;
-
-    const response = await auth.call(`/transactions/${drawer.id}/invoice`);
-
-    drawer.invoice = response.data;
-    drawer.share = response.meta?.share ?? null;
-
-    return drawer.invoice;
-}
-
-/**
- * Print, without leaving the page.
- *
- * The sheet is mounted in the application's layout and hidden; painting it and
- * calling `print()` is the whole of it. No second window, so nothing for a
- * pop-up blocker to swallow and nothing to lose the drawer to — §1.1, and §3.2's
- * rule about never reloading, arrived at from the same direction.
- *
- * `#invoice-print` is in `document` rather than under this module's root, which
- * is correct: it belongs to the page, and the Purchase module will print through
- * the identical node.
- */
-async function printInvoice() {
-    await run('[data-drawer-print]', 'Preparing…', async () => {
-        const invoice = await loadInvoice();
-
-        renderInvoice($('#invoice-print [data-invoice-document]'), invoice);
-
-        window.print();
-    });
-}
-
-/**
- * The share dialog — level 3, over the drawer.
- *
- * Opened before the fetch resolves, with the panel saying so. Waiting on a
- * request with nothing on screen is how somebody comes to press Share twice.
- */
-async function openShare() {
-    $('[data-share-subtitle]', root).textContent =
-        `${drawer.bill.type_label} ${drawer.bill.doc_no ?? `#${drawer.bill.id}`}`;
-
-    $('[data-share-body]', root).innerHTML =
-        '<p class="py-6 text-center text-sm text-muted-foreground">Loading…</p>';
-    $('[data-share-actions]', root).innerHTML = '';
-
-    showModal('#sales-share-modal');
-
-    try {
-        await loadInvoice();
-        paintShare();
-    } catch (error) {
-        $('[data-share-body]', root).innerHTML =
-            `<p class="py-6 text-center text-sm text-rose-600">${esc(error.message)}</p>`;
-    }
-}
-
-/**
- * WhatsApp, addressed to the customer where there is a number for them.
- *
- * `wa.me` rather than the `whatsapp://` scheme, because it works on a desktop
- * browser as WhatsApp Web and on a phone as the app, and the workshop's counter
- * is sometimes one and sometimes the other.
- *
- * Digits only, with 91 assumed for a ten-digit number. That assumption is safe
- * in the only product this is: the ledger is in rupees, the tax is GST and the
- * place of supply is a two-digit Indian state code. A number already carrying a
- * country code is left alone.
- */
-function whatsappHref(url) {
-    const digits = String(drawer.invoice?.customer?.phone ?? '').replace(/\D/g, '');
-    const to = digits.length === 10 ? `91${digits}` : digits;
-
-    const text = `${drawer.invoice.document.heading} ${drawer.invoice.document.doc_no ?? ''} `
-        + `from ${drawer.invoice.workshop.name}: ${url}`;
-
-    // With no number it still opens WhatsApp, on the contact chooser — which is
-    // the right answer for a walk-in whose number the workshop never took.
-    return `https://wa.me/${to}?text=${encodeURIComponent(text.replace(/\s+/g, ' ').trim())}`;
-}
-
-function paintShare() {
-    const body = $('[data-share-body]', root);
-    const actions = $('[data-share-actions]', root);
-
-    if (drawer.share === null) {
-        body.innerHTML = `
-            <p class="text-[0.8125rem] text-secondary-foreground">
-                This creates a link anybody holding it can open — no account, no password. Send it to
-                <strong class="text-foreground">${esc(drawer.bill.party?.name ?? 'the customer')}</strong>
-                and it keeps working until you end it.
-            </p>
-            <p class="mt-2 text-[0.8125rem] text-muted-foreground">
-                The page shows the invoice only: what was sold, the tax and what is owed. It never shows
-                what anything cost the workshop.
-            </p>`;
-
-        actions.innerHTML = `
-            <button type="button" class="btn btn-secondary btn-sm" data-modal-close>Not now</button>
-            <button type="button" class="btn btn-primary btn-sm ml-auto" data-share-create>Create the link</button>`;
-
-        return;
-    }
-
-    const url = drawer.share.url;
-
-    body.innerHTML = `
-        <label class="field-label" for="sales-share-url">Anybody with this link can read the invoice</label>
-        <input id="sales-share-url" type="text" class="field-input font-mono text-[0.8125rem]"
-               value="${esc(url)}" readonly data-share-url>
-
-        <p class="mt-2 text-[0.8125rem] text-muted-foreground">
-            Shared ${esc(formatDate(drawer.share.shared_at))}${
-                drawer.share.shared_by ? ` by ${esc(drawer.share.shared_by)}` : ''
-            }. It works until you end it.
-        </p>
-
-        <div class="mt-3 flex flex-wrap gap-2">
-            <button type="button" class="btn btn-secondary btn-sm" data-share-copy>Copy link</button>
-            <a class="btn btn-secondary btn-sm" href="${esc(whatsappHref(url))}"
-               target="_blank" rel="noopener noreferrer">Send on WhatsApp</a>
-            <a class="btn btn-ghost btn-sm" href="${esc(url)}" target="_blank" rel="noopener noreferrer">
-                Open it
-            </a>
-        </div>`;
-
-    actions.innerHTML = `
-        <button type="button" class="btn btn-ghost btn-sm" data-share-revoke>Stop sharing</button>
-        <button type="button" class="btn btn-secondary btn-sm ml-auto" data-modal-close>Done</button>`;
-}
-
-async function createLink() {
-    await run('[data-share-create]', 'Creating…', async () => {
-        const response = await auth.call(`/transactions/${drawer.id}/share`, { method: 'POST' });
-
-        drawer.share = response.data;
-
-        paintShare();
-        toast(response.message ?? 'Link ready to share.');
-    });
-}
-
-async function revokeLink() {
-    const ok = await confirmAction({
-        title: 'Stop sharing this invoice?',
-        body: 'The link stops working immediately, for everybody holding it. Sharing it again makes a '
-            + 'different link — this one can never be brought back.',
-        confirmLabel: 'Stop sharing',
-    });
-
-    if (!ok) return;
-
-    await run(null, null, async () => {
-        await auth.call(`/transactions/${drawer.id}/share`, { method: 'DELETE' });
-
-        drawer.share = null;
-
-        paintShare();
-        toast('The link has stopped working.');
-    });
-}
-
-async function copyLink() {
-    try {
-        await navigator.clipboard.writeText(drawer.share.url);
-        toast('Link copied.');
-    } catch {
-        // Clipboard access is refused outright in some browsers and over plain
-        // HTTP. The field is already selectable, so say that rather than failing.
-        $('[data-share-url]', root)?.select();
-        toast('Could not copy — the link is selected, copy it from there.', 'error');
-    }
-}
+/** Where the cursor goes when the preview closes: the next sale (§2A.8). */
+const backToTheForm = () => {
+    if (workspace?.mode() === 'form') doc.party().focus();
+};
 
 /** The list behind the drawer, where one is held. */
 async function refreshList() {
@@ -1354,7 +1188,7 @@ function bindDrawer() {
         } else if (hit('data-drawer-reverse')) {
             reverseDocument();
         } else if (hit('data-drawer-print')) {
-            printInvoice();
+            printInvoice(hit('data-drawer-print'));
         } else if (hit('data-drawer-share')) {
             openShare();
         } else if (hit('data-drawer-correct')) {
@@ -1362,16 +1196,6 @@ function bindDrawer() {
         } else if (hit('data-drawer-repeat')) {
             repeatDocument();
         }
-    });
-
-    // The share dialog's own controls, delegated for the same reason: the panel
-    // is repainted whenever the link is created or ended.
-    $('#sales-share-modal', root).addEventListener('click', (event) => {
-        const hit = (hook) => event.target.closest(`[${hook}]`);
-
-        if (hit('data-share-create')) createLink();
-        else if (hit('data-share-revoke')) revokeLink();
-        else if (hit('data-share-copy')) copyLink();
     });
 
     // Who did the work — M22. Delegated on the drawer body, which is repainted
@@ -1526,11 +1350,30 @@ export default async function initSales() {
             // the first Show and not before, so a counter that only ever writes
             // invoices must not be made to pay for one by posting.
             if (workspace?.hasList()) refetch();
+
+            /*
+            | And the other half of raising an invoice: the customer's copy.
+            |
+            | Over the emptied form rather than instead of it, so §2A.8 is
+            | untouched — closing the preview leaves a blank document with the
+            | cursor in the customer box, which is where the next person in the
+            | queue starts. The alternative was what this replaced: showing the
+            | list, finding the row just written and opening it again, for every
+            | single sale.
+            |
+            | Only for a document there is a copy *of*. A draft has no number, no
+            | priced lines and no tax, and a correction that failed never got
+            | here at all.
+            */
+            if (created?.status === 'posted' && created?.type === 'sale') {
+                openInvoicePreview(created, { onClosed: backToTheForm });
+            }
         },
     });
 
     bindFilters();
     bindDrawer();
+    bindDelivery();
 
     // Bound once, on a node the workspace only ever detaches and re-attaches —
     // listeners belong to the element, so they survive the round trip (§2A.6).
@@ -1560,7 +1403,49 @@ export default async function initSales() {
         canCreate: canWrite,
         onShowList: load,
 
+        // What was sold, and what is still owed on it. A receipt posted
+        // from the drawer moves the second without touching the first.
+        refreshOn: ['transactions', 'parties'],
+
         // §2A.8 — back on the form, the customer is where the next sale starts.
         onShowForm: () => doc.party().focus(),
     });
+
+    applyDeepLink(moduleParams());
+
+    // Reopening an already-mounted module cannot run this function again, so a
+    // second deep link is announced on the root instead.
+    root.addEventListener('module:params', (event) => applyDeepLink(event.detail));
+}
+
+/**
+ * `#sales?party=12` — "create a sale" from the Customers card.
+ * `#sales?doc=88`   — an invoice picked out of the topbar's search.
+ *
+ * The intent comes from the shell rather than from `location.search`, because a
+ * module's URL is a fragment of the dashboard's now, and this used to be a real
+ * navigation to the counter at /bills/new before C4 retired it. It is spent once
+ * acted on: surviving a refresh or a Back would put a counterparty back on a
+ * document somebody had cleared, or reopen a drawer they had just closed.
+ */
+function applyDeepLink(params) {
+    const party = params.get('party');
+    const document_ = params.get('doc');
+
+    if (!party && !document_) return;
+
+    if (party) {
+        workspace?.showForm();
+        doc.party().load(party);
+    }
+
+    /*
+    | The drawer fetches the document by id, so it needs no list behind it — the
+    | module is left on whichever surface it landed on and the invoice opens over
+    | it. A search that had to load a whole list to show one document would be
+    | the one thing §7.2 asks this not to do.
+    */
+    if (document_) openDrawer(document_);
+
+    clearModuleParams();
 }

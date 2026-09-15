@@ -3,7 +3,10 @@
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ModuleFragmentController;
 use App\Http\Controllers\PublicInvoiceController;
+use App\Http\Controllers\SiteController;
+use App\Http\Middleware\SetSiteLocale;
 use App\Support\Modules;
+use App\Support\Site;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -22,17 +25,49 @@ use Illuminate\Support\Facades\Route;
 /*
 | The shopfront, and the way in.
 |
-| The public page is the site itself — what the workshop does, where it is and
-| how to reach it — with the sign-in form on it as a modal rather than as a
-| screen of its own. So there is no separate login page to route to.
+| The public site is the shop's own site — what it does, how the work is done,
+| what is on the counter, where it is and how to reach it — with the sign-in
+| form on it as a modal rather than as a screen of its own. So there is no
+| separate login page to route to.
 |
+| Two shapes: one long home page, and a deeper page for each service people
+| search for by name. Three of the six services have one; the rest are answered
+| by their card, and App\Support\Site::pagedServiceSlugs() is the single list
+| that decides which — the same list config/shop.php declares, so a service
+| cannot have a route without having the copy to fill it.
+|
+| Each of those exists twice, once per language: English at the root and Hindi
+| under /hi. The language is in the path rather than in a cookie so that both
+| have a real address to be linked to and indexed under — see SetSiteLocale for
+| why that is not a detail.
+*/
+$shopfront = function (string $locale) {
+    return function () use ($locale): void {
+        Route::get('/', [SiteController::class, 'home'])
+            ->defaults('locale', $locale)
+            ->name('home');
+
+        Route::get('/services/{service}', [SiteController::class, 'service'])
+            ->whereIn('service', Site::pagedServiceSlugs())
+            ->defaults('locale', $locale)
+            ->name('services.show');
+    };
+};
+
+Route::middleware(SetSiteLocale::class)->group($shopfront('en'));
+
+Route::prefix('hi')
+    ->name('hi.')
+    ->middleware(SetSiteLocale::class)
+    ->group($shopfront('hi'));
+
+/*
 | /login is kept, and kept named, because it is the destination the whole
 | application already redirects to when a session ends: resources/js/app.js on a
 | failed bootstrap, initLogout() after signing out, and route('login') from the
-| sign-up page. It lands on the same page with the modal already open, so
+| sign-up page. It lands on the home page with the modal already open, so
 | somebody who was working a moment ago is not made to hunt for the button.
 */
-Route::view('/', 'welcome')->name('home');
 Route::redirect('/login', '/?login=1')->name('login');
 
 /*
@@ -85,12 +120,15 @@ Route::get('/i/{token}', PublicInvoiceController::class)
     ->name('invoices.public');
 
 /*
-| The counter — M20, decision D8. Still a page of its own this pass: a modal
-| cannot host a search-first item picker, a running total, a keyboard flow and a
-| confirmation step without becoming a scroll trap. It becomes the Bills module's
-| level-1 create form in the follow-up, and this route goes with it.
+| The counter is gone, and with it the last page shell in the application.
+|
+| It existed for one reason after the Purchase and Sales modules took over its
+| ordinary work: it was the only screen that could raise a **workshop bill**.
+| C4 moved that path onto the Jobs card, where the invoice is raised from the
+| job it came off — so `/bills/new`, `resources/views/bills/new.blade.php` and
+| `pages/bill-counter.js` went together. Everything below is a redirect into the
+| mounted shell, which is now the whole of the authenticated application.
 */
-Route::view('/bills/new', 'bills.new')->name('bills.create');
 
 /*
 | Where every module used to live.
@@ -113,3 +151,13 @@ foreach (array_keys(Modules::declared()) as $module) {
 }
 
 Route::redirect('/parties', '/dashboard#customers')->name('parties.index');
+
+/*
+| Two screens that were merged into a card rather than converted onto one of
+| their own, so the loop above no longer declares them: `parties` became
+| Customers and Vendors, and `ledger` became the trial-balance view of
+| Accounting (C5). Each redirects one step further along the same chain rather
+| than being deleted — the route names are what the rest of the application
+| links by, and a missing one is a 500 where a redirect is a shrug.
+*/
+Route::redirect('/ledger', '/dashboard#accounts')->name('ledger.index');

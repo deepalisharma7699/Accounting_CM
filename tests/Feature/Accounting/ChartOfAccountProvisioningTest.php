@@ -31,6 +31,10 @@ class ChartOfAccountProvisioningTest extends TestCase
     {
         $this->seedRoleCatalogue();
 
+        // Self-serve sign-up ships off; this test uses it only as the shortest
+        // route to a freshly provisioned workshop.
+        config()->set('tenancy.allow_public_signup', true);
+
         $this->postJson('/api/v1/auth/register', [
             'workshop_name' => 'Sharma Electricals',
             'name' => 'Ravi Sharma',

@@ -3,7 +3,9 @@
 namespace App\Services\Inventory;
 
 use App\Enums\TransactionType;
+use App\Exceptions\Accounting\InvalidStockMovementException;
 use App\Exceptions\Accounting\ItemInUseException;
+use App\Exceptions\ApiException;
 use App\Exceptions\ConflictException;
 use App\Exceptions\ResourceNotFoundException;
 use App\Models\Item;
@@ -14,6 +16,7 @@ use App\Repositories\Contracts\ItemRepositoryInterface;
 use App\Repositories\Contracts\TransactionLineRepositoryInterface;
 use App\Services\Accounting\TransactionService;
 use App\Support\Units\UnitRegistry;
+use Closure;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
@@ -38,12 +41,24 @@ use Illuminate\Support\Facades\Log;
  *
  * ## The one-step create
  *
- * {@see createWithVariant()} is the universal form's endpoint: one submission
- * produces the product *and* the first thing on the shelf, because "add a
+ * {@see createWithVariants()} is the universal form's endpoint: one submission
+ * produces the product *and* the things on the shelf under it, because "add a
  * Crompton 5 HP motor" is one act and making somebody do it in two screens is how
  * a catalogue ends up full of families with no variants under them. The two-step
  * path is still there and still used — adding a second size to a shirt that
  * already exists must not mean re-typing its tax details.
+ *
+ * It takes as many variants as the form declared. A motor family is bought in
+ * three ratings and catalogued in one sitting, and the alternative — save the
+ * product, then add each rating from the drawer — is the two-screen shape this
+ * endpoint exists to remove, paid for once per rating.
+ *
+ * A third rule is enforced here for the same reason as the first two:
+ *
+ *   * **opening stock cannot arrive worth nothing.** See
+ *     {@see openingCostFor()} — the refusal has to happen while the number is
+ *     still called opening stock, because one layer down it is an adjustment
+ *     line and the message would be about a field no form has.
  */
 class ItemService
 {
@@ -108,13 +123,24 @@ class ItemService
      |-------------------------------------------------------------------- */
 
     /**
-     * One form, one submission: the product, its first variant, and — where the
-     * shop already has some on the shelf — the opening stock.
+     * One form, one submission: the product, every variant declared on it, and —
+     * where the shop already has some on the shelf — their opening stock.
      *
-     * All three inside one database transaction, because the halves are not
+     * All of it inside one database transaction, because the parts are not
      * independently useful. A product with no variant cannot be sold, priced or
      * counted; a variant whose opening stock failed to post would show zero on
      * the shelf while the shop has five, which is a figure somebody would act on.
+     *
+     * ## Several variants, and why they arrive together
+     *
+     * A motor family is bought in three ratings and catalogued in one sitting.
+     * Making that three trips through a drawer is the shape this endpoint exists
+     * to remove, and it is also how the *specification* gets skipped: by the
+     * third rating nobody is re-typing the HP.
+     *
+     * They post **one** stock adjustment between them — see
+     * {@see postOpeningStock()} — because cataloguing a family is one act and
+     * reads on the day book as one.
      *
      * ## Why opening stock posts a stock adjustment
      *
@@ -128,75 +154,244 @@ class ItemService
      * The opening stock is skipped rather than refused when the caller cannot
      * post transactions. Cataloguing is an ITEMS grant and posting is a
      * TRANSACTIONS one; a clerk who may add a bearing but not write to the ledger
-     * should still be able to add the bearing, and be told plainly that the
-     * quantity was not recorded.
+     * should still be able to add the bearing, and be told plainly how many
+     * quantities were not recorded.
      *
      * @param  array<string, mixed>  $data
-     * @return array{item: Item, variant: ItemVariant|null, opening_posted: bool, opening_skipped_reason: string|null}
+     * @return array{item: Item, variants: array<int, ItemVariant>, opening_posted: bool, opening_skipped_reason: string|null, duplicates: array<int, array<int, array{position: int, variant: ItemVariant}>>}
      */
-    public function createWithVariant(array $data, ?User $actor = null, bool $mayPostStock = true): array
+    public function createWithVariants(array $data, ?User $actor = null, bool $mayPostStock = true): array
     {
-        $category = $this->resolveCategory($data['category_id'] ?? null);
+        // Refused before anything is written, so a bad category is one query
+        // rather than a rolled-back product.
+        $this->resolveCategory($data['category_id'] ?? null);
 
-        $openingQuantity = $this->trimmed($data['opening_stock'] ?? null);
-        $wantsOpening = $openingQuantity !== null && (float) $openingQuantity > 0;
+        $specs = $this->variantSpecs($data);
+        $named = $this->sentTheLonghand($data);
 
-        $result = DB::transaction(function () use ($data, $category, $actor, $wantsOpening, $openingQuantity, $mayPostStock) {
+        $result = DB::transaction(function () use ($data, $specs, $named, $actor, $mayPostStock) {
             $item = $this->create($data);
 
-            /*
-            | Whether this submission is creating a *thing on the shelf* as well
-            | as a product, and why it is asked rather than assumed.
-            |
-            | The universal form always is: it collects the specification, the
-            | SKU and the price on the same screen, and says so with
-            | `with_variant`. An API client adding a family it will hang four
-            | ratings off later is not — and forcing a variant on it would mean
-            | inventing one with no specification, which for a category that
-            | demands HP and phase is a record that cannot be saved and, for one
-            | that does not, a blank row nobody asked for.
-            |
-            | So: a variant is created when the caller supplied something for one,
-            | or when it said outright that it meant to.
-            */
-            $variant = $this->hasVariantData($data) || ($data['with_variant'] ?? false)
-                ? $this->variants->create($item, $this->variantPayload($data))
-                : null;
+            /** @var array<int, ItemVariant> $variants */
+            $variants = [];
 
-            if (! $wantsOpening || $variant === null) {
-                return ['item' => $item, 'variant' => $variant, 'opening_posted' => false, 'opening_skipped_reason' => null];
+            /** @var array<int, array{index: int, variant: ItemVariant, quantity: string, spec: array<string, mixed>}> $counted */
+            $counted = [];
+
+            foreach ($specs as $index => $spec) {
+                $variant = $this->forVariant(
+                    $named,
+                    $index,
+                    fn (): ItemVariant => $this->variants->create($item, $this->variantPayload($spec)),
+                );
+
+                $variants[] = $variant;
+
+                $quantity = $this->trimmed($spec['opening_stock'] ?? null);
+
+                if ($quantity !== null && (float) $quantity > 0) {
+                    $counted[] = ['index' => $index, 'variant' => $variant, 'quantity' => $quantity, 'spec' => $spec];
+                }
             }
 
+            $outcome = [
+                'item' => $item,
+                'variants' => $variants,
+                'opening_posted' => false,
+                'opening_skipped_reason' => null,
+                'duplicates' => $this->duplicateSpecifications($variants),
+            ];
+
+            if ($counted === []) {
+                return $outcome;
+            }
+
+            /*
+            | The two skips, before the refusal below.
+            |
+            | Neither is the shop's mistake, and both are about the *product*
+            | rather than about a figure on it — so refusing over a cost that
+            | could never have been used would be refusing the catalogue entry
+            | for a field that does not apply to it.
+            */
             if (! $item->tracksStock()) {
-                return [
-                    'item' => $item,
-                    'variant' => $variant,
-                    'opening_posted' => false,
-                    'opening_skipped_reason' => 'This category does not hold stock, so an opening quantity would be an asset that does not exist.',
-                ];
+                /*
+                | Two different reasons, and the message says which.
+                |
+                | `tracksStock()` is false for labour, which can never hold a
+                | quantity, and for a part the workshop buys to order, which
+                | could and chose not to. Blaming the category for the second is
+                | a message somebody would go and try to fix in the Category
+                | Master, where the switch they actually want is on this form.
+                */
+                return array_merge($outcome, [
+                    'opening_skipped_reason' => ($item->category?->holds_stock ?? true)
+                        ? 'The opening quantity was not recorded, because this product is not being kept in stock. '.
+                          'Turn "keep stock of this" on if it should be counted.'
+                        : 'This category does not hold stock, so an opening quantity would be an asset that does not exist.',
+                ]);
             }
 
             if (! $mayPostStock) {
-                return [
-                    'item' => $item,
-                    'variant' => $variant,
-                    'opening_posted' => false,
-                    'opening_skipped_reason' => 'The product was saved, but recording opening stock needs permission to write transactions. Ask somebody who has it to record the quantity.',
-                ];
+                return array_merge($outcome, [
+                    'opening_skipped_reason' => $this->openingStockSkipped(count($counted)),
+                ]);
             }
 
-            $this->postOpeningStock($variant, $openingQuantity, $data, $actor);
+            $this->postOpeningStock(
+                $item,
+                array_map(fn (array $line): array => [
+                    'variant' => $line['variant'],
+                    'quantity' => $line['quantity'],
+                    'unit_cost' => $this->forVariant(
+                        $named,
+                        $line['index'],
+                        fn (): string => $this->openingCostFor($line['variant'], $line['spec']),
+                    ),
+                ], $counted),
+                $this->trimmed($data['opening_date'] ?? null),
+                $actor,
+            );
 
-            return ['item' => $item, 'variant' => $variant, 'opening_posted' => true, 'opening_skipped_reason' => null];
+            return array_merge($outcome, ['opening_posted' => true]);
         });
 
-        Log::info('items.created_with_variant', [
+        Log::info('items.created_with_variants', [
             'item_id' => $result['item']->id,
-            'variant_id' => $result['variant']?->id,
+            'variant_ids' => array_map(static fn (ItemVariant $variant): int => (int) $variant->id, $result['variants']),
             'opening_posted' => $result['opening_posted'],
         ]);
 
         return $result;
+    }
+
+    /**
+     * The variants this submission is asking for, in the order they were typed.
+     *
+     * Two shapes with one meaning. `variants[]` is what the create form sends,
+     * one entry per block of its repeater. The flat keys — `sku`, `sell_price`,
+     * `opening_stock` and the rest — are the **one-variant shorthand**, and they
+     * are kept because most callers are one: the importer walks a spreadsheet a
+     * row at a time, and an API client adding a single bearing should not have to
+     * wrap it in an array to say so.
+     *
+     * An entry of `variants[]` therefore carries exactly the flat keys, down to
+     * `variant_label` being named apart from the product's own `name`. The
+     * shorthand is then literally one entry, and {@see variantPayload()} reads
+     * both without knowing which it was handed.
+     *
+     * @param  array<string, mixed>  $data
+     * @return array<int, array<string, mixed>>
+     */
+    private function variantSpecs(array $data): array
+    {
+        if ($this->sentTheLonghand($data)) {
+            return array_values(array_filter($data['variants'], 'is_array'));
+        }
+
+        /*
+        | Whether this submission is creating a *thing on the shelf* as well as a
+        | product, and why it is asked rather than assumed.
+        |
+        | The universal form always is: it collects the specification, the SKU and
+        | the price on the same screen. An API client adding a family it will hang
+        | four ratings off later is not — and forcing a variant on it would mean
+        | inventing one with no specification, which for a category that demands
+        | HP and phase is a record that cannot be saved and, for one that does
+        | not, a blank row nobody asked for.
+        |
+        | So: a variant is created when the caller supplied something for one, or
+        | when it said outright that it meant to.
+        */
+        return $this->hasVariantData($data) || ($data['with_variant'] ?? false)
+            ? [$data]
+            : [];
+    }
+
+    /**
+     * Whether the caller used `variants[]` rather than the flat shorthand.
+     *
+     * An empty array is not the longhand: a client that sent one by accident
+     * alongside `with_variant` asked for a variant, and reading it as "none"
+     * would silently save a family nothing can be sold from.
+     *
+     * @param  array<string, mixed>  $data
+     */
+    private function sentTheLonghand(array $data): bool
+    {
+        $variants = $data['variants'] ?? null;
+
+        return is_array($variants) && array_filter($variants, 'is_array') !== [];
+    }
+
+    /**
+     * Do one variant's work, and make any refusal say which variant it was about.
+     *
+     * A duplicate SKU, a missing required attribute and an unvalued opening
+     * quantity are all raised where their rule lives, and none of those layers
+     * knows it was called for the third block of a repeater. Without this the
+     * form paints "a variant with SKU MOT-5HP already exists" on a banner above
+     * five identical blocks and leaves somebody comparing them by eye.
+     *
+     * Only for a caller that sent `variants[]`. A flat submission gets `sku`
+     * back, because `sku` is what it sent — which is also what keeps the
+     * shorthand's refusals exactly as they were.
+     *
+     * @template T
+     *
+     * @param  Closure(): T  $work
+     * @return T
+     */
+    private function forVariant(bool $named, int $index, Closure $work): mixed
+    {
+        if (! $named) {
+            return $work();
+        }
+
+        try {
+            return $work();
+        } catch (ApiException $error) {
+            throw $error->underField('variants.'.$index);
+        }
+    }
+
+    /**
+     * Variants of this submission that describe the same thing.
+     *
+     * Reported, never refused — M5's treatment of a shared GSTIN, for the reason
+     * {@see ItemVariantService::othersMatching()} records: two 5 HP / 1440 rows
+     * are *usually* one motor entered twice, which splits one stock balance in
+     * half, but a workshop stocking two brands at identical ratings legitimately
+     * has two.
+     *
+     * On this path the only duplicates possible are within the submission — the
+     * product did not exist a moment ago, so there is nothing else under it to
+     * collide with. Compared on the **stored** attributes, which
+     * `normaliseAttributes()` has already put in schema order, so two variants
+     * described in different sequences still compare equal.
+     *
+     * A variant with no specification at all is skipped rather than matched
+     * against every other one like it. What tells two plain bushes apart is their
+     * SKU and their label, and a repeated SKU is refused outright a few lines up.
+     *
+     * @param  array<int, ItemVariant>  $variants
+     * @return array<int, array<int, array{position: int, variant: ItemVariant}>>
+     */
+    private function duplicateSpecifications(array $variants): array
+    {
+        $groups = [];
+
+        foreach ($variants as $index => $variant) {
+            $attributes = $variant->attributes;
+
+            if (empty($attributes)) {
+                continue;
+            }
+
+            $groups[json_encode($attributes)][] = ['position' => $index + 1, 'variant' => $variant];
+        }
+
+        return array_values(array_filter($groups, static fn (array $group): bool => count($group) > 1));
     }
 
     /**
@@ -210,27 +405,102 @@ class ItemService
      * the shop saying what is on the shelf *today*, which is exactly the claim
      * being made.
      *
-     * @param  array<string, mixed>  $data
+     * **One document, however many variants declared a quantity.** Cataloguing a
+     * motor family with three ratings is one act, and it should read on the day
+     * book as one — where three vouchers stamped the same minute read as three
+     * separate stock-takes. The posting engine has always taken several lines;
+     * nothing had ever handed it more than one. Each line names its own variant
+     * already, so the document's own note names the product instead.
+     *
+     * @param  array<int, array{variant: ItemVariant, quantity: string, unit_cost: string}>  $lines
+     * @param  string|null  $date  When the shelf was counted. Today where the
+     *                             form did not say.
      */
-    private function postOpeningStock(ItemVariant $variant, string $quantity, array $data, ?User $actor): void
+    private function postOpeningStock(Item $item, array $lines, ?string $date, ?User $actor): void
     {
         $this->transactions->create(TransactionType::StockAdjustment, [
-            'date' => $data['opening_date'] ?? now()->toDateString(),
-            'notes' => sprintf('Opening stock for %s', $variant->displayLabel()),
+            'date' => $date ?? now()->toDateString(),
+            'notes' => sprintf('Opening stock for %s', $item->name),
             'post' => true,
-            'adjustments' => [[
-                'variant_id' => (int) $variant->id,
-                'quantity' => $quantity,
-                // What the shop says the stock cost. Falls back to the purchase
-                // price on the form, because that is the number they just typed
-                // and the honest answer to "what is this worth". Never zero by
-                // default: stock valued at nothing reports a 100% margin on the
-                // first sale.
-                'unit_cost' => $this->trimmed($data['opening_cost'] ?? null)
-                    ?? $this->trimmed($data['purchase_price'] ?? null),
+            'adjustments' => array_map(fn (array $line): array => [
+                'variant_id' => (int) $line['variant']->id,
+                'quantity' => $line['quantity'],
+                'unit_cost' => $line['unit_cost'],
                 'memo' => 'Opening stock recorded when the product was created',
-            ]],
+            ], $lines),
         ], $actor);
+    }
+
+    /**
+     * What a unit of the opening stock cost — refused rather than allowed to be
+     * nothing.
+     *
+     * The stated cost, else the buying price on the same form, because that is
+     * the number they just typed and the honest answer to "what is this worth".
+     *
+     * ## Why neither may be missing, and why a stated zero is refused too
+     *
+     * One layer down, {@see StockLedgerService::adjustment()} values a stated
+     * increase at `unitCostFor()` when nobody says otherwise — the last rate the
+     * workshop actually paid. That is the right default everywhere except here:
+     * a variant created *by this request* has no movements at all, so the
+     * fallback is zero every single time. Stock then arrives on the shelf worth
+     * nothing, the Inventory account never learns it exists, and the first sale
+     * of it reports the whole price as profit.
+     *
+     * The comment this replaces said "never zero by default" and nothing enforced
+     * it. What actually happened was worse than a silent zero: the posting
+     * template refuses a voucher whose every line is worthless, so the exception
+     * rolled the *product* back with it, and somebody adding a bearing was told
+     * that none of their adjustments changed what the stock was worth — about a
+     * field called `adjustments` that their form does not have.
+     *
+     * A stated zero is refused on the same ground rather than honoured as a
+     * choice. `StockAdjustmentTemplate` is right that a workshop may carry a free
+     * sample at nothing, but that is a stock-take somebody goes to the Stock
+     * screen to record, having decided it. Reached through a catalogue form, a
+     * zero in a cost box is a box somebody tabbed past.
+     *
+     * Here rather than in {@see \App\Http\Requests\Item\StoreItemRequest},
+     * because M11's importer and M15's capture agent create variants without
+     * passing through a form request — and because the refusal has to name the
+     * thing it is refusing, which needs the variant.
+     *
+     * @param  array<string, mixed>  $data
+     *
+     * @throws InvalidStockMovementException
+     */
+    private function openingCostFor(ItemVariant $variant, array $data): string
+    {
+        $cost = $this->trimmed($data['opening_cost'] ?? null)
+            ?? $this->trimmed($data['purchase_price'] ?? null);
+
+        if ($cost === null || (float) $cost <= 0) {
+            throw InvalidStockMovementException::openingStockNeedsACost(
+                $variant->displayLabel(),
+                aFigureWasGiven: $cost !== null,
+            );
+        }
+
+        return $cost;
+    }
+
+    /**
+     * The product was saved and the quantity was not.
+     *
+     * Said with the count in it, because "opening stock was skipped" on a form
+     * that offers a box per variant leaves somebody counting the boxes to work
+     * out what they have to go and ask for.
+     */
+    private function openingStockSkipped(int $variants): string
+    {
+        return sprintf(
+            'The product was saved, but recording opening stock needs permission to write transactions. '.
+            '%s Ask somebody who has that permission to record it.',
+            $variants === 1
+                ? 'The opening quantity was not recorded.'
+                : sprintf('The opening quantities for %d variants were not recorded.', $variants),
+        );
     }
 
     /**
@@ -270,6 +540,9 @@ class ItemService
             'label' => $data['variant_label'] ?? null,
             'attributes' => $data['attributes'] ?? [],
             'sell_price' => $data['sell_price'] ?? null,
+            // Stored on the variant now rather than read once and dropped. It is
+            // still what values any opening stock below, and still never a cost.
+            'purchase_price' => $data['purchase_price'] ?? null,
             'markup_percent' => $data['markup_percent'] ?? null,
             'reorder_level' => $data['reorder_level'] ?? null,
             'min_stock' => $data['min_stock'] ?? null,
@@ -312,6 +585,12 @@ class ItemService
             'gst_rate' => $this->normaliseRate(
                 $data['gst_rate'] ?? $category->default_gst_rate
             ),
+            // How this product's price is quoted. No category default: what a
+            // shop charges on a kind of thing is a property of the tax code, and
+            // whether it writes the figure with the tax folded in is a habit of
+            // the shop. A workshop that prices everything at MRP still has to say
+            // so per product, once.
+            'price_includes_tax' => (bool) ($data['price_includes_tax'] ?? false),
             'base_uom' => $this->resolveUom($category, $data['base_uom'] ?? null),
             'is_stock' => $this->resolveStockFlag($category, $data['is_stock'] ?? null),
             'is_draft' => (bool) ($data['is_draft'] ?? false),
@@ -388,6 +667,19 @@ class ItemService
 
         if (array_key_exists('gst_rate', $data)) {
             $attributes['gst_rate'] = $this->normaliseRate($data['gst_rate']);
+        }
+
+        /*
+        | Editable, and it restates nothing already posted.
+        |
+        | Every line that has been written carries its own copy — see
+        | `transaction_lines.price_includes_tax` — so flipping this changes what
+        | the *next* bill prefills and no invoice already issued. Which is the
+        | same guarantee `gst_rate` beside it gives, and it is audited for the
+        | same reason: the shelf price has not moved, but what it means has.
+        */
+        if (array_key_exists('price_includes_tax', $data)) {
+            $attributes['price_includes_tax'] = (bool) $data['price_includes_tax'];
         }
 
         if (array_key_exists('is_stock', $data)) {

@@ -171,13 +171,21 @@
         </button>
     </div>
 
-    {{-- The same five states the tiles filter to, named in full. The tiles are
-         the shortcut and these are the control: one `state.status` behind both,
-         so they can never disagree. --}}
+    {{-- Every state a position can be in, named in full. The tiles are the
+         shortcut to the three most asked and these are the whole control: one
+         `state.status` behind both, so they can never disagree.
+
+         "Below minimum" has no tile of its own, and that is the judgement rather
+         than an omission. A fifth tile leaves one alone on a row at every
+         breakpoint this grid has, and the state is already the loudest thing on
+         any row it is true of — its own badge in the status column, above amber
+         on the ladder. The count that matters is on Insights, where the worklist
+         is. --}}
     <div class="mb-5 flex flex-wrap items-center gap-2" id="filter-pills">
         <button type="button" class="pill" data-pill="" aria-pressed="true">Everything</button>
         <button type="button" class="pill" data-pill="in_stock" aria-pressed="false">In stock</button>
         <button type="button" class="pill" data-pill="low" aria-pressed="false">Low stock</button>
+        <button type="button" class="pill" data-pill="below_minimum" aria-pressed="false">Below minimum</button>
         <button type="button" class="pill" data-pill="out" aria-pressed="false">Out of stock</button>
         <button type="button" class="pill" data-pill="negative" aria-pressed="false">Negative</button>
 
@@ -275,53 +283,17 @@
     </div>
 </div>
 
-{{-- Recording a count. Quantities here are the *difference* the count found,
-     signed — which is why the field is labelled "difference" and not "quantity
-     on hand": typing what is on the shelf and typing how far out the books were
-     are different numbers, and confusing them would post the wrong one. --}}
-<div id="adjustment-modal" class="modal-backdrop hidden" data-modal role="dialog" aria-modal="true"
-     aria-labelledby="adjustment-title">
-    <div class="modal-panel max-w-3xl">
-        <form id="adjustment-form" novalidate>
-            <header class="border-b border-border px-5 py-4">
-                <h2 class="text-base font-bold text-foreground" id="adjustment-title">Record a count</h2>
-                <p class="mt-0.5 text-[0.8125rem] text-muted-foreground">
-                    Enter the difference the count found — <span class="font-medium">−2</span> for two fewer than
-                    the books say, <span class="font-medium">+1</span> for one more. A shortage is written off at
-                    what the books were carrying it at; found stock needs a cost.
-                </p>
-            </header>
-
-            <div class="max-h-[55vh] space-y-4 overflow-y-auto px-5 py-4">
-                <div class="grid gap-4 sm:grid-cols-2">
-                    <label class="field">
-                        <span class="field-label">Date</span>
-                        <input type="date" name="date" class="field-input" required>
-                        <span class="field-error" data-error="date"></span>
-                    </label>
-
-                    <label class="field">
-                        <span class="field-label">Note</span>
-                        <input type="text" name="notes" class="field-input" maxlength="500"
-                               placeholder="Stock-take, March">
-                        <span class="field-error" data-error="notes"></span>
-                    </label>
-                </div>
-
-                <div id="adjustment-lines" class="space-y-3"></div>
-
-                <button type="button" id="add-adjustment-line" class="btn btn-secondary btn-sm">
-                    <x-icon name="plus" :size="15" />
-                    Add a line
-                </button>
-
-                <div class="field-error" data-error="adjustments"></div>
-            </div>
-
-            <footer class="flex items-center justify-end gap-2 border-t border-border px-5 py-4">
-                <button type="button" class="btn btn-ghost" data-modal-close>Cancel</button>
-                <button type="submit" class="btn btn-primary">Post the correction</button>
-            </footer>
-        </form>
-    </div>
-</div>
+{{-- Recording a count.
+     |
+     | The form is not written here. It is `partials/stock-adjust.blade.php` and
+     | `components/stock-adjust.js`, which the Items drawer also opens against a
+     | single variant — the same act, entered two ways, and a second copy of a
+     | form that writes to the stock ledger is the last thing this application
+     | should have two of (§5.1).
+     |
+     | Quantities in this mode are the *difference* the count found, signed —
+     | which is why the field is labelled "difference" and not "quantity on
+     | hand": typing what is on the shelf and typing how far out the books were
+     | are different numbers, and confusing them would post the wrong one. The
+     | Items side takes the other of the two and subtracts. --}}
+@include('partials.stock-adjust')

@@ -55,4 +55,49 @@ class ApiException extends Exception
     {
         return $this->headers;
     }
+
+    /**
+     * Point this failure at one entry of a repeated group.
+     *
+     * A refusal is raised where the rule is — "a SKU that identifies two things
+     * is worse than no SKU" — and that layer legitimately does not know it was
+     * raised about the third block of a repeater. The caller does, and this is
+     * where it says so: `sku` becomes `variants.2.sku`, which is the name the
+     * client actually sent and therefore the box it can paint.
+     *
+     * Written into `fields` and not only into `field`, because only the map
+     * reaches a form input — `auth-client.js` reads `details.fields`, and a
+     * singular `details.field` has never got past the banner. A failure that
+     * named no field at all is pinned to the entry itself, which is still the
+     * difference between "one of these five is wrong" and "this one".
+     *
+     * Only for a caller that sent the repeated shape. Scoping a refusal onto
+     * `variants.0.sku` for somebody who sent a flat `sku` would name a field
+     * they never wrote.
+     */
+    public function underField(string $prefix): static
+    {
+        $fields = $this->details['fields'] ?? null;
+        $field = $this->details['field'] ?? null;
+
+        if (is_array($fields) && $fields !== []) {
+            $scoped = [];
+
+            foreach ($fields as $name => $messages) {
+                $scoped[$prefix.'.'.$name] = $messages;
+            }
+
+            $this->details['fields'] = $scoped;
+        } elseif (is_string($field)) {
+            $this->details['fields'] = [$prefix.'.'.$field => [$this->getMessage()]];
+        } else {
+            $this->details['fields'] = [$prefix => [$this->getMessage()]];
+        }
+
+        if (is_string($field)) {
+            $this->details['field'] = $prefix.'.'.$field;
+        }
+
+        return $this;
+    }
 }

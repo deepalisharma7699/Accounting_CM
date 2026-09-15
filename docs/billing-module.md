@@ -3,14 +3,16 @@
 *The engine. The screens that drive it are [purchase-module.md](purchase-module.md)
 and [sales-module.md](sales-module.md).*
 
-> **M10's expense half has no screen.** Sales and Purchase are converted and on;
-> the **Bills** card, which is where an expense is written, is switched off, and
-> `POST /transactions/expense` has exactly one caller in the front end — that
-> module's `pages/bills.js`. So rent, electricity and the rest cannot be recorded
-> today, and the P&L reports a margin against overheads of nil. When Bills is
-> converted it becomes the expense module and **its list is not rebuilt**: Sales,
-> Purchase and Insights' Day Book already draw it (§5.1). See
-> [hidden-modules.md](hidden-modules.md).
+> **M10's expense half is on** — converted in C2, and the card says
+> **Expenses**. `POST /transactions/expense` still has exactly one caller in the
+> front end and it is that module's `pages/bills.js`, which is the whole reason
+> the card exists: rent, electricity and the rest have nowhere else to be
+> written, and without them the P&L reports a margin against overheads of nil.
+>
+> **Its list was not rebuilt**, and must not be. The old Bills screen listed
+> sales, purchases, expenses and both kinds of note; Sales, Purchase and
+> Insights' Day Book already draw every part of that (§5.1). What is behind
+> "Show list" there is `types[]=expense` and nothing else.
 
 Sales, purchases and running costs — M9 and M10.
 
@@ -329,6 +331,22 @@ Which columns exist is decided from the document rather than fixed: IGST replace
 CGST + SGST, and the Discount column appears only if something was discounted. A
 fixed set means a column of zeroes on most invoices, and a column of nothing is a
 column somebody has to read past.
+
+### There is one sheet, and the preview borrows it
+
+Sales opens the customer's copy over the form as soon as a sale posts
+(`#invoice-preview`, level 2, with Print and Share). That drawer renders **no
+invoice markup**: `components/invoice-delivery.js` moves the single `[data-invoice-document]`
+node out of `#invoice-print` while it is open and hands it back before anything
+prints.
+
+A second sheet would break the rule below rather than merely duplicate markup.
+The rule keeps whichever child of `body` *contains* the document, so a copy
+mounted under `<main>` makes `<main>` worth keeping, and every print after that
+carries the whole application around the invoice. Both hosts are children of
+`body` — the sheet and the preview that borrows it — and the sheet is released by
+Print, by closing the preview, and by `beforeprint` (plus the
+`matchMedia('print')` change, which is what Safari has instead).
 
 ### Printing does not leave the page
 
