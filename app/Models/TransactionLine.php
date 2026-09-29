@@ -12,7 +12,6 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\Relations\HasOne;
 
 /**
  * One line of a bill: what was supplied, how much of it, at what price, with
@@ -22,10 +21,11 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * "credit Sales ₹4,237.29"; this says "three 5 HP motors at ₹1,412.43, HSN 8501,
  * 18%". Both are needed and neither substitutes for the other.
  *
- * **There is no cost column.** A line's cost is its stock movement's value —
- * `stock_movements.transaction_line_id` points back here — so a margin is a join
- * rather than a second copy that could drift. See {@see cost()} and
- * {@see margin()}.
+ * **There is no cost column.** A line's cost is the value of the stock
+ * movements behind it — `stock_movements.transaction_line_id` points back here
+ * — so a margin is a join rather than a second copy that could drift. Plural:
+ * a line supplying something *made* out of stock issues one movement per
+ * material. See {@see stockMovements()}, {@see cost()} and {@see margin()}.
  *
  * Written once, by the posting engine, inside the same database transaction as
  * the entries and the movements. A posted transaction is immutable, so nothing
@@ -158,16 +158,25 @@ class TransactionLine extends Model
     }
 
     /**
-     * The quantity this line took off the shelf, and what it was worth.
+     * The quantities this line took off the shelf, and what they were worth.
      *
-     * One movement at most: a line supplies one variant, and a bill that both
-     * issued and received the same thing would be two lines.
+     * **Many, not one, and the plural is load-bearing.** It was a `hasOne` on
+     * the reasoning that a line supplies one variant — true of everything that
+     * is itself on a shelf, and false the moment a line supplies something
+     * *made* out of what is on the shelf. A rewind is one line and one price,
+     * and it issues copper, varnish and sleeve: three movements against one
+     * line, written by the same posting engine in the same instant.
      *
-     * @return HasOne<StockMovement, $this>
+     * Everything that reads a cost therefore sums. A `hasOne` here does not
+     * fail — it answers with whichever movement the database returned first,
+     * which is a real cost of a real material and looks entirely plausible on
+     * the margin panel. That is the failure mode this plural exists to remove.
+     *
+     * @return HasMany<StockMovement, $this>
      */
-    public function stockMovement(): HasOne
+    public function stockMovements(): HasMany
     {
-        return $this->hasOne(StockMovement::class);
+        return $this->hasMany(StockMovement::class);
     }
 
     /* ---------------------------------------------------------------------
@@ -234,11 +243,22 @@ class TransactionLine extends Model
      */
     public function cost(): ?Money
     {
-        if (! $this->relationLoaded('stockMovement') || $this->stockMovement === null) {
+        if (! $this->relationLoaded('stockMovements')) {
             return null;
         }
 
-        return $this->stockMovement->valueMoney()->absolute();
+        $movements = $this->stockMovements;
+
+        if ($movements->isEmpty()) {
+            return null;
+        }
+
+        // Summed, because a line that supplies a made thing issues one movement
+        // per material — see {@see stockMovements()}. A line that supplies a
+        // stocked thing has exactly one, and a sum of one is that one.
+        return Money::sum($movements->map(
+            fn (StockMovement $movement) => $movement->valueMoney()->absolute()
+        )->all());
     }
 
     /**

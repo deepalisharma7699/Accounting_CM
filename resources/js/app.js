@@ -1,5 +1,6 @@
 import auth from './auth-client';
 import { mountPasskeyManager } from './components/passkey-manager';
+import { initSearchableSelects } from './components/searchable-select';
 import { initFavourites } from './favourites';
 import passkeys from './passkeys';
 import { applyPermissionGates, setGrants, setWorkspace } from './permissions';
@@ -402,6 +403,13 @@ async function initAuthenticatedPage() {
 
     initChrome();
     initModals();
+    /*
+    | Every `<select>` behind the sign-in, including the ones that have not
+    | arrived yet: a module's fragment, a drawer, a repeated journal line and a
+    | dialog are all markup added later, and this watches for them rather than
+    | asking each of them to remember. See components/searchable-select.js.
+    */
+    initSearchableSelects();
 
     // The level-0/level-1 swap, and the only authenticated document there is.
     if (document.body.dataset.page === 'dashboard') {

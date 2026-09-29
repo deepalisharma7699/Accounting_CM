@@ -54,7 +54,7 @@
 
     <form id="{{ $direction }}-form" novalidate class="space-y-4" data-settlement-form>
 
-        <section class="surface p-5 sm:p-6">
+        <section class="surface form-card">
             <h3 class="text-sm font-bold text-foreground">
                 {{ $receipt ? 'Money collected' : 'Money paid out' }}
             </h3>
@@ -75,7 +75,7 @@
                  the pick and says so under the box. Never a select of every
                  party: a workshop with three hundred silently loses the last
                  hundred, with nothing on screen saying so. --}}
-            <div class="mt-4 grid gap-4 sm:grid-cols-2">
+            <div class="mt-4 form-grid">
                 <div data-party-host></div>
 
                 <div>

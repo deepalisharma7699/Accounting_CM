@@ -11,9 +11,11 @@ use App\Services\Accounting\Posting\PostingTemplate;
 use App\Services\Accounting\Posting\PostingTemplateRegistry;
 use App\Services\Accounting\Posting\StatesItsOwnTotal;
 use App\Services\Accounting\Tax\GstBreakdown;
+use App\Services\Inventory\ItemComponentService;
 use App\Services\Inventory\StockLedgerService;
 use App\Support\Money;
 use App\Support\Quantity;
+use Illuminate\Support\Collection;
 
 /**
  * What a bill will come to, before anybody commits to it — M17, and the brief's
@@ -53,6 +55,7 @@ class BillPreviewService
     public function __construct(
         private readonly PostingTemplateRegistry $templates,
         private readonly StockLedgerService $stock,
+        private readonly ItemComponentService $components,
     ) {}
 
     /**
@@ -84,9 +87,21 @@ class BillPreviewService
         $lines = $template->documentLinesFrom($input);
         $shortfalls = $this->shortfallsIn($lines, $type);
 
+        /*
+        | Every recipe on the document, in one query rather than one per line.
+        | This method runs on a debounce as somebody types at the counter, so a
+        | query per line is a query per line per keystroke (§7.2).
+        */
+        $recipes = $this->components->forVariants(array_values(array_filter(array_map(
+            fn (BillLine $line) => $line->movesStock || $line->variant === null
+                ? null
+                : (int) $line->variant->id,
+            $lines,
+        ))));
+
         return [
             'type' => $type->value,
-            'lines' => array_map(fn (BillLine $line) => $this->lineRow($line), $lines),
+            'lines' => array_map(fn (BillLine $line) => $this->lineRow($line, $recipes), $lines),
             /*
             | The template is handed in rather than the totals being finished
             | here, because it is the one that knows what the document is
@@ -167,7 +182,10 @@ class BillPreviewService
     /**
      * @return array<string, mixed>
      */
-    private function lineRow(BillLine $line): array
+    /**
+     * @param  array<int, \Illuminate\Support\Collection<int, \App\Models\ItemComponent>>  $recipes
+     */
+    private function lineRow(BillLine $line, array $recipes = []): array
     {
         return [
             'line_no' => $line->lineNo,
@@ -191,6 +209,30 @@ class BillPreviewService
             'tax_amount' => $line->tax->total()->amount(),
             'line_total' => $line->tax->inclusive()->amount(),
             'is_stock' => $line->movesStock,
+
+            /*
+            | What this line will take off the shelf, where it supplies something
+            | the workshop *makes* rather than holds. Empty for everything else,
+            | which is almost every line.
+            |
+            | Sent so the counter can see it on the line before posting. A rewind
+            | is one line at one price and three quantities of stock, and the
+            | operator who priced it is the person who would notice that the
+            | recipe is wrong — after posting, the only evidence is a shortage at
+            | a stock take months later.
+            */
+            'consumes' => array_map(
+                fn ($component) => [
+                    'label' => $component->componentVariant?->displayLabel(),
+                    'item_name' => $component->componentVariant?->item?->name,
+                    'quantity' => $component->quantityFor($line->quantity)->trimmed(),
+                    'unit_symbol' => $component->componentVariant?->item?->base_uom?->symbol() ?? '',
+                ],
+                $line->variant === null
+                    ? []
+                    : ($recipes[(int) $line->variant->id] ?? new Collection)->all(),
+            ),
+
             'memo' => $line->memo,
         ];
     }
@@ -215,18 +257,31 @@ class BillPreviewService
         $wanted = [];
 
         foreach ($lines as $line) {
-            if (! $line->movesStock || $line->variant === null) {
+            if ($line->variant === null) {
                 continue;
             }
 
-            $id = (int) $line->variant->id;
+            /*
+            | What this line will take off the shelf, which for a line supplying
+            | something *made* is its materials and not itself. Expanded here as
+            | well as in the posting template, and deliberately: this is the only
+            | place the counter is told *before* it promises a customer the work.
+            | A rewind refused at the moment of posting, with the customer
+            | standing there, is the failure this panel exists to prevent, and it
+            | would be the one shape of document it could not see coming.
+            */
+            foreach ($this->consumptionOf($line) as [$variant, $quantity]) {
+                $id = (int) $variant->id;
 
-            // Summed per variant, not per line. Two lines of three bearings are
-            // six bearings, and a shelf of five is short — which neither line can
-            // tell on its own.
-            $wanted[$id] ??= ['variant' => $line->variant, 'wanted' => Quantity::zero(), 'lines' => []];
-            $wanted[$id]['wanted'] = $wanted[$id]['wanted']->plus($line->quantity->absolute());
-            $wanted[$id]['lines'][] = $line->lineNo;
+                // Summed per variant, not per line. Two lines of three bearings
+                // are six bearings, and a shelf of five is short — which neither
+                // line can tell on its own. It is also what makes two rewinds on
+                // one bill add their copper together rather than each looking
+                // affordable.
+                $wanted[$id] ??= ['variant' => $variant, 'wanted' => Quantity::zero(), 'lines' => []];
+                $wanted[$id]['wanted'] = $wanted[$id]['wanted']->plus($quantity->absolute());
+                $wanted[$id]['lines'][] = $line->lineNo;
+            }
         }
 
         $shortfalls = [];
@@ -256,6 +311,36 @@ class BillPreviewService
         }
 
         return $shortfalls;
+    }
+
+    /**
+     * The shelves one line draws on, and how much of each.
+     *
+     * One pair for an ordinary stocked line, one per material for a line
+     * supplying something made, and none for labour. The same question
+     * {@see \App\Services\Accounting\Posting\Templates\SaleTemplate} answers
+     * when it posts — asked of the same service, so a preview cannot promise
+     * something the post then refuses.
+     *
+     * @return array<int, array{0: ItemVariant, 1: Quantity}>
+     */
+    private function consumptionOf(BillLine $line): array
+    {
+        if ($line->movesStock) {
+            return [[$line->variant, $line->quantity]];
+        }
+
+        $drawn = [];
+
+        foreach ($this->components->forVariant((int) $line->variant->id) as $component) {
+            $material = $component->componentVariant;
+
+            if ($material !== null) {
+                $drawn[] = [$material, $component->quantityFor($line->quantity)];
+            }
+        }
+
+        return $drawn;
     }
 
     /**

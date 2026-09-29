@@ -267,7 +267,7 @@ class PostingEngine
             'total' => $batch->total()->amount(),
         ]);
 
-        return $transaction->load(['entries.account', 'payments', 'lines.stockMovement', 'stockMovements', 'creator']);
+        return $transaction->load(['entries.account', 'payments', 'lines.stockMovements', 'stockMovements', 'creator']);
     }
 
     /**
@@ -387,7 +387,7 @@ class PostingEngine
             'total' => $posted->total,
         ]);
 
-        return $posted->load(['entries.account', 'payments', 'lines.stockMovement', 'stockMovements', 'creator']);
+        return $posted->load(['entries.account', 'payments', 'lines.stockMovements', 'stockMovements', 'creator']);
     }
 
     /* ---------------------------------------------------------------------
@@ -519,7 +519,7 @@ class PostingEngine
             'tenant_id' => $reversal->tenant_id,
         ]);
 
-        return $reversal->load(['entries.account', 'payments', 'lines.stockMovement', 'stockMovements', 'creator']);
+        return $reversal->load(['entries.account', 'payments', 'lines.stockMovements', 'stockMovements', 'creator']);
     }
 
     /**
@@ -626,7 +626,7 @@ class PostingEngine
             'tenant_id' => $revision->tenant_id,
         ]);
 
-        return $revision->load(['entries.account', 'payments', 'lines.stockMovement', 'stockMovements', 'creator']);
+        return $revision->load(['entries.account', 'payments', 'lines.stockMovements', 'stockMovements', 'creator']);
     }
 
     /**

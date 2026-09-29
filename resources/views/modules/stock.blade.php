@@ -46,7 +46,7 @@
                  selects would crowd out the status pills, which are what people
                  actually reach for. --}}
             <div class="relative">
-                <button type="button" id="filter-toggle" class="btn btn-secondary btn-sm h-[2.375rem]"
+                <button type="button" id="filter-toggle" class="btn btn-secondary btn-sm h-[var(--control-h)]"
                         aria-expanded="false" aria-haspopup="true">
                     <x-icon name="sliders-horizontal" :size="14" />
                     Filter
@@ -73,7 +73,7 @@
             </div>
 
             <div class="relative">
-                <button type="button" id="sort-toggle" class="btn btn-secondary btn-sm h-[2.375rem]"
+                <button type="button" id="sort-toggle" class="btn btn-secondary btn-sm h-[var(--control-h)]"
                         aria-expanded="false" aria-haspopup="true">
                     <x-icon name="arrow-up-down" :size="14" />
                     Sort
@@ -85,7 +85,7 @@
             {{-- Exports what the filters have narrowed to, not the page on
                  screen — a stock report that stopped at row 25 because that is
                  where the pager happened to be would be worse than no export. --}}
-            <button type="button" id="export-csv" class="btn btn-secondary btn-sm h-[2.375rem]">
+            <button type="button" id="export-csv" class="btn btn-secondary btn-sm h-[var(--control-h)]">
                 <x-icon name="download" :size="14" />
                 Export
             </button>
@@ -94,7 +94,7 @@
                  quantity" control beside it: a screen that could change a
                  position without writing a transaction would be a second write
                  path, and the whole module is built on there not being one. --}}
-            <button type="button" id="new-adjustment" class="btn btn-primary btn-sm h-[2.375rem] hidden"
+            <button type="button" id="new-adjustment" class="btn btn-primary btn-sm h-[var(--control-h)] hidden"
                     data-requires-permission="WRITE:TRANSACTIONS">
                 <x-icon name="clipboard-list" :size="14" />
                 Record a count

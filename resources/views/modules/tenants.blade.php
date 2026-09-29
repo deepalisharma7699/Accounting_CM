@@ -66,7 +66,7 @@
 
         <div>
             <label for="filter-status" class="sr-only">Filter by status</label>
-            <select id="filter-status" class="field-input h-[2.375rem] w-auto min-w-40 py-0">
+            <select id="filter-status" class="field-input w-auto min-w-40 py-0">
                 <option value="">All statuses</option>
                 @foreach (\App\Enums\TenantStatus::cases() as $status)
                     <option value="{{ $status->value }}">{{ $status->label() }}</option>
@@ -205,7 +205,7 @@
                     </p>
 
                     <div class="space-y-4">
-                        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        <div class="form-grid">
                             <div>
                                 <label for="ts-fy" class="field-label">Financial year starts</label>
                                 <select id="ts-fy" name="financial_year_start_month" class="field-input">
@@ -222,9 +222,7 @@
                                        autocomplete="off" placeholder="Asia/Kolkata">
                                 <p class="field-error hidden" data-error-for="timezone"></p>
                             </div>
-                        </div>
-
-                        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                        
                             <div>
                                 <label for="ts-books" class="field-label">Books start on</label>
                                 <input id="ts-books" name="books_start_date" type="date" class="field-input">
@@ -311,7 +309,7 @@
             </div>
 
             <div class="space-y-4" data-form-body>
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div class="form-grid">
                     <div>
                         <label for="tenant-name" class="field-label">Workshop name <span class="req">*</span></label>
                         <input id="tenant-name" name="name" type="text" class="field-input" required
@@ -321,7 +319,7 @@
 
                     <div>
                         <span class="field-label">Handle</span>
-                        <div class="flex h-[2.625rem] items-center rounded-[10px] border border-border bg-muted px-3
+                        <div class="flex h-[var(--control-h)] items-center rounded-[10px] border border-border bg-muted px-3
                                     font-mono text-[0.8125rem] text-muted-foreground">
                             <span id="tenant-slug-preview">—</span>
                         </div>
@@ -329,9 +327,7 @@
                             Set once, from the name. Renaming later leaves it unchanged.
                         </p>
                     </div>
-                </div>
-
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                
                     <div>
                         <label for="tenant-gstin" class="field-label">GSTIN <span class="font-normal text-muted-foreground">(optional)</span></label>
                         <input id="tenant-gstin" name="gstin" type="text" maxlength="15"
@@ -370,7 +366,7 @@
                     </p>
 
                     <div class="space-y-3">
-                        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div class="form-grid">
                             <div>
                                 <label for="owner-name" class="field-label">Name</label>
                                 <input id="owner-name" name="owner_name" type="text" class="field-input"
@@ -442,7 +438,7 @@
             </div>
 
             <div class="max-h-[60vh] space-y-4 overflow-y-auto px-6 py-5">
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div class="form-grid">
                     <div>
                         <label for="trole-name" class="field-label">Role name <span class="req">*</span></label>
                         <input id="trole-name" name="name" type="text" class="field-input" required
@@ -495,7 +491,7 @@
             </div>
 
             <div class="space-y-4 px-6 py-5">
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div class="form-grid">
                     <div>
                         <label for="tuser-name" class="field-label">Full name <span class="req">*</span></label>
                         <input id="tuser-name" name="name" type="text" class="field-input" required
@@ -519,7 +515,7 @@
                     <p class="field-error hidden" data-error-for="password"></p>
                 </div>
 
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div class="form-grid">
                     <div>
                         <label for="tuser-status" class="field-label">Status</label>
                         <select id="tuser-status" name="status" class="field-input">

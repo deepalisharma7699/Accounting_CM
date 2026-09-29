@@ -119,7 +119,7 @@
 
             <form id="voucher-form" novalidate class="space-y-4">
 
-                <section class="surface p-5 sm:p-6">
+                <section class="surface form-card">
                     <h3 class="text-sm font-bold text-foreground">What this voucher is for</h3>
 
                     <p class="mt-1 text-[0.8125rem] text-muted-foreground">
@@ -129,7 +129,7 @@
                         correction mechanism for all of them.
                     </p>
 
-                    <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                    <div class="mt-4 form-grid">
                         <div>
                             <label for="voucher-date" class="field-label">Date</label>
                             <input id="voucher-date" name="date" type="date" class="field-input" required>

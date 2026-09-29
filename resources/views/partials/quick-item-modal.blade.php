@@ -31,8 +31,8 @@
             <div class="max-h-[60vh] space-y-4 overflow-y-auto px-5 py-4">
                 {{-- Hidden when the family already exists and only its
                      specification is missing. --}}
-                <div id="quick-item-fields" class="grid gap-4 sm:grid-cols-2">
-                    <div class="sm:col-span-2">
+                <div id="quick-item-fields" class="form-grid">
+                    <div class="span-all">
                         <label for="quick-name" class="field-label">Item name</label>
                         <input id="quick-name" name="name" type="text" class="field-input"
                                autocomplete="off" placeholder="e.g. 3-Phase Induction Motor">
@@ -80,7 +80,7 @@
                         <p class="field-error hidden" data-error-for="gst_rate"></p>
                     </div>
 
-                    <div class="flex items-start gap-2.5 sm:col-span-2">
+                    <div class="flex items-start gap-2.5 span-all">
                         <input id="quick-stock" name="is_stock" type="checkbox"
                                class="mt-0.5 size-4 rounded border-border" checked>
                         <label for="quick-stock" class="text-sm text-secondary-foreground">
@@ -97,11 +97,11 @@
                     {{-- Built from GET /items/meta rather than written here: which
                          fields describe a motor is the server's answer, and a copy
                          in the markup is a copy that drifts. --}}
-                    <div id="quick-item-attributes" class="mt-3 grid gap-4 sm:grid-cols-2"></div>
+                    <div id="quick-item-attributes" class="mt-3 form-grid"></div>
 
                     <p class="field-error hidden" data-error-for="attributes"></p>
 
-                    <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                    <div class="mt-4 form-grid">
                         <div>
                             <label for="quick-sku" class="field-label">
                                 SKU <span class="font-normal text-muted-foreground">(optional)</span>

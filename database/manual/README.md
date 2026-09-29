@@ -9,6 +9,59 @@ in a deployment, a CI step or a recovery can reach it.
 
 ---
 
+## `sql/` — schema steps, from §4.6 onward
+
+From **29 September 2026** a schema change is not a migration. `php artisan
+migrate` reads a directory and applies whatever it finds, so a file committed
+weeks ago runs during an unrelated deployment, on a live workshop's books, with
+nobody deciding anything that day. `sql/` is where a schema change waits for an
+operator instead.
+
+Each step is a pair:
+
+| File | What it is |
+| --- | --- |
+| `<date>_<nnn>_<name>.sql` | The forward step. Opens with what it does, what it locks, how long it runs, and the `SELECT` that proves it worked. |
+| `<date>_<nnn>_<name>.rollback.sql` | The undo, and what it costs. |
+
+**Running one.** Take a dump first — every one of these is run against books
+somebody is trading on.
+
+```bash
+mysqldump -u <user> -p <database> > before-<step>-$(date +%F).sql
+mysql -u <user> -p <database> < database/manual/sql/<step>.sql
+```
+
+The last statement in each file is a verification `SELECT`. Read it. A step that
+prints nothing did not do what it says.
+
+**The test suite runs these files itself**, once, straight after `migrate:fresh`
+— see `tests/Support/ManualSchema.php`. Not a copy of them: the same bytes, so
+the shape under test cannot drift from the shape on the server. Do not write a
+migration that declares the same table "just for tests"; that second declaration
+is the drift, and it would be found the first time somebody corrected one of the
+two.
+
+### `2026_09_29_001_item_components.sql` — recipes
+
+Creates `item_components`: what a made thing consumes. A rewind is sold as one
+line at one price and takes copper, varnish and sleeve off the shelf, and before
+this the catalogue had no way to say so — the wire was bought, never issued, and
+the shelf, the Inventory account and every margin moved wrong together.
+
+One new table. No column added to anything, no existing row written, nothing
+locked on any table the workshop is billing against. It is safe to run during
+trading hours.
+
+**The code works before it is run and after** (§4.6). `ItemComponentService::isInstalled()`
+is the single place that is decided: with the table absent every read answers
+"no recipe", which is exactly what was true of every product yesterday, so every
+screen and every posting behaves as it did. Only a *write* refuses, out loud,
+saying this step has not been run — because silently discarding a recipe
+somebody just typed is the one failure that would look like success.
+
+---
+
 ## `2026_09_05_100003_clear_trading_data_keeping_staff_and_users.php`
 
 **Empties the trading side of the books for a go-live, and leaves the people

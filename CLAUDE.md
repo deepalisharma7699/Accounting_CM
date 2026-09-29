@@ -233,6 +233,47 @@ that refuses unless it has been asked for explicitly, and document the invocatio
 beside it. `database/manual/README.md` is the worked example, and the go-live
 cleanup that prompted the rule sat in the automatic path for two days.
 
+4.6 **The product is live. No change writes to the production schema by
+itself.** From 29 September 2026 this repository does not gain new files in
+`database/migrations` — not for a column, not for an index, not for a backfill.
+A schema change is delivered as **SQL the operator runs on the server**, by hand,
+in a window they chose, against a database they have just backed up.
+
+This is stricter than §4.5 and it replaces it for anything new. §4.5 drew the
+line at *destructive* data operations, on the reasoning that an automatic
+migration cannot know when it is running. On a live installation that reasoning
+covers every migration: `php artisan migrate` is one command that reads a
+directory and applies whatever it finds, so an unrelated file committed weeks ago
+runs during an unrelated deployment, on real books, with no operator deciding
+anything. An `ALTER TABLE` on a table the workshop is billing against is not a
+step in a deployment script.
+
+So, for every change that touches the schema or existing rows:
+
+* **Write the SQL out** — the `ALTER`, the backfill `UPDATE`, the index — as a
+  numbered block the operator can paste, with the `SELECT` that shows it worked
+  and the statement that undoes it. Put it in `database/manual/` beside the
+  worked examples and document it there.
+* **Say what it locks and how long it runs**, measured against the table's real
+  size, not guessed. An operator deciding on a window needs the figure.
+* **Make the code tolerate both shapes** wherever it can, so the deployment
+  order is not a cliff: ship code that works before the SQL is run and after it,
+  and the workshop is never one failed step away from a broken screen.
+* **Prefer a change that needs no SQL at all.** A query rewritten to read what is
+  already stored deploys with the code and has no window, no lock and nothing to
+  undo. That is worth real effort to reach.
+
+4.7 **What is on production is a fact this repository does not hold, so ask.**
+The working tree is not the deployed state: the branch runs ahead, a hotfix may
+have gone out of band, and some of the migrations sitting in this repository were
+written before 4.6 and may or may not have been applied. Before proposing or
+preparing any deployment, **ask the user what is currently live** — which commit,
+which of the pending schema changes have been run, and when the last backup was
+taken. Record the answer in `docs/deployment-log.md` with the date, and keep it
+updated as things go out. Never infer the production state from git history, from
+a migrations table read locally, or from what a previous conversation said was
+planned.
+
 ## 5. Reuse
 
 5.1 Search the project before creating any component, API, service, controller,
@@ -241,7 +282,8 @@ refactor it. Do not add a second implementation.
 
 5.2 Existing shared pieces to reuse rather than rewrite: `ui.js` primitives,
 `components/` (party picker, item picker, payment rows, quick item, quick
-party, badge), `permissions.js` gating, `auth-client.js` for every request.
+party, badge, searchable select), `permissions.js` gating, `auth-client.js` for
+every request.
 
 Writing a counterparty is `components/quick-party.js` and its partial —
 create *and* edit, quick shape *and* full record. It is the form the bill
@@ -434,6 +476,41 @@ sees of the one list narrows to their own grants for free, because only a card
 the permission pass left visible is ever lifted. See
 [tenancy-module.md](docs/tenancy-module.md).
 
+**Every dropdown is searchable, and that is not a per-form decision either.**
+A workshop with sixty accounts or two hundred units cannot find a row in a native
+`<select>`: it scrolls, its typeahead only matches the first letters, and on a
+phone it is whatever the platform decides to show. So
+[components/searchable-select.js](resources/js/components/searchable-select.js)
+turns every one of them into a type-to-filter list — centrally, from one watch on
+the document, for the reason §3.8 records about the activity bar: converting them
+a screen at a time leaves a control to remember on every new form, and the screen
+that forgets looks fine until somebody with a long list opens it. **Write an
+ordinary `<select>` and it is searchable.** Never hand-build a dropdown beside
+it, and use `data-plain-select` only where a native menu is genuinely the answer.
+
+The `<select>` is not replaced, which is the whole of why this could be applied
+everywhere at once. It is moved into a wrapper, taken off the screen and left in
+the form, so `select.value`, `innerHTML = options`, `form.elements[name]`, the
+`aria-invalid` that `showFormErrors` sets, `form.reset()` and every `change`
+listener keep working untouched. Three directions of change are followed back the
+other way, and each is a screen that would otherwise be wrong with nothing saying
+so: the **options** through a MutationObserver, which fires as a microtask and so
+reads the `select.value = held` that every repaint does afterwards; the
+**selection** through the `value` and `selectedIndex` properties, shadowed on the
+instance because `filter.value = '1'` changes nothing observable; and the
+**chrome** — `disabled`, `aria-invalid`, and the `hidden` class Accounting's view
+switch toggles on the *select*, which without mirroring would hide the filter and
+leave its button standing on the toolbar.
+
+Two smaller decisions. The search box is drawn from eight options up, but the
+input is focused either way and revealed the moment somebody types — so nothing
+is unsearchable and a three-option filter carries no furniture; its `inputMode`
+goes with it, or tapping that filter on a phone would raise the keyboard over a
+list that already fits. And the panel measures the room against **whatever will
+actually clip it** — a drawer's body and a dialog's body both scroll — rather
+than against the viewport, which is how a list opens downwards into two hundred
+pixels of drawer and shows three rows of sixty.
+
 **The topbar's search is a way in, and every module owes it a deep link.**
 [search.js](resources/js/search.js) is the one box that is not over a list: it
 answers the question somebody at the counter actually has, where the caller
@@ -544,6 +621,60 @@ and the conversion between them is arithmetic on a quantity — done in integer
 thousandths, because `12.3 - 4.1` is not `8.2` in a float and `decimal:0,3`
 refuses what comes out. Two copies would be two places the sign, `post: true` and
 the `client_ref` are decided, and the sign is the whole meaning of the document.
+
+**A bill line may take several things off the shelf, and that used to be
+impossible.** A rewinding shop sells *winding* — one line, one price per rating —
+and producing it consumes copper, varnish, sleeve and sheet. The catalogue could
+not say so: an item either held stock or held none, and a service that held none
+issued nothing. So the wire was bought, never taken out, and the shelf, the
+Inventory account, cost of goods sold and the margin on the workshop's main trade
+all moved wrong together, in the same direction, with nothing on any screen
+saying so.
+
+`item_components` is what a made thing consumes, hung off the **variant** because
+a 5 HP rewind and a 10 HP rewind are the same service and different amounts of
+copper. Only something that holds no stock of its own may have one: a recipe on a
+stocked parent leaves no good answer to whether billing it issues the parent or
+the parts, and every answer to that is a *kit*, which needs an assembly document
+to put the kit on the shelf — a different feature, deliberately not half-built.
+One level only, and the nesting guard is reachable rather than dead: a product in
+a stock-holding category with `is_stock` off can be given a recipe and have
+`is_stock` turned on afterwards.
+
+**Nothing posted ever reads a recipe again.** It is expanded once, at posting,
+into ordinary `stock_movements` written by the posting engine — same valuation,
+same lock, same table (§4.3) — and those movements *are* the record from then on.
+A reversal mirrors them, a margin sums them, a stock card lists them. So editing a
+recipe next March cannot restate what a bill in September consumed, and there is
+deliberately **no copy of the recipe pinned to the bill line**; do not add one.
+
+**The assumption it broke is that a line has at most one movement**, and that was
+load-bearing in five places — `TransactionLine::stockMovement()` was a `hasOne`,
+`changesByLine()` kept one change per line number, `SaleTemplate::bodyLines()`
+posted one `Dr COGS / Cr Inventory` pair per line, `SalesInsights::lineQuery()`
+joined `stock_movements` raw, and `ReturnService` read a single movement to value
+a credit. Two of those fail silently and are worth knowing. `changesByLine()`
+**overwrote**, so a rewind's ledger pair was derived from the last material alone
+— caught only because `MovesStock` makes the engine compare what the template
+posted against what the movements say, which is the whole reason that assertion
+exists. And `lineQuery()` fans out: five Insights panels sum
+`transaction_lines.taxable_value` across that join, so one line with three
+movements would have counted its **revenue three times**, in every panel at once,
+with every figure still plausible. It joins a derived table of one row per line
+now. Do not put a raw join back.
+
+**A credit note is refused on a made line** (`RETURN_LINE_WAS_MADE_FROM_MATERIALS`)
+rather than approximated: a credit row names one item, one variant and one
+`stock_value`, and there is no honest way to put three materials back through it.
+Reversing is exact and is the answer — and it is the right one for the trade,
+because nobody returns half a winding. A component issue obeys the ordinary
+negative-stock refusal, and the bill preview expands the same recipes through the
+same service so it cannot promise what the post would refuse; the shortfall names
+the **material**, which is the only thing with a shelf to be short of.
+
+The customer sees none of it. `InvoiceDocumentService` builds their copy from its
+own list of fields and has no branch that could reach a component, exactly as it
+has none that could reach a cost. See [recipes.md](docs/recipes.md).
 
 **The catalogue's vocabulary is data, not code.** There is no `ItemType` enum and
 no `UnitOfMeasure` enum. What kinds of product exist, what each one records, whose

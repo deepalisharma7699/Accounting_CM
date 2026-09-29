@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * The specific thing that is bought and sold: this motor, at this rating, at this
@@ -116,6 +117,20 @@ class ItemVariant extends Model
     public function item(): BelongsTo
     {
         return $this->belongsTo(Item::class);
+    }
+
+    /**
+     * What one of this consumes, where it is something the workshop makes.
+     *
+     * Empty for almost everything: a recipe belongs to a rewind or a service,
+     * not to a bearing. See {@see ItemComponent}, and note that nothing posted
+     * ever reads it — a bill expands it once and keeps the movements.
+     *
+     * @return HasMany<ItemComponent, $this>
+     */
+    public function components(): HasMany
+    {
+        return $this->hasMany(ItemComponent::class, 'parent_variant_id');
     }
 
     /* ---------------------------------------------------------------------

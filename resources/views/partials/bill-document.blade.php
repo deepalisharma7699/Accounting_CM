@@ -115,7 +115,7 @@
                                aria-label="Discount on the whole bill, in rupees">
 
                         <button type="button" data-bill-discount-mode
-                                class="h-[2.625rem] w-9 shrink-0 rounded-[10px] border border-border bg-card
+                                class="h-[var(--control-h)] w-9 shrink-0 rounded-[10px] border border-border bg-card
                                        text-sm font-semibold text-muted-foreground
                                        hover:bg-secondary hover:text-foreground"
                                 aria-label="Bill discount is in rupees — switch to a percentage">&#8377;</button>

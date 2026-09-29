@@ -123,7 +123,11 @@ class EloquentItemRepository implements ItemRepositoryInterface
                             // name, which is the one thing nobody remembers.
                             ->orWhereHas('variants', fn ($variants) => $variants
                                 ->where('sku', 'like', $term)
-                                ->orWhere('label', 'like', $term)));
+                                ->orWhere('label', 'like', $term)
+                                // The attribute bag, where a variant's
+                                // specification actually lives — see
+                                // {@see \App\Support\SearchTerms}.
+                                ->orWhereRaw(SearchTerms::ATTRIBUTE_VALUE_MATCH, [$term])));
                     }
                 })
             )

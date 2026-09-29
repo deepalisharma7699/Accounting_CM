@@ -54,6 +54,7 @@ class ItemVariantService
         private readonly ItemVariantRepositoryInterface $variants,
         private readonly StockLedgerService $stock,
         private readonly TransactionLineRepositoryInterface $documentLines,
+        private readonly ItemComponentService $recipes,
     ) {}
 
     /* ---------------------------------------------------------------------
@@ -65,7 +66,10 @@ class ItemVariantService
      */
     public function forItem(Item $item, bool $activeOnly = false): Collection
     {
-        return $this->variants->forItem($item, $activeOnly);
+        // Recipes come with them, where the installation has them at all — the
+        // Items drawer shows what a made thing consumes beside its price, and a
+        // request per variant to find out would be N+1 on the list (§7.2).
+        return $this->recipes->attachTo($this->variants->forItem($item, $activeOnly));
     }
 
     public function find(int $id): ItemVariant
@@ -139,6 +143,16 @@ class ItemVariantService
         // Loaded so displayLabel() and the resource can reach the type. A variant
         // means almost nothing without its family.
         $variant->setRelation('item', $item);
+
+        // The recipe arrives with the variant rather than through a second call,
+        // so one save writes the whole thing and a failure leaves neither half
+        // (§7.5). `sync()` makes every refusal, including the one that matters
+        // most here — a recipe on something that is itself counted on a shelf.
+        if (array_key_exists('components', $data)) {
+            $this->recipes->sync($variant, (array) $data['components']);
+        }
+
+        $this->recipes->attachTo($variant);
 
         Log::info('item_variants.created', ['variant_id' => $variant->id, 'item_id' => $item->id]);
 
@@ -222,6 +236,20 @@ class ItemVariantService
                 $fields[$flag] = (bool) $data[$flag];
             }
         }
+
+        // Before the early return below, and that placement is the whole of it:
+        // a request that edits *only* the recipe changes no column, so a sync
+        // after that return would silently discard it.
+        if (array_key_exists('components', $data)) {
+            $this->recipes->sync($variant, (array) $data['components']);
+
+            // Re-read rather than trust what was sent: `sync()` replaces the
+            // whole set, so the rows the caller gets back are the rows that now
+            // exist, ids and all.
+            $variant->unsetRelation('components');
+        }
+
+        $this->recipes->attachTo($variant);
 
         if ($fields === []) {
             return $variant;

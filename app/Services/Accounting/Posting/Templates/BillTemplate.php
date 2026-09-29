@@ -27,6 +27,7 @@ use App\Services\Accounting\Posting\StockChange;
 use App\Services\Accounting\Tax\GstBreakdown;
 use App\Services\Accounting\Tax\GstRate;
 use App\Services\Accounting\Tax\PlaceOfSupply;
+use App\Services\Inventory\ItemComponentService;
 use App\Services\Inventory\StockLedgerService;
 use App\Support\Money;
 use App\Support\Quantity;
@@ -107,6 +108,7 @@ abstract class BillTemplate implements CarriesDocumentLines, MovesStock, Posting
         protected readonly PartyRepositoryInterface $parties,
         protected readonly TenantRepositoryInterface $tenants,
         protected readonly TenantContext $context,
+        protected readonly ItemComponentService $components,
     ) {}
 
     /* ---------------------------------------------------------------------
@@ -169,7 +171,9 @@ abstract class BillTemplate implements CarriesDocumentLines, MovesStock, Posting
      * to describe.
      *
      * @param  array<int, BillLine>  $lines
-     * @param  array<int, StockChange>  $changes  Keyed by line number.
+     * @param  array<int, array<int, StockChange>>  $changes  Grouped by line number: a
+     *                                                       line supplying something made
+     *                                                       carries one per material.
      * @return array<int, PostingLine>
      */
     abstract protected function bodyLines(array $lines, array $changes): array;
@@ -581,22 +585,48 @@ abstract class BillTemplate implements CarriesDocumentLines, MovesStock, Posting
         $changes = [];
 
         foreach ($this->documentLinesFrom($input) as $line) {
-            if (! $line->movesStock || $line->variant === null) {
+            if ($line->variant === null) {
                 continue;
             }
 
-            $changes[] = $this->stockChangeFor($line)->withLineNo($line->lineNo);
+            if ($line->movesStock) {
+                $changes[] = $this->stockChangeFor($line)->withLineNo($line->lineNo);
+
+                continue;
+            }
+
+            /*
+            | A line that supplies something the workshop *makes* rather than
+            | holds: it has no shelf of its own, so it takes nothing off one —
+            | and it consumes whatever its recipe says, one issue per material.
+            |
+            | Every one of them carries this line's number, so all of them point
+            | at the line that caused them and a margin is the sum. See
+            | `TransactionLine::stockMovements()`, which is plural for this.
+            */
+            foreach ($this->recipeChangesFor($line) as $change) {
+                $changes[] = $change->withLineNo($line->lineNo);
+            }
         }
 
         return $this->stockChanges = $changes;
     }
 
     /**
-     * The same changes, keyed by the line that produced them — what
+     * The same changes, grouped by the line that produced them — what
      * {@see bodyLines()} needs to put a cost against a description.
      *
+     * **A list per line, not one change per line.** It was the latter, and a
+     * line supplying something *made* breaks it: a rewind issues copper,
+     * varnish and sleeve against one line number, and the second assignment
+     * overwrote the first — so `build()` derived its Inventory and COGS lines
+     * from the last material alone while the movements carried all three. The
+     * engine refuses that (`MovesStock` makes it compare the two), which is why
+     * it surfaced as a refusal to post rather than as books that were quietly
+     * short by the value of the copper.
+     *
      * @param  array<string, mixed>  $input
-     * @return array<int, StockChange>
+     * @return array<int, array<int, StockChange>>
      */
     private function changesByLine(array $input): array
     {
@@ -604,7 +634,7 @@ abstract class BillTemplate implements CarriesDocumentLines, MovesStock, Posting
 
         foreach ($this->stockChangesFrom($input) as $change) {
             if ($change->lineNo !== null) {
-                $keyed[$change->lineNo] = $change;
+                $keyed[$change->lineNo][] = $change;
             }
         }
 
@@ -615,6 +645,27 @@ abstract class BillTemplate implements CarriesDocumentLines, MovesStock, Posting
      * The quantity one line moves, and what it is worth.
      */
     abstract protected function stockChangeFor(BillLine $line): StockChange;
+
+    /**
+     * The materials a line consumes, where it supplies something made.
+     *
+     * **None, on this side of the family.** A recipe describes what producing
+     * something costs the shelf, and only an outward document produces
+     * anything: buying a service from a subcontractor consumes none of this
+     * workshop's copper, and a purchase that quietly issued stock would take
+     * material off the shelf for a document that put none on it.
+     *
+     * {@see SaleTemplate} overrides it. Left as an answer rather than a branch
+     * on direction inside the loop above, because the loop is shared by four
+     * templates and a condition there is a condition every one of them has to
+     * be read against.
+     *
+     * @return array<int, StockChange>
+     */
+    protected function recipeChangesFor(BillLine $line): array
+    {
+        return [];
+    }
 
     /* ---------------------------------------------------------------------
      | Tax

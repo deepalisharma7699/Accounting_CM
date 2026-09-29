@@ -36,6 +36,7 @@
  * the moment of the write. See `data-bus.js`.
  */
 
+import { enhanceSelects } from './components/searchable-select';
 import { track } from './loader';
 import { applyPermissionGates, can, hasWorkspace } from './permissions';
 import { $, $$, esc, toast } from './ui';
@@ -330,6 +331,11 @@ async function mount(key) {
     // Before the markup is on screen, so nothing a user may not see is ever
     // painted — even for the frame it would take to strip it afterwards.
     applyPermissionGates(root);
+
+    // Same reason, one control along: the document-wide watch in
+    // components/searchable-select.js would catch this root the moment it is
+    // attached, which is one frame of native dropdowns too late.
+    enhanceSelects(root);
 
     mounted.set(key, root);
     host.replaceChildren(root);

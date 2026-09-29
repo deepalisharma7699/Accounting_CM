@@ -96,7 +96,7 @@
 
                 {{-- Filled from GET /api/v1/staff/meta. Never listed here. --}}
                 <label for="staff-filter-designation" class="sr-only">Filter by designation</label>
-                <select id="staff-filter-designation" class="field-input h-[2.375rem] w-auto min-w-40 py-0">
+                <select id="staff-filter-designation" class="field-input w-auto min-w-40 py-0">
                     <option value="">Any designation</option>
                 </select>
 
@@ -475,7 +475,7 @@
                 </div>
 
                 <form id="advance-form" novalidate>
-                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <div class="form-grid">
                         <div>
                             <label for="advance-employee" class="field-label">Who <span class="req">*</span></label>
                             <select id="advance-employee" name="employee_id" class="field-input" required>
@@ -530,7 +530,7 @@
             <header class="mb-5 flex flex-wrap items-end gap-2">
                 <div>
                     <label for="advances-filter-employee" class="sr-only">Filter by person</label>
-                    <select id="advances-filter-employee" class="field-input h-[2.375rem] w-auto min-w-48 py-0">
+                    <select id="advances-filter-employee" class="field-input w-auto min-w-48 py-0">
                         <option value="">Everybody</option>
                     </select>
                 </div>
@@ -780,7 +780,7 @@
             </div>
 
             <div class="space-y-4" data-form-body>
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div class="form-grid">
                     <div>
                         <label for="employee-name" class="field-label">Name <span class="req">*</span></label>
                         <input id="employee-name" name="name" type="text" class="field-input" required
@@ -803,9 +803,7 @@
                         </div>
                         <p class="field-error hidden" data-error-for="designation_id"></p>
                     </div>
-                </div>
-
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                
                     <div>
                         <label for="employee-basis" class="field-label">Paid <span class="req">*</span></label>
                         <select id="employee-basis" name="salary_basis" class="field-input" required></select>
@@ -821,9 +819,7 @@
                                min="0" step="0.01" inputmode="decimal" placeholder="0.00">
                         <p class="field-error hidden" data-error-for="pay_rate"></p>
                     </div>
-                </div>
-
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                
                     <div>
                         <label for="employee-joined" class="field-label">Joined</label>
                         <input id="employee-joined" name="joined_on" type="date" class="field-input">
@@ -841,9 +837,7 @@
                         </p>
                         <p class="field-error hidden" data-error-for="left_on"></p>
                     </div>
-                </div>
-
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                
                     <div>
                         <label for="employee-phone" class="field-label">Phone</label>
                         <input id="employee-phone" name="phone" type="tel" class="field-input"

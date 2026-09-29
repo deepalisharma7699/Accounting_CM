@@ -73,7 +73,7 @@
              without a filter they could not populate. --}}
         <div data-requires-permission="READ:ROLES">
             <label for="filter-role" class="sr-only">Filter by role</label>
-            <select id="filter-role" class="field-input h-[2.375rem] w-auto min-w-44 py-0">
+            <select id="filter-role" class="field-input w-auto min-w-44 py-0">
                 <option value="">Any role</option>
             </select>
         </div>
@@ -271,7 +271,7 @@
             </div>
 
             <div class="space-y-4" data-form-body>
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div class="form-grid">
                     <div>
                         <label for="user-name" class="field-label">Full name <span class="req">*</span></label>
                         <input id="user-name" name="name" type="text" class="field-input" required
@@ -296,7 +296,7 @@
                     <p class="field-error hidden" data-error-for="password"></p>
                 </div>
 
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div class="form-grid">
                     <div>
                         <label for="user-status" class="field-label">Status</label>
                         <select id="user-status" name="status" class="field-input">

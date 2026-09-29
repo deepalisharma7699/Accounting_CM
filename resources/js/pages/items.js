@@ -3,6 +3,7 @@ import {
     collectAttributes, defaultsFor, describeAttributes, renderAttributeFields,
 } from '../components/attribute-fields';
 import { formatQuantity } from '../components/badge';
+import { mountItemPicker } from '../components/item-picker';
 import {
     averageCostOf, positionStatus, rollUpPositions, statusOfRow, stockStatusBadge,
 } from '../components/stock-position';
@@ -1555,11 +1556,26 @@ function applyTypeToForm({ editing }) {
  * choice: an opening quantity of labour would be inventing an asset, and
  * offering the box teaches somebody it is possible.
  */
+/**
+ * Whether the product being edited is counted on a shelf of its own.
+ *
+ * The item's own switch *and* the category's capability, which is
+ * `Item::tracksStock()` on the server — one answer, because the stock boxes and
+ * the recipe section are the two sides of the same question and a screen showing
+ * both, or neither, would be asking somebody to resolve it.
+ */
+function formTracksStock() {
+    const category = typeMeta($('#item-type', itemForm).value);
+    const canHoldStock = category ? category.can_hold_stock !== false : true;
+
+    return Boolean($('#item-stock', itemForm)?.checked) && canHoldStock;
+}
+
 function applyStockFieldsState() {
     const form = itemForm;
     const category = typeMeta($('#item-type', form).value);
     const canHoldStock = category ? category.can_hold_stock !== false : true;
-    const on = Boolean($('#item-stock', form)?.checked) && canHoldStock;
+    const on = formTracksStock();
 
     $$('[data-variant-stock]', form).forEach((fields) => {
         fields.classList.toggle('hidden', !canHoldStock);
@@ -1708,6 +1724,215 @@ function paintVariantSpecification(block, index) {
  * specification has failed to say what it is, and a markup suggests a price
  * against an average that nothing has moved yet.
  */
+/* -------------------------------------------------------------------------
+ | The recipe — what a made thing consumes
+ | ---------------------------------------------------------------------- */
+
+/**
+ * The rows live on the node, exactly as the bound variant record does.
+ *
+ * A block is cloned in and thrown away, and a list keyed by index beside it
+ * would be a second place the binding is decided — wrong from the first removal,
+ * which is the reasoning `block.variantRecord` already records.
+ */
+function recipeRowsOf(block) {
+    if (!Array.isArray(block.recipeRows)) block.recipeRows = [];
+
+    return block.recipeRows;
+}
+
+/** What one material's row knows, from either of the two places it can arrive. */
+function recipeRowFrom(component) {
+    return {
+        variant_id: Number(component.component_variant_id),
+        item_id: component.component_item_id ?? null,
+        label: component.item_name && component.label && component.item_name !== component.label
+            ? `${component.item_name} · ${component.label}`
+            : (component.label ?? component.item_name ?? `#${component.component_variant_id}`),
+        unit_symbol: component.unit_symbol ?? '',
+        quantity: component.quantity ?? '',
+    };
+}
+
+/**
+ * Paint the whole section: whether it is offered at all, its rows, and the
+ * estimate under them.
+ *
+ * Offered only for a product that holds no stock of its own — the other half of
+ * `applyStockFieldsState()`, from the opposite side of one question.
+ */
+function paintVariantRecipe(block) {
+    const section = $('[data-variant-recipe]', block);
+
+    if (!section) return;
+
+    const offered = !formTracksStock();
+
+    section.classList.toggle('hidden', !offered);
+
+    if (!offered) return;
+
+    const rows = recipeRowsOf(block);
+    const host = $('[data-recipe-rows]', block);
+
+    host.innerHTML = rows.map((row, index) => `
+        <div class="flex flex-wrap items-center gap-2" data-recipe-row data-index="${index}">
+            <span class="min-w-0 flex-1 truncate text-[0.8125rem] text-foreground">${esc(row.label)}</span>
+            <div class="relative w-32">
+                <input type="text" inputmode="decimal" value="${esc(String(row.quantity ?? ''))}"
+                       class="field-input pr-12 text-right font-mono" data-recipe-qty aria-label="Quantity">
+                <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">${esc(row.unit_symbol)}</span>
+            </div>
+            <button type="button" class="btn btn-ghost btn-sm text-rose-600" data-recipe-remove
+                    aria-label="Remove ${esc(row.label)}">
+                ${iconTrash}
+            </button>
+        </div>
+    `).join('');
+
+    $('[data-recipe-empty]', block).classList.toggle('hidden', rows.length > 0);
+
+    paintRecipeCost(block);
+}
+
+/**
+ * "Materials ≈ ₹1,915 at today's cost", from the positions the screen already
+ * holds.
+ *
+ * No request and no second arithmetic: `loadStock()` has every variant's
+ * weighted average, and the multiplication is the one `Quantity::costAt()`
+ * performs on the server for the figure that actually gets posted. This is an
+ * estimate and says so — what a bill is charged is the average at the moment it
+ * posts, and a rate set against a fortnight-old copper price is exactly what the
+ * line is here to prevent.
+ */
+function paintRecipeCost(block) {
+    const slot = $('[data-recipe-cost]', block);
+    const rows = recipeRowsOf(block);
+
+    // Nothing to say with no rows, and nothing honest to say when the reader
+    // cannot see stock at all — a figure derived from positions they are not
+    // shown would be a cost leaking past the permission that withholds it.
+    if (rows.length === 0 || !state.canStock) {
+        slot.classList.add('hidden');
+
+        return;
+    }
+
+    let total = 0;
+    let unpriced = 0;
+
+    rows.forEach((row) => {
+        const position = positionFor(row.item_id, row.variant_id);
+        const cost = Number(position?.average_cost ?? 0);
+        const quantity = Number(row.quantity ?? 0);
+
+        if (!position || !(cost > 0)) unpriced += 1;
+
+        total += cost * (Number.isFinite(quantity) ? quantity : 0);
+    });
+
+    slot.classList.remove('hidden');
+    slot.textContent = unpriced > 0
+        ? `Materials ≈ ${formatMoney(total)} at today's cost — ${unpriced} of them has no cost on the shelf yet.`
+        : `Materials ≈ ${formatMoney(total)} at today's cost.`;
+}
+
+/**
+ * The material search, shown only while adding one.
+ *
+ * `mountItemPicker` is the bill counter's own, so the badge beside each result
+ * is the live position and there is no second way to search the catalogue
+ * (§5.1). What it will not accept is a service: a recipe consumes something that
+ * is counted, and a row naming labour would take nothing off anything while
+ * looking on screen as though it did.
+ */
+function openRecipePicker(block) {
+    const host = $('[data-recipe-picker]', block);
+
+    host.classList.remove('hidden');
+
+    const picker = mountItemPicker(host, {
+        hint: 'Materials only — something counted on a shelf.',
+        onPick: (choice) => {
+            host.classList.add('hidden');
+            host.innerHTML = '';
+
+            if (choice.kind !== 'stock') {
+                toast('A recipe consumes something that is counted on a shelf. That one holds no stock.', 'warning');
+
+                return;
+            }
+
+            const rows = recipeRowsOf(block);
+
+            if (rows.some((row) => row.variant_id === Number(choice.variant_id))) {
+                toast('That material is already on this recipe — change its quantity instead.', 'warning');
+
+                return;
+            }
+
+            rows.push({
+                variant_id: Number(choice.variant_id),
+                item_id: choice.item_id ?? null,
+                label: choice.label,
+                unit_symbol: choice.unit_symbol ?? '',
+                quantity: '',
+            });
+
+            paintVariantRecipe(block);
+
+            // Straight to the box they have to fill in, which is the only thing
+            // left to say about the row they just chose.
+            $$('[data-recipe-row]', block).at(-1)?.querySelector('[data-recipe-qty]')?.focus();
+        },
+    });
+
+    picker.focus();
+}
+
+/**
+ * The section's own events, bound once per block.
+ *
+ * Delegated from the section rather than per row, because the rows are rebuilt
+ * on every paint and handlers attached to them would be rebound each time —
+ * which is how a remove button ends up firing twice.
+ */
+function bindVariantRecipe(block) {
+    const section = $('[data-variant-recipe]', block);
+
+    if (!section || section.dataset.bound === '1') return;
+
+    section.dataset.bound = '1';
+
+    $('[data-recipe-add]', section).addEventListener('click', () => openRecipePicker(block));
+
+    section.addEventListener('click', (event) => {
+        const remove = event.target.closest('[data-recipe-remove]');
+
+        if (!remove) return;
+
+        const index = Number(remove.closest('[data-recipe-row]').dataset.index);
+
+        recipeRowsOf(block).splice(index, 1);
+        paintVariantRecipe(block);
+    });
+
+    section.addEventListener('input', (event) => {
+        const box = event.target.closest('[data-recipe-qty]');
+
+        if (!box) return;
+
+        const index = Number(box.closest('[data-recipe-row]').dataset.index);
+
+        recipeRowsOf(block)[index].quantity = box.value;
+
+        // The rows are not repainted — that would take the caret out of the box
+        // being typed in. Only the figure under them moves.
+        paintRecipeCost(block);
+    });
+}
+
 function paintVariantBlockMode(block) {
     const variant = block.variantRecord;
 
@@ -1725,6 +1950,9 @@ function paintVariantBlockMode(block) {
     slot.classList.toggle('hidden', position === null);
 
     if (position) slot.textContent = describePosition(position, state.formItem);
+
+    bindVariantRecipe(block);
+    paintVariantRecipe(block);
 }
 
 /**
@@ -1765,6 +1993,11 @@ function addVariantBlock({ variant = null, focus = false } = {}) {
 
     block.variantRecord = variant;
     block.dataset.variantId = variant ? String(variant.id) : '';
+
+    // The recipe as the server last sent it. Absent rather than empty where the
+    // installation has no recipes at all (§4.6), which is the same thing as
+    // "this product consumes nothing" as far as this screen is concerned.
+    block.recipeRows = (variant?.components ?? []).map(recipeRowFrom);
 
     if (variant) {
         const fill = (field, value) => {
@@ -2221,14 +2454,32 @@ function variantPayload(block, { creating = false } = {}) {
         min_stock: field('min_stock'),
     };
 
-    return creating
-        ? {
+    if (creating) {
+        return {
             ...payload,
             variant_label: field('label'),
             opening_stock: field('opening_stock'),
             opening_cost: field('opening_cost'),
-        }
-        : { ...payload, label: field('label') };
+        };
+    }
+
+    const edit = { ...payload, label: field('label') };
+
+    /*
+    | Sent only where the section was actually offered, and that is the whole of
+    | the rule. `sync()` on the server *replaces* whatever it is given, so
+    | sending `[]` for a product whose recipe this screen never showed — one that
+    | holds stock of its own, or a server that has not run the schema step — would
+    | silently clear something the operator was never looking at.
+    */
+    if (!$('[data-variant-recipe]', block)?.classList.contains('hidden')) {
+        edit.components = recipeRowsOf(block).map((row) => ({
+            component_variant_id: row.variant_id,
+            quantity: row.quantity,
+        }));
+    }
+
+    return edit;
 }
 
 /**

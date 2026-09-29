@@ -47,14 +47,14 @@
 
         <form id="expense-form" novalidate class="space-y-4">
 
-            <section class="surface p-5 sm:p-6">
+            <section class="surface form-card">
                 <h3 class="text-sm font-bold text-foreground">What was spent</h3>
                 <p class="mt-1 text-[0.8125rem] text-muted-foreground">
                     Rent, electricity, a courier, the tea. Anything bought to sell or to fit is a purchase,
                     and belongs on the Purchase card — that is the line a P&amp;L needs kept.
                 </p>
 
-                <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                <div class="mt-4 form-grid">
                     <div>
                         <label for="expense-date" class="field-label">Date</label>
                         <input id="expense-date" name="date" type="date" class="field-input" required>
@@ -76,9 +76,7 @@
                         </p>
                         <p class="field-error hidden" data-error-for="account_id"></p>
                     </div>
-                </div>
-
-                <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                
                     <div>
                         <label for="expense-amount" class="field-label">Amount before tax</label>
                         <input id="expense-amount" name="amount" type="text" inputmode="decimal"

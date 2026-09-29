@@ -514,6 +514,51 @@ export async function mountBillDocument(root, {
         }
     }
 
+    /**
+     * What each line will take off the shelf, under the line.
+     *
+     * A rewind is one line at one price and several quantities of stock, and
+     * this is the only place anybody sees which — the customer's invoice shows
+     * the service and nothing else, deliberately, and after posting the only
+     * evidence is a shortage at a stock take months later. The operator who
+     * priced the job is the one person who would notice the recipe is wrong.
+     *
+     * Painted in place from the preview, for the reason {@link paintLineStock}
+     * is: re-rendering the table would take the caret out of the box being
+     * typed in, and this arrives on a debounce while somebody is typing.
+     *
+     * Empty for every ordinary line, which is almost all of them — a stocked
+     * line already says what it takes, beside the quantity.
+     */
+    function paintConsumption() {
+        const priced = new Map(
+            (state.preview?.lines ?? []).map((row) => [Number(row.line_no), row.consumes ?? []]),
+        );
+
+        // Keyed by position among the lines that were *sent*, which is how the
+        // server numbered them — not by position in the table, which counts the
+        // half-typed rows the request left out.
+        const sent = sendableLines();
+        const lineNoOf = new Map(sent.map((line, index) => [line.id, index + 1]));
+
+        state.lines.forEach((line) => {
+            // Scoped to `root`: on a module showing its list the form is
+            // detached (§2A.2), and the figures still have to be right for when
+            // it comes back.
+            const row = $(`[data-line="${line.id}"]`, root);
+            const slot = row ? $('[data-line-consumes]', row) : null;
+
+            if (!slot) return;
+
+            const consumes = priced.get(lineNoOf.get(line.id)) ?? [];
+
+            slot.classList.toggle('hidden', consumes.length === 0);
+            slot.textContent = consumes.length === 0
+                ? ''
+                : `Consumes ${consumes.map((part) => `${part.quantity} ${part.unit_symbol} ${part.item_name ?? part.label}`).join(' · ')}`;
+        });
+    }
+
     function paintLineProblem(row, problem) {
         const input = $('input[name="quantity"]', row);
         const note = $('[data-line-problem]', row);
@@ -588,6 +633,8 @@ export async function mountBillDocument(root, {
                         </span>
                         <span class="mt-1 block text-xs font-medium text-rose-600 ${isShort(line) ? '' : 'hidden'}"
                               data-line-short>${shortText(line)}</span>
+                        
+                        <span class="mt-1 block text-xs text-muted-foreground hidden" data-line-consumes></span>
                     </td>
 
                     <td class="px-2 py-2">
@@ -610,7 +657,7 @@ export async function mountBillDocument(root, {
                                    name="unit_price" value="${esc(line.unit_price)}" placeholder="0.00"
                                    aria-label="Rate for ${esc(line.label)}">
                             <button type="button" data-tax-mode
-                                    class="h-[2.625rem] w-12 shrink-0 rounded-[10px] border text-[11px] font-semibold
+                                    class="h-[var(--control-h)] w-12 shrink-0 rounded-[10px] border text-[11px] font-semibold
                                            ${line.price_includes_tax
                                                ? 'border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100'
                                                : 'border-border bg-card text-muted-foreground hover:bg-secondary hover:text-foreground'}"
@@ -631,7 +678,7 @@ export async function mountBillDocument(root, {
                                        line.discount_mode === 'percent' ? ', as a percentage' : ', in rupees'
                                    }">
                             <button type="button" data-discount-mode
-                                    class="h-[2.625rem] w-9 shrink-0 rounded-[10px] border border-border bg-card
+                                    class="h-[var(--control-h)] w-9 shrink-0 rounded-[10px] border border-border bg-card
                                            text-sm font-semibold text-muted-foreground
                                            hover:bg-secondary hover:text-foreground"
                                     aria-label="${line.discount_mode === 'percent'
@@ -657,6 +704,11 @@ export async function mountBillDocument(root, {
             : `<tr><td colspan="6" class="px-2 py-8 text-center text-sm text-muted-foreground">
                    Nothing on this bill yet. Search above — every result shows what is on the shelf.
                </td></tr>`;
+
+        // Put back what the last preview already knew, so a row rebuilt for an
+        // unrelated reason does not blank its materials for the length of a
+        // debounce and then blink them back.
+        paintConsumption();
 
         refreshPreview();
         save();
@@ -723,6 +775,22 @@ export async function mountBillDocument(root, {
      | The running total — the server's arithmetic, not ours
      | ------------------------------------------------------------------ */
 
+    /**
+     * The lines the preview and the post are actually given, in order.
+     *
+     * Extracted because the answer is needed **twice** and the two must agree:
+     * `itemsPayload()` builds the request from it, and {@link paintConsumption}
+     * pairs the priced rows back onto the table by position. The server numbers
+     * its lines 1..n over what it was sent, so a second, slightly different
+     * filter here would put one line's materials under another line — silently,
+     * and only on documents where something was mid-typing.
+     */
+    function sendableLines() {
+        return state.lines.filter(
+            (line) => String(line.quantity ?? '').trim() !== '' && lineProblem(line) === null,
+        );
+    }
+
     function itemsPayload() {
         /*
         | A line still being typed into is skipped; a line that is *wrong* is
@@ -732,8 +800,7 @@ export async function mountBillDocument(root, {
         | now holds those back before the request is built and says why on the
         | row, so this only ever sends lines the server can price.
         */
-        return state.lines
-            .filter((line) => String(line.quantity ?? '').trim() !== '' && lineProblem(line) === null)
+        return sendableLines()
             .map((line) => ({
                 item_id: line.item_id,
                 variant_id: line.variant_id,
@@ -866,6 +933,8 @@ export async function mountBillDocument(root, {
 
             state.previewError = null;
             state.preview = data;
+
+            paintConsumption();
         } catch (error) {
             /*
             | A failed preview must not block the bill — the server prices it

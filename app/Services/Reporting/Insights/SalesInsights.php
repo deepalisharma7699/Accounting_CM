@@ -10,6 +10,7 @@ use App\Services\Reporting\ReportPeriod;
 use App\Support\Money;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 /**
  * What the workshop sold, and what it kept — M23.
@@ -579,15 +580,37 @@ class SalesInsights
      * of a figure the stock ledger already owns (§4.3, §4.4). It is a LEFT join
      * because a labour line has no movement.
      *
+     * It joins a **derived table of one row per line**, not the movements
+     * themselves, and that is the whole reason this method exists rather than
+     * the join being written out at each of the six call sites. Every panel
+     * below sums `transaction_lines.taxable_value` across this join, so a line
+     * matching *two* movement rows would have its revenue counted twice — in the
+     * overview, the trend, the stock/labour mix, the per-party list and the
+     * per-item list at once, with every figure still entirely plausible. That is
+     * not hypothetical: a line supplying something *made* out of stock issues one
+     * movement per material (see `TransactionLine::stockMovements()`), so the
+     * fan-out is the ordinary case for a rewind, not an edge one.
+     *
+     * The derived table is aliased `stock_movements` so the columns the callers
+     * already name keep working. `sum(value)` rather than `sum(abs(value))`
+     * because a line either issues or receives, never both, so the sign is
+     * uniform within a line and the callers' own `abs()` still gives the
+     * magnitude. `min(id)` carries presence, which is all any caller asks of it.
+     *
      * @return Builder<TransactionLine>
      */
     private function lineQuery(ReportPeriod $period, string $direction): Builder
     {
         [$document, $return] = self::documentsFor($direction);
 
+        $costs = DB::table('stock_movements')
+            ->selectRaw('transaction_line_id, min(id) as id, sum(value) as value')
+            ->whereNotNull('transaction_line_id')
+            ->groupBy('transaction_line_id');
+
         return TransactionLine::query()
             ->join('transactions', 'transactions.id', '=', 'transaction_lines.transaction_id')
-            ->leftJoin('stock_movements', 'stock_movements.transaction_line_id', '=', 'transaction_lines.id')
+            ->leftJoinSub($costs, 'stock_movements', 'stock_movements.transaction_line_id', '=', 'transaction_lines.id')
             /*
             | Only what still stands: posted, and not one half of a reversal
             | pair.

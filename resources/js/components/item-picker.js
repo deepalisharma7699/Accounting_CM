@@ -138,7 +138,14 @@ export async function searchCatalogue(term) {
 
     const [stock, services, bare] = await Promise.allSettled([
         can('READ', 'STOCK')
-            ? auth.call(`/stock?per_page=12&is_active=1&search=${query}`, { quiet: true })
+            /*
+            | Twenty-five rather than twelve. The cap exists so a one-letter term
+            | does not tip the whole shelf into the panel, not to save work: the
+            | endpoint prices every match before it slices a page, so the rows
+            | beyond the cap have already been computed. Twelve cut a capacitor
+            | family of twenty in half on the way in.
+            */
+            ? auth.call(`/stock?per_page=25&is_active=1&search=${query}`, { quiet: true })
             : Promise.resolve({ data: [] }),
         /*
         | `is_stock=0`, not `type=service`.

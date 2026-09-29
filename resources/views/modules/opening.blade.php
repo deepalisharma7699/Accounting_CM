@@ -69,7 +69,7 @@
         </p>
 
         <form id="opening-form" class="mt-4 space-y-4" novalidate>
-            <div class="grid gap-4 sm:grid-cols-2">
+            <div class="form-grid">
                 <label class="block">
                     <span class="field-label">As at</span>
                     <input type="date" name="date" id="opening-date" class="field-input">

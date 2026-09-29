@@ -50,13 +50,13 @@
     <form id="workspace-form" novalidate class="space-y-4">
 
         {{-- Identity --}}
-        <section class="surface p-5 sm:p-6">
+        <section class="surface form-card">
             <h3 class="text-sm font-bold text-foreground">Identity</h3>
             <p class="mt-1 text-[0.8125rem] text-muted-foreground">
                 How the workshop appears on documents.
             </p>
 
-            <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div class="mt-4 form-grid">
                 <div>
                     <label for="ws-name" class="field-label">Workshop name</label>
                     <input id="ws-name" name="name" type="text" class="field-input" required autocomplete="organization">
@@ -65,15 +65,13 @@
 
                 <div>
                     <span class="field-label">Handle</span>
-                    <div class="flex h-[2.625rem] items-center rounded-[10px] border border-border bg-muted px-3
+                    <div class="flex h-[var(--control-h)] items-center rounded-[10px] border border-border bg-muted px-3
                                 font-mono text-[0.8125rem] text-muted-foreground">
                         <span data-ws-slug>—</span>
                     </div>
                     <p class="mt-1.5 text-xs text-muted-foreground">Fixed. Renaming leaves it unchanged.</p>
                 </div>
-            </div>
-
-            <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            
                 <div>
                     <label for="ws-gstin" class="field-label">GSTIN</label>
                     <input id="ws-gstin" name="gstin" type="text" maxlength="15"
@@ -101,13 +99,13 @@
         </section>
 
         {{-- Books --}}
-        <section class="surface p-5 sm:p-6">
+        <section class="surface form-card">
             <h3 class="text-sm font-bold text-foreground">Books</h3>
             <p class="mt-1 text-[0.8125rem] text-muted-foreground">
                 These decide which period a report covers and how far back entries may be dated.
             </p>
 
-            <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div class="mt-4 form-grid">
                 <div>
                     <label for="ws-fy" class="field-label">Financial year starts in</label>
                     <select id="ws-fy" name="financial_year_start_month" class="field-input">
@@ -129,9 +127,7 @@
                     <p class="mt-1.5 text-xs text-muted-foreground">Used for transaction dates and the day book.</p>
                     <p class="field-error hidden" data-error-for="timezone"></p>
                 </div>
-            </div>
-
-            <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            
                 <div>
                     <label for="ws-books-start" class="field-label">Books start date</label>
                     <input id="ws-books-start" name="books_start_date" type="date" class="field-input">
@@ -144,7 +140,7 @@
 
                 <div>
                     <span class="field-label">Currency</span>
-                    <div class="flex h-[2.625rem] items-center rounded-[10px] border border-border bg-muted px-3
+                    <div class="flex h-[var(--control-h)] items-center rounded-[10px] border border-border bg-muted px-3
                                 text-[0.8125rem] text-muted-foreground">
                         <span data-ws-currency>INR</span>
                     </div>
@@ -160,7 +156,7 @@
              The three settings the API has always accepted and no screen had
              ever offered. Each changes what the application refuses or how it
              reports; none of them restates a figure that is already posted. --}}
-        <section class="surface p-5 sm:p-6">
+        <section class="surface form-card">
             <h3 class="text-sm font-bold text-foreground">Rules</h3>
             <p class="mt-1 text-[0.8125rem] text-muted-foreground">
                 What the application refuses, and what it reports. Changing one of these never restates

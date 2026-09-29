@@ -103,7 +103,7 @@
                         </div>
                     </header>
 
-                    <section class="surface p-5 sm:p-6">
+                    <section class="surface form-card">
                         {{-- Whose it is, and when it arrived: both are settled
                              when the job is opened, so neither travels into the
                              drawer with the rest of the fields. --}}
@@ -147,7 +147,7 @@
                          kind's own question set, published by
                          GET /workshop-jobs/meta and drawn by
                          components/attribute-fields.js. --}}
-                    <section class="surface p-5 sm:p-6">
+                    <section class="surface form-card">
                         <h3 class="text-sm font-bold text-foreground">
                             What came in <span class="font-normal text-muted-foreground">(whatever is known)</span>
                         </h3>
@@ -156,7 +156,7 @@
                             form asks what that kind is described by.
                         </p>
 
-                        <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                        <div class="mt-4 form-grid">
                             {{-- Written from the server's category list. Never a
                                  list of kinds in this template: a copy in the
                                  markup goes stale the moment an admin adds one,
@@ -214,10 +214,10 @@
                                 the plate says — nothing here is insisted on.
                             </p>
 
-                            <div class="mt-3 grid gap-4 sm:grid-cols-2" data-job-specs></div>
+                            <div class="mt-3 form-grid" data-job-specs></div>
                         </div>
 
-                        <div class="mt-5 grid gap-4 border-t border-border pt-5 sm:grid-cols-2">
+                        <div class="mt-5 form-grid border-t border-border pt-5">
                             <label class="field">
                                 <span class="field-label">
                                     Promised back <span class="font-normal text-muted-foreground">(optional)</span>

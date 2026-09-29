@@ -79,7 +79,7 @@
                  three permanent selects would crowd out the filters people
                  actually reach for. --}}
             <div class="relative">
-                <button type="button" id="filter-toggle" class="btn btn-secondary btn-sm h-[2.375rem]"
+                <button type="button" id="filter-toggle" class="btn btn-secondary btn-sm h-[var(--control-h)]"
                         aria-expanded="false" aria-haspopup="true">
                     <x-icon name="sliders-horizontal" :size="14" />
                     Filter
@@ -113,7 +113,7 @@
             </div>
 
             <div class="relative">
-                <button type="button" id="sort-toggle" class="btn btn-secondary btn-sm h-[2.375rem]"
+                <button type="button" id="sort-toggle" class="btn btn-secondary btn-sm h-[var(--control-h)]"
                         aria-expanded="false" aria-haspopup="true">
                     <x-icon name="arrow-up-down" :size="14" />
                     Sort
@@ -392,8 +392,8 @@
 
             <div class="space-y-6" data-form-body>
                 {{-- ── The product ─────────────────────────────────────────── --}}
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <div class="sm:col-span-2">
+                <div class="form-grid">
+                    <div class="span-all">
                         <label for="item-name" class="field-label">Product name</label>
                         <input id="item-name" name="name" type="text" class="field-input" required
                                autocomplete="off" placeholder="e.g. Crompton 3-Phase Induction Motor">
@@ -446,7 +446,7 @@
                      Everything here belongs to the *family*: one HSN code, one
                      rate, one unit, however many things are on the shelf under
                      it. What tells those apart is in the variants below. --}}
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div class="form-grid">
                     <div>
                         <label for="item-code" class="field-label">
                             Product code <span class="font-normal text-muted-foreground">(optional)</span>
@@ -502,7 +502,7 @@
                          invoice. A default for the bill line's toggle and never
                          more than that: the line carries its own copy, so
                          flipping this restates nothing already posted. --}}
-                    <div class="sm:col-span-2">
+                    <div class="span-all">
                         <div class="flex items-start gap-2.5">
                             <input id="item-price-incl" name="price_includes_tax" type="checkbox"
                                    class="mt-0.5 size-4 rounded border-border">
@@ -655,11 +655,11 @@
                                  Lumens box, with no change to this file. --}}
                             <div class="hidden" data-variant-attributes-section>
                                 <p class="field-label">Specification</p>
-                                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2" data-variant-attributes></div>
+                                <div class="form-grid" data-variant-attributes></div>
                                 <p class="field-error hidden" data-variant-error="attributes"></p>
                             </div>
 
-                            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                            <div class="form-grid">
                                 <div>
                                     <label class="field-label" data-variant-label="sku">
                                         SKU <span class="font-normal text-muted-foreground">(optional)</span>
@@ -757,7 +757,7 @@
                                  greyed while "Keep stock of this" is off — the
                                  checkbox above is what explains why they are
                                  inert, and a box that vanishes reads as a bug. --}}
-                            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2" data-variant-stock>
+                            <div class="form-grid" data-variant-stock>
                                 <div data-opening-field>
                                     <label class="field-label" data-variant-label="opening_stock">
                                         Opening stock <span class="font-normal text-muted-foreground">(optional)</span>
@@ -818,6 +818,64 @@
                                     <p class="mt-1.5 text-xs text-muted-foreground">Never let it fall below this.</p>
                                     <p class="field-error hidden" data-variant-error="min_stock"></p>
                                 </div>
+                            </div>
+
+                            {{-- What one of this consumes.
+
+                                 Shown only for a product the workshop *makes*
+                                 rather than holds — a rewind, a service — because
+                                 a thing that is itself counted on a shelf cannot
+                                 also be made from a recipe (there would be no
+                                 answer to whether billing it issues the parent or
+                                 its parts). `data-variant-recipe` is hidden by
+                                 the same pass that hides the stock boxes, from
+                                 the opposite side of the same question.
+
+                                 `data-variant-edit-only` as well, alongside the
+                                 name and the markup: a recipe names *other*
+                                 products, which have to exist before it can point
+                                 at them. Writing one at the moment the product
+                                 itself is being created would mean choosing from
+                                 a catalogue this product is not in yet. --}}
+                            <div class="hidden space-y-3 rounded-[10px] border border-dashed border-border p-3.5"
+                                 data-variant-recipe data-variant-edit-only>
+                                <div class="flex flex-wrap items-start justify-between gap-3">
+                                    <div>
+                                        <p class="field-label mb-0">What it consumes</p>
+                                        <p class="mt-0.5 text-xs text-muted-foreground">
+                                            Taken off the shelf every time one of these is billed.
+                                        </p>
+                                    </div>
+                                    <button type="button" class="btn btn-secondary btn-sm" data-recipe-add>
+                                        <x-icon name="plus" :size="14" />
+                                        Add material
+                                    </button>
+                                </div>
+
+                                {{-- The picker, shown only while adding. It is
+                                     the bill counter's own `item-picker`, so the
+                                     badge beside each result is the live position
+                                     and there is no second way to search the
+                                     catalogue (§5.1). --}}
+                                <div class="hidden" data-recipe-picker></div>
+
+                                <div class="space-y-2" data-recipe-rows></div>
+
+                                {{-- Said plainly rather than left as an empty
+                                     box: a product with no recipe bills exactly
+                                     as it did before recipes existed, and that is
+                                     a legitimate state rather than a gap. --}}
+                                <p class="text-xs text-muted-foreground" data-recipe-empty>
+                                    Nothing yet — billing this will move no stock.
+                                </p>
+
+                                {{-- Today's cost, and it says so. What a bill is
+                                     actually charged is the weighted average at
+                                     the moment it posts, which is the only figure
+                                     the books ever use. --}}
+                                <p class="hidden text-[0.8125rem] text-secondary-foreground" data-recipe-cost></p>
+
+                                <p class="field-error hidden" data-variant-error="components"></p>
                             </div>
 
                             {{-- The block's own footer, for a refusal that named

@@ -54,6 +54,30 @@ final class SearchTerms
     }
 
     /**
+     * The predicate that reaches a variant's specification.
+     *
+     * A variant's `label` column is only filled when somebody typed one. The
+     * usual case is an empty label and a bag of attributes — `{"capacitance":
+     * "200", "type": "Oil filled"}` — with what the screen shows assembled from
+     * it in PHP by `ItemVariant::derivedLabel()`. So every row in a capacitor
+     * family *displayed* its capacitance and was *searchable* on nothing, and
+     * "Capacitor 200" found none of the twenty. Splitting the phrase into words
+     * did not help on its own: the second word had nowhere to match.
+     *
+     * `JSON_SEARCH` over `'$.*'` reaches the bag's **values** and not its keys,
+     * which is the distinction that matters — matching keys would make a search
+     * for "type" return every product that records one. Both sides are lowered
+     * because JSON strings compare case-sensitively, and the pattern keeps the
+     * backslash escaping from {@see self::escape()}: `JSON_SEARCH` takes LIKE's
+     * own syntax and the same default escape character.
+     *
+     * Bind the pattern once. It cannot use an index, so it is a scan — the same
+     * order of cost as the `%…%` on `label` beside it, and bounded by
+     * {@see self::MAX_WORDS}.
+     */
+    public const ATTRIBUTE_VALUE_MATCH = "json_search(lower(cast(`attributes` as char)), 'one', lower(?), null, '$.*') is not null";
+
+    /**
      * Escape LIKE's operators so a typed one is matched literally.
      *
      * The backslash goes first, or the backslashes this method adds would

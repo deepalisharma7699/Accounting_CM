@@ -635,9 +635,11 @@ function applyAttributeType() {
     $('#attribute-type-hint').textContent = meta.hint;
     $$('[data-attribute-options]').forEach((node) => node.classList.toggle('hidden', !meta.has_options));
     $$('[data-attribute-unit]').forEach((node) => node.classList.toggle('hidden', !meta.accepts_unit));
+    // The layout class comes off with `hidden`, because `hidden` does not win
+    // against it — see showFamilyFields() in components/quick-item.js.
     $$('[data-attribute-range]').forEach((node) => {
         node.classList.toggle('hidden', !meta.accepts_range);
-        node.classList.toggle('grid', meta.accepts_range);
+        node.classList.toggle('form-grid', meta.accepts_range);
     });
 }
 

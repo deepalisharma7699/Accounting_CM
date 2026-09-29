@@ -54,7 +54,7 @@ export function renderAttributeFields(host, schema = {}, values = {}, prefix = '
 
     if (!keys.length) {
         host.innerHTML = `
-            <p class="sm:col-span-2 rounded-[10px] border border-border bg-secondary/40 px-3.5 py-2.5
+            <p class="span-all rounded-[10px] border border-border bg-secondary/40 px-3.5 py-2.5
                       text-[0.8125rem] text-secondary-foreground">${esc(empty)}</p>`;
 
         return;

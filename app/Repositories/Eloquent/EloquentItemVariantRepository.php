@@ -92,6 +92,11 @@ class EloquentItemVariantRepository implements ItemVariantRepositoryInterface
                         ->where('label', 'like', $like)
                         ->orWhere('sku', 'like', $like)
                         ->orWhere('barcode', 'like', $like)
+                        // The specification itself. `label` is usually empty and
+                        // what the row shows — "200 MFD / Oil filled" — is built
+                        // from this bag at render time, so without this the
+                        // capacitance on screen matched nothing typed.
+                        ->orWhereRaw(SearchTerms::ATTRIBUTE_VALUE_MATCH, [$like])
                         ->orWhereHas('item', fn ($item) => $item
                             ->where('name', 'like', $like)
                             ->orWhere('code', 'like', $like)

@@ -26,8 +26,8 @@
 
 @utility field-label {
     display: block;
-    margin-bottom: 0.375rem;
-    font-size: 0.8125rem;
+    margin-bottom: 0.25rem;
+    font-size: 0.75rem;
     font-weight: 600;
     color: var(--color-secondary-foreground);
 }
@@ -35,7 +35,7 @@
 @utility field-input {
     display: block;
     width: 100%;
-    height: 2.625rem;
+    height: var(--control-h);
     padding-inline: 0.75rem;
     border-radius: 10px;
     border: 1px solid var(--color-border);
@@ -57,16 +57,209 @@
 }
 
 @utility field-error {
-    margin-top: 0.375rem;
+    margin-top: 0.25rem;
     font-size: 0.75rem;
     color: var(--color-rose-600);
+}
+
+/* Searchable dropdown ---------------------------------------------------
+|
+| The chrome for components/searchable-select.js, which turns every `<select>`
+| in the application into a type-to-filter list without replacing it. That file
+| carries the reasoning; what matters here is that these rules are deliberately
+| *unlayered* while `field-input` and the Tailwind utilities are not.
+|
+| The button copies the select's own class list — `field-input w-auto min-w-40`
+| and the rest — so it inherits the border, the height, the focus ring and the
+| red `aria-invalid` outline with nothing restated. Unlayered rules beat any
+| `@layer utilities` rule regardless of order, so `.ss-trigger` sets only what it
+| must override (a button is centred and `field-input` is `display: block`) and
+| names no width, height, padding or margin — those stay the copied utilities'
+| to decide, exactly as they decided them on the select.
+*/
+
+.ss {
+    position: relative;
+    display: block;
+    min-width: 0;
+}
+
+/* Mirrored from the select rather than copied onto the button: the code that
+   switches Accounting between its chart and its trial balance toggles `hidden`
+   on the select itself, and a trigger left standing is the visible half of a
+   filter that no longer applies. */
+.ss[data-ss-hidden] {
+    display: none;
+}
+
+/* Off the screen, still in the form. Not `display: none`: it keeps its id for
+   a `<label for>` to point at, and the focus that lands there is handed on. */
+.ss select[data-ss-native] {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.ss-trigger {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+.ss-trigger:disabled {
+    cursor: not-allowed;
+}
+
+.ss-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ss-label--empty {
+    color: var(--color-muted-foreground);
+}
+
+.ss-caret {
+    flex: 0 0 auto;
+    color: var(--color-muted-foreground);
+}
+
+.ss-panel {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    z-index: 50;
+    width: max-content;
+    min-width: 100%;
+    max-width: min(24rem, calc(100vw - 2rem));
+    margin-top: 0.25rem;
+    overflow: hidden;
+    border-radius: 10px;
+    border: 1px solid var(--color-border);
+    background-color: var(--color-card);
+    box-shadow: var(--shadow-raised);
+}
+
+.ss-panel[hidden] {
+    display: none;
+}
+
+/* Opened upwards where there is no room below — a filter at the foot of a
+   drawer would otherwise open into the bottom edge. */
+.ss-panel--up {
+    top: auto;
+    bottom: 100%;
+    margin-top: 0;
+    margin-bottom: 0.25rem;
+}
+
+.ss-search {
+    padding: 0.5rem;
+    border-bottom: 1px solid var(--color-border);
+}
+
+/* A three-option filter carries no search box, but the input is still there and
+   still focused, so typing filters and reveals it. Clipped rather than
+   `display: none`, which cannot hold focus. */
+.ss-search--quiet {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    border: 0;
+}
+
+.ss-search-input {
+    display: block;
+    width: 100%;
+    height: var(--control-h);
+    padding-inline: 0.625rem;
+    border-radius: 8px;
+    border: 1px solid var(--color-border);
+    background-color: var(--color-card);
+    font-size: 0.875rem;
+    color: var(--color-foreground);
+}
+
+.ss-search-input::placeholder {
+    color: var(--color-muted-foreground);
+}
+
+.ss-search-input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-ring) 60%, transparent);
+}
+
+.ss-options {
+    max-height: 15rem;
+    margin: 0;
+    padding: 0.25rem;
+    overflow-y: auto;
+    list-style: none;
+}
+
+.ss-option {
+    overflow: hidden;
+    padding: 0.4375rem 0.625rem;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    color: var(--color-foreground);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.ss-option--active {
+    background-color: var(--color-accent);
+}
+
+.ss-option--chosen {
+    font-weight: 600;
+}
+
+.ss-option--disabled {
+    color: var(--color-muted-foreground);
+    cursor: default;
+}
+
+.ss-group {
+    padding: 0.5rem 0.625rem 0.25rem;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--color-muted-foreground);
+}
+
+.ss-empty {
+    padding: 0.75rem 0.625rem;
+    font-size: 0.875rem;
+    color: var(--color-muted-foreground);
 }
 
 
 /* Data table ----------------------------------------------------------- */
 
 @utility table-head {
-    padding: 0.625rem 1rem;
+    padding: 0.5rem 0.875rem;
     text-align: left;
     font-size: 0.6875rem;
     font-weight: 600;
@@ -78,7 +271,7 @@
 }
 
 @utility table-cell {
-    padding: 0.75rem 1rem;
+    padding: 0.5rem 0.875rem;
     font-size: 0.875rem;
     color: var(--color-foreground);
     vertical-align: middle;
@@ -266,7 +459,7 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    height: 2.375rem;
+    height: var(--control-h);
     padding-inline: 0.75rem;
     border-radius: 10px;
     border: 1px solid transparent;
@@ -564,16 +757,30 @@
     &:hover { background-color: var(--color-muted); color: var(--color-foreground); }
 }
 
+/*
+| The root of the crumb — a glyph rather than the word "Home".
+|
+| It is sized against `crumb-current`, not against the word it replaced: the
+| open module's name is 1.125rem/700 and the word beside it was 0.9375rem/500
+| muted, so the one step back read as a caption on the thing it steps back from.
+| A 20px stroked glyph in the foreground colour sits at the same optical weight
+| as that title. The label is on the button, since there is no text to read.
+*/
 @utility crumb-home {
+    display: grid;
+    place-items: center;
+    width: 2rem;
+    height: 2rem;
+    flex: none;
     border: 0;
     padding: 0;
-    background: none;
-    font-size: 0.9375rem;
-    font-weight: 500;
-    color: var(--color-muted-foreground);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--color-foreground);
     cursor: pointer;
+    transition: background-color 0.15s, color 0.15s;
 
-    &:hover { color: var(--color-primary); }
+    &:hover { background-color: var(--color-muted); color: var(--color-primary); }
 }
 
 @utility crumb-sep {
@@ -662,7 +869,12 @@
 
 @utility host {
     flex: 1;
-    padding: 2rem 1rem 5rem;
+    /*
+    | The top figure is what stands between the topbar and the first band of
+    | cards, and on a 768-high screen it is one of the few places a whole row is
+    | won back: at 2rem, home showed two bands and the heading of a third.
+    */
+    padding: 1rem 1rem 3rem;
 
     @media (width >= 40rem) {
         padding-inline: 2rem;
@@ -727,7 +939,7 @@
     display: flex;
     align-items: center;
     gap: 0.625rem;
-    margin-bottom: 0.75rem;
+    margin-bottom: 0.5rem;
 }
 
 @utility group-rule {
@@ -783,7 +995,15 @@
 | edges and leave a white margin around three sides of it.
 */
 @utility module-card {
-    --band: 3.5rem;
+    /*
+    | The band's height and where the gradient is cut, as one figure.
+    |
+    | It carries a 2rem chip, so this is that plus six pixels of air on each
+    | side. `skel-card` mirrors it and `.card-star` is centred in it — both are
+    | named below, because neither can read this variable: the skeleton is a
+    | different element and the star is the card's *sibling*.
+    */
+    --band: 2.75rem;
 
     display: grid;
     width: 100%;
@@ -851,7 +1071,7 @@
 @utility card-desc {
     grid-area: desc;
     align-self: start;
-    padding: 0.8125rem 0.875rem 0;
+    padding: 0.625rem 0.875rem 0;
     font-size: 0.8125rem;
     line-height: 1.45;
     color: var(--color-muted-foreground);
@@ -863,7 +1083,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0.75rem 0.875rem 0.875rem;
+    padding: 0.625rem 0.875rem 0.75rem;
     font-size: 0.75rem;
     color: color-mix(in srgb, var(--tone-fg) 70%, transparent);
 }
@@ -893,9 +1113,10 @@
 */
 @utility card-star {
     position: absolute;
-    /* Centred in the card's tinted band — (3.5rem - 1.75rem) / 2. It sits on
-       the colour rather than on the card, so it moves with `--band`. */
-    top: 0.875rem;
+    /* Centred in the card's tinted band — (`--band` - 1.75rem) / 2, written out
+       because it cannot be calculated: this is the card's *sibling*, not its
+       child, so `--band` does not reach here. Change one and change this. */
+    top: 0.5rem;
     right: 0.5rem;
     z-index: 1;
     display: grid;
@@ -963,12 +1184,12 @@
     align-items: center;
     justify-content: space-between;
     gap: 1rem;
-    margin-bottom: 1.25rem;
+    margin-bottom: 0.875rem;
 }
 
 @utility ws-title {
     margin: 0;
-    font-size: 1.5rem;
+    font-size: 1.25rem;
     font-weight: 700;
     letter-spacing: -0.02em;
     color: var(--color-foreground);
@@ -1003,10 +1224,28 @@
 /* The create form ---------------------------------------------------------- */
 
 @utility form-card {
-    padding: 1.25rem;
+    padding: var(--pad-surface);
+
+    /*
+    | The surface `form-grid` measures itself against.
+    |
+    | It has to be the surface and not the viewport, because the same form node
+    | is on two of them: `adoptForm()` moves one `<form>` between this card and
+    | a 30rem drawer or a 2xl modal (§2A.2), so a viewport query would be
+    | answering about the window while the fields are in a five-hundred-pixel
+    | panel — three columns of a hundred and fifty pixels each, on the laptop
+    | this whole scale was set against.
+    |
+    | A surface that declares nothing matches no container query at all, so a
+    | form in a drawer or a modal stays at two columns without either of them
+    | having to know this rule exists. Give a new wide surface these two lines
+    | and the forms on it widen with no markup changing.
+    */
+    container-name: form-surface;
+    container-type: inline-size;
 
     @media (width >= 40rem) {
-        padding: 1.5rem;
+        padding: var(--pad-surface-lg);
     }
 }
 
@@ -1014,20 +1253,46 @@
     display: flex;
     align-items: center;
     gap: 0.625rem;
-    margin-bottom: 1.25rem;
+    margin-bottom: 0.875rem;
 }
 
+/*
+| Every grid of fields in the application, so that a gap is declared once
+| (`--field-gap`) instead of once per form. The markup this replaced was
+| `grid gap-4 sm:grid-cols-2` written out at forty-odd sites, which is forty-odd
+| places for the next density decision to be applied to thirty-nine of.
+*/
 @utility form-grid {
     display: grid;
-    gap: 1rem;
+    gap: var(--field-gap);
     grid-template-columns: 1fr;
 
     @media (width >= 35rem) {
         grid-template-columns: 1fr 1fr;
     }
 
-    @media (width >= 56.25rem) {
-        grid-template-columns: repeat(3, 1fr);
+    /*
+    | A third column, and both halves of the condition earn their place.
+    |
+    | `@container` rather than `@media`, for the reason `form-card` sets out: it
+    | asks how wide the surface this form is actually on is, which is the only
+    | form of the question that survives `adoptForm()`.
+    |
+    | And `:has()` is why this can be one class on every field grid rather than a
+    | judgement per form. Three columns only saves a row once there are five
+    | fields — four of them in three columns is still two rows, and a ragged one
+    | — so under five it would make every field narrower and give nothing back.
+    | It is also live, which the grids JavaScript writes need: a job's specs and
+    | a variant's attributes are appended long after this rule is parsed, and it
+    | re-evaluates as they arrive.
+    |
+    | Both degrade to the two columns this markup already had: an unmatched
+    | container query and an unsupported `:has()` each simply leave the rule off.
+    */
+    @container form-surface (width >= 52rem) {
+        &:has(> :nth-child(5)) {
+            grid-template-columns: repeat(3, 1fr);
+        }
     }
 }
 
@@ -1040,8 +1305,8 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 0.5rem;
-    margin-top: 1.5rem;
-    padding-top: 1.25rem;
+    margin-top: 1.125rem;
+    padding-top: 0.875rem;
     border-top: 1px solid var(--color-border);
 }
 
@@ -1057,7 +1322,7 @@
     display: grid;
     grid-template-columns: repeat(2, 1fr);
     gap: 0.75rem;
-    margin-bottom: 1.25rem;
+    margin-bottom: 0.875rem;
 
     @media (width >= 64rem) {
         grid-template-columns: repeat(4, 1fr);
@@ -1091,7 +1356,7 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 0.5rem;
-    margin-bottom: 1rem;
+    margin-bottom: 0.75rem;
 }
 
 /* Wide content scrolls inside its own box; the page never scrolls sideways. */
@@ -1101,7 +1366,7 @@
 }
 
 @utility state-cell {
-    padding: 3.5rem 1rem;
+    padding: 2.5rem 1rem;
     text-align: center;
     font-size: 0.875rem;
     color: var(--color-muted-foreground);
@@ -1161,7 +1426,8 @@
     display: flex;
     align-items: center;
     gap: 0.625rem;
-    height: 3.5rem;
+    /* `module-card`'s `--band`, which this cannot read. */
+    height: 2.75rem;
     flex: none;
     padding-inline: 0.875rem;
     background-color: var(--color-muted);
@@ -1175,7 +1441,8 @@
     flex: 1;
     flex-direction: column;
     align-items: flex-start;
-    padding: 0.8125rem 0.875rem 0.875rem;
+    /* `card-desc`'s top and `card-meta`'s bottom, which this cannot read. */
+    padding: 0.625rem 0.875rem 0.75rem;
 }
 
 /*
@@ -1247,21 +1514,21 @@
     display: flex;
     align-items: flex-start;
     gap: 1rem;
-    padding: 1.25rem;
+    padding: var(--pad-surface);
     border-bottom: 1px solid var(--color-border);
 }
 
 @utility drawer-body {
     flex: 1;
     overflow-y: auto;
-    padding: 1.25rem;
+    padding: var(--pad-surface);
 }
 
 @utility drawer-foot {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    padding: 1rem 1.25rem;
+    padding: 0.75rem var(--pad-surface);
     border-top: 1px solid var(--color-border);
     background-color: var(--color-background);
 }
@@ -1270,7 +1537,7 @@
 @utility dl {
     display: grid;
     grid-template-columns: 8.5rem 1fr;
-    gap: 0.625rem 1rem;
+    gap: 0.5rem 1rem;
     margin: 0;
 
     & dt { font-size: 0.8125rem; color: var(--color-muted-foreground); }
@@ -1294,7 +1561,7 @@
 [data-chrome='modal'] [data-form-body] {
     max-height: 70vh;
     overflow-y: auto;
-    padding: 1.25rem 1.5rem;
+    padding: var(--pad-surface) var(--pad-surface-lg);
 }
 
 /*
@@ -1315,10 +1582,10 @@
 #quick-party-form[data-chrome='modal'] [data-form-body] {
     display: flex;
     flex-direction: column;
-    gap: 1rem;
+    gap: var(--field-gap);
     flex: 1;
     max-height: none;
-    padding: 1rem 1.25rem;
+    padding: var(--pad-surface) var(--pad-surface-lg);
 }
 
 /*
@@ -1331,7 +1598,7 @@
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     align-items: start;
-    gap: 1rem;
+    gap: var(--field-gap);
 }
 
 #quick-party-form[data-chrome='inline'] [data-form-body] > * {
@@ -1341,6 +1608,21 @@
 @media (width >= 48rem) {
     #quick-party-form[data-chrome='inline'] [data-form-body] > [data-half] {
         grid-column: auto;
+    }
+}
+
+/*
+| There are exactly three short fields — phone, GSTIN and e-mail — so in two
+| columns they cost two rows and leave half of the second one empty. On a
+| surface wide enough to say so they take one row instead.
+|
+| The container is `form-card`'s, the same one `form-grid` asks, because this
+| form is on the same two surfaces as every other: level 1 here, and a drawer
+| where the query does not match and the pairs stay as they are.
+*/
+@container form-surface (width >= 52rem) {
+    #quick-party-form[data-chrome='inline'] [data-form-body] {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 }
 
@@ -1365,7 +1647,7 @@
 #employee-form[data-chrome='modal'] [data-form-body] {
     flex: 1;
     max-height: none;
-    padding: 1rem 1.25rem;
+    padding: var(--pad-surface) var(--pad-surface-lg);
 }
 
 /*

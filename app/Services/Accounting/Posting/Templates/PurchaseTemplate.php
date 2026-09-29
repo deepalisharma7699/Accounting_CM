@@ -80,9 +80,9 @@ class PurchaseTemplate extends BillTemplate
         $expensed = Money::zero();
 
         foreach ($lines as $line) {
-            $change = $changes[$line->lineNo] ?? null;
+            $lineChanges = $changes[$line->lineNo] ?? [];
 
-            if ($change === null) {
+            if ($lineChanges === []) {
                 // Bought and not stocked: consumed on arrival. Aggregated,
                 // because unlike the Inventory lines below there is no movement
                 // for each one to pair with.
@@ -96,14 +96,23 @@ class PurchaseTemplate extends BillTemplate
             // column of totals, and so each line pairs with the movement that
             // recomputed the average.
             //
+            // A list rather than one change, in step with `changesByLine()`. A
+            // purchase produces exactly one per line today — buying a service
+            // consumes none of this workshop's stock, which is why
+            // `recipeChangesFor()` answers "none" on this side — so this is one
+            // iteration, and it is written this way so that stays true by
+            // construction rather than by everyone remembering.
+            //
             // Credited rather than debited on a purchase return, which is the
             // whole of what M18 added here. See BillTemplate::sideFor().
-            $posting[] = PostingLine::on(
-                $this->sideFor(BalanceSide::Debit),
-                $this->accounts->system(SystemAccount::Inventory)->id,
-                $change->value->absolute(),
-                $line->description,
-            );
+            foreach ($lineChanges as $change) {
+                $posting[] = PostingLine::on(
+                    $this->sideFor(BalanceSide::Debit),
+                    $this->accounts->system(SystemAccount::Inventory)->id,
+                    $change->value->absolute(),
+                    $change->memo ?? $line->description,
+                );
+            }
         }
 
         if (! $expensed->isZero()) {

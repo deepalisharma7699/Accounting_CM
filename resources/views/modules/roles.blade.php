@@ -256,7 +256,7 @@
             </div>
 
             <div class="space-y-4" data-form-body>
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div class="form-grid">
                     <div>
                         <label for="role-name" class="field-label">Role name <span class="req">*</span></label>
                         <input id="role-name" name="name" type="text" class="field-input" required
@@ -266,7 +266,7 @@
 
                     <div>
                         <span class="field-label">Identifier</span>
-                        <div class="flex h-[2.625rem] items-center rounded-[10px] border border-border bg-muted px-3
+                        <div class="flex h-[var(--control-h)] items-center rounded-[10px] border border-border bg-muted px-3
                                     font-mono text-[0.8125rem] text-muted-foreground">
                             <span id="role-slug-preview">—</span>
                         </div>

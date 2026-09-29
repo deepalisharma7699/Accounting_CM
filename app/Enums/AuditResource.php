@@ -9,6 +9,7 @@ use App\Models\Item;
 use App\Models\ItemAttribute;
 use App\Models\ItemBrand;
 use App\Models\ItemCategory;
+use App\Models\ItemComponent;
 use App\Models\ItemVariant;
 use App\Models\Party;
 use App\Models\Passkey;
@@ -59,6 +60,17 @@ enum AuditResource: string
     case Party = 'party';
     case Item = 'item';
     case Variant = 'variant';
+
+    /**
+     * What a made thing consumes — one row per material on a variant's recipe.
+     *
+     * Audited because editing a recipe changes what every *future* bill takes
+     * off the shelf, silently and with no document of its own to look at. A
+     * margin that moved last month is answered by this trail or by nobody.
+     * Posted history is unaffected: a posted document never consults a recipe
+     * again, its movements being the record of what it actually consumed.
+     */
+    case Recipe = 'recipe';
     case User = 'user';
 
     /**
@@ -157,6 +169,7 @@ enum AuditResource: string
             self::Party => Party::class,
             self::Item => Item::class,
             self::Variant => ItemVariant::class,
+            self::Recipe => ItemComponent::class,
             self::Category => ItemCategory::class,
             self::CategoryAttribute => ItemAttribute::class,
             self::Brand => ItemBrand::class,
@@ -178,6 +191,7 @@ enum AuditResource: string
             self::Party => 'Party',
             self::Item => 'Item',
             self::Variant => 'Variant',
+            self::Recipe => 'Recipe',
             self::Category => 'Category',
             self::CategoryAttribute => 'Category field',
             self::Brand => 'Brand',
@@ -203,7 +217,7 @@ enum AuditResource: string
             self::Workspace => '/workspace',
             self::Account => '/accounts',
             self::Party => '/parties',
-            self::Item, self::Variant => '/items',
+            self::Item, self::Variant, self::Recipe => '/items',
             // The masters live inside the Items workspace rather than on pages
             // of their own — there is one page in this product — so the trail
             // links to the module and names the record.

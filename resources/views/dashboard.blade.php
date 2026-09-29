@@ -63,7 +63,7 @@
             this markup — the shell is public, and a figure or a name in here
             would be one anybody could fetch.
         --}}
-        <section class="mb-8" data-favourites hidden aria-labelledby="group-favourites">
+        <section class="mb-5" data-favourites hidden aria-labelledby="group-favourites">
             {{-- The same heading the bands below get: one band of cards, so it
                  is labelled like one (§7.4). --}}
             <div class="group-head">
@@ -101,7 +101,7 @@
             /auth/me confirms the grant — nothing flashes on the way in.
         --}}
         @foreach (\App\Support\Modules::groups() as $group => $modules)
-            <section class="mb-8" data-module-group="{{ $group }}" aria-labelledby="group-{{ $group }}">
+            <section class="mb-5" data-module-group="{{ $group }}" aria-labelledby="group-{{ $group }}">
                 {{--
                     The band's heading, and the rule that carries it to the right
                     edge. Five bands of three or four replaced two of twelve and

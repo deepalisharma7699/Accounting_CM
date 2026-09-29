@@ -110,7 +110,7 @@
                     <p class="field-error hidden" data-error-for="description"></p>
                 </div>
 
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div class="form-grid">
                     <div>
                         <label for="category-unit" class="field-label">Usually counted in</label>
                         <select id="category-unit" name="default_unit_code" class="field-input"></select>
@@ -223,7 +223,7 @@
                     </p>
                 </div>
 
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div class="form-grid">
                     <div>
                         <label for="attribute-type" class="field-label">Kind of value</label>
                         <select id="attribute-type" name="data_type" class="field-input"></select>
@@ -251,7 +251,7 @@
                     <p class="field-error hidden" data-error-for="options"></p>
                 </div>
 
-                <div data-attribute-range class="hidden grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div data-attribute-range class="hidden form-grid">
                     <div>
                         <label for="attribute-min" class="field-label">
                             Smallest allowed <span class="font-normal text-muted-foreground">(optional)</span>
@@ -270,7 +270,7 @@
                     </div>
                 </div>
 
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div class="form-grid">
                     <div>
                         <label for="attribute-default" class="field-label">
                             Pre-filled with <span class="font-normal text-muted-foreground">(optional)</span>
@@ -327,7 +327,7 @@
             </div>
 
             <div class="space-y-4 px-6 py-5">
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div class="form-grid">
                     <div>
                         <label for="unit-label" class="field-label">Name</label>
                         <input id="unit-label" name="label" type="text" class="field-input" required

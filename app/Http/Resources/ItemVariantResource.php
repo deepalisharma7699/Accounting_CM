@@ -78,6 +78,34 @@ class ItemVariantResource extends JsonResource
                 'tracks_stock' => $this->item->tracksStock(),
             ]),
 
+            // What one of this consumes, where it is something the workshop
+            // makes. Absent rather than empty when the relation was not loaded,
+            // which is also what a server that has not run the schema step yet
+            // sends — the screen then shows no recipe section, exactly as it did
+            // before recipes existed (§4.6).
+            //
+            // No cost here, for the reason this resource carries no cost
+            // anywhere: what a material is worth is the weighted average at the
+            // moment of sale, and the Items screen already holds the positions
+            // it needs to show an estimate beside the price.
+            'components' => $this->whenLoaded('components', fn () => $this->components
+                ->map(fn ($component) => [
+                    'id' => (int) $component->id,
+                    'component_variant_id' => (int) $component->component_variant_id,
+                    // The family too, because the Items screen looks a position
+                    // up by (item, variant) out of the stock it already holds —
+                    // so the cost estimate beside the price costs no request.
+                    'component_item_id' => $component->componentVariant === null
+                        ? null
+                        : (int) $component->componentVariant->item_id,
+                    'quantity' => (string) $component->quantity,
+                    'label' => $component->componentVariant?->displayLabel(),
+                    'item_name' => $component->componentVariant?->item?->name,
+                    'unit_symbol' => $component->componentVariant?->item?->base_uom?->symbol(),
+                ])
+                ->values()
+                ->all()),
+
             'created_at' => $this->created_at?->toIso8601String(),
             'updated_at' => $this->updated_at?->toIso8601String(),
         ];
