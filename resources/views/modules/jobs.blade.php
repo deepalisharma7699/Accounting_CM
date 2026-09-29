@@ -119,7 +119,7 @@
 
                                 <label class="field">
                                     <span class="field-label">Received</span>
-                                    <input type="date" name="received_date" class="field-input">
+                                    <input type="date" name="received_date" class="field-input field-date">
                                     <span class="field-error hidden" data-error-for="received_date"></span>
                                 </label>
                             </div>
@@ -222,7 +222,7 @@
                                 <span class="field-label">
                                     Promised back <span class="font-normal text-muted-foreground">(optional)</span>
                                 </span>
-                                <input type="date" name="promised_date" class="field-input">
+                                <input type="date" name="promised_date" class="field-input field-date">
                                 <span class="mt-1.5 block text-xs text-muted-foreground">
                                     What the bench is measured against. A job past it is flagged on the list.
                                 </span>

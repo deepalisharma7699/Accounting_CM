@@ -92,7 +92,7 @@
 
                 <div data-half>
                     <label for="quick-party-phone" class="field-label">Phone</label>
-                    <input id="quick-party-phone" name="phone" type="tel" class="field-input"
+                    <input id="quick-party-phone" name="phone" type="tel" class="field-input field-short"
                            inputmode="tel" maxlength="20" autocomplete="off" placeholder="98765 43210">
                     <p class="field-error hidden" data-error-for="phone"></p>
                 </div>

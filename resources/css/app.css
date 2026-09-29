@@ -1267,37 +1267,123 @@
     gap: var(--field-gap);
     grid-template-columns: 1fr;
 
+    /*
+    | The fallback, for a surface that declares no container — a drawer, a modal,
+    | anything `adoptForm()` moves a form into. Two columns is what that markup
+    | already had and what a 500px panel can hold.
+    */
     @media (width >= 35rem) {
         grid-template-columns: 1fr 1fr;
     }
 
     /*
-    | A third column, and both halves of the condition earn their place.
+    | The columns, wherever the surface can be measured.
     |
     | `@container` rather than `@media`, for the reason `form-card` sets out: it
     | asks how wide the surface this form is actually on is, which is the only
     | form of the question that survives `adoptForm()`.
     |
-    | And `:has()` is why this can be one class on every field grid rather than a
-    | judgement per form. Three columns only saves a row once there are five
-    | fields — four of them in three columns is still two rows, and a ragged one
-    | — so under five it would make every field narrower and give nothing back.
-    | It is also live, which the grids JavaScript writes need: a job's specs and
-    | a variant's attributes are appended long after this rule is parsed, and it
-    | re-evaluates as they arrive.
+    | This used to be a *third* column, gated behind `:has(> :nth-child(5))` on
+    | the reasoning that three columns only save a row once there are five
+    | fields. The reasoning was sound and the conclusion was still wrong, because
+    | it answered the wrong question: the grid was choosing between two columns
+    | and three on a surface wide enough for five, so a two-field group put six
+    | hundred pixels behind a GST rate and a four-field group did it four times.
+    | Counting children decided how many columns to *divide* a fixed width into,
+    | when what a form needs is columns of a fixed width and however many of them
+    | fit.
     |
-    | Both degrade to the two columns this markup already had: an unmatched
-    | container query and an unsupported `:has()` each simply leave the rule off.
+    | So: `auto-fit` against `--field-min`. A 1232px card gives four columns, a
+    | 52rem one gives three, a 500px drawer two — and none of them is written
+    | down anywhere or has to be revisited when a surface changes width. A group
+    | of two fields now occupies two of four columns and stops, which is what it
+    | should always have done, and `span-all` is still how the one field that
+    | genuinely wants the row asks for it.
+    |
+    | It degrades to the two columns above: a browser without container queries,
+    | or a surface that declares none, simply never matches this.
     */
-    @container form-surface (width >= 52rem) {
-        &:has(> :nth-child(5)) {
-            grid-template-columns: repeat(3, 1fr);
-        }
+    @container form-surface (width >= 30rem) {
+        grid-template-columns: repeat(auto-fit, minmax(var(--field-min), 1fr));
     }
+}
+
+/*
+| What a control is *for*, said on the control.
+|
+| These are ceilings, not widths: `max-inline-size` over `.field-input`'s
+| `width: 100%`, so the cell still governs on a phone and the ceiling only ever
+| takes width away. That asymmetry is the whole of why they are safe to apply
+| broadly — the worst a wrong one does is make a field narrower than it needed
+| to be, on a screen where the text is still legible.
+|
+| Reach for one whenever what goes in the box has a bound. A rate is four
+| characters however wide the card is; giving it the column's full width is not
+| generosity, it is the reader having to work out that the long box and the
+| short box mean the same kind of thing.
+|
+| Put it on the **outermost box of the control**, which is not always the input.
+| A rate and a percentage sit inside a `relative` wrapper carrying an absolutely
+| positioned `%` or `₹` at `right-3`; capping the input there would leave the
+| wrapper full width and the symbol stranded three-hundred pixels from the box it
+| belongs to. The wrapper takes the class and the input keeps its `width: 100%`.
+|
+| For the same reason, none of these goes on a `<select>`:
+| `components/searchable-select.js` takes every one of them off the screen and
+| draws its own box beside it, so a ceiling written on the select would be a
+| ceiling on the hidden element. Cap the field's wrapper if a select ever needs
+| one, and see that file's note on which properties it mirrors.
+*/
+@utility field-num {
+    max-inline-size: var(--w-num);
+}
+
+@utility field-code {
+    max-inline-size: var(--w-code);
+}
+
+@utility field-date {
+    max-inline-size: var(--w-date);
+}
+
+@utility field-short {
+    max-inline-size: var(--w-short);
 }
 
 @utility span-all {
     grid-column: 1 / -1;
+}
+
+/*
+| The name of a group of fields.
+|
+| The groups were already there — the items form has had four of them since it
+| was written — but they were marked with a Blade comment, which is to say they
+| were visible to whoever maintains the form and to nobody filling it in. A
+| stretch of eleven controls with three invisible seams in it reads as eleven
+| controls.
+|
+| Chrome rather than content, so it is small, quiet and uppercase: it labels the
+| region a reader is already in, and a heading that competes with the field
+| labels under it would be worse than none. The rule above it is drawn by the
+| legend rather than by a wrapper element, so a group is one `<p>` added to
+| markup that is otherwise unchanged and the first group in a form correctly has
+| no rule over it.
+*/
+@utility form-legend {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--color-muted-foreground);
+
+    &:not(:first-child) {
+        margin-top: 0.25rem;
+        padding-top: 0.875rem;
+        border-top: 1px solid var(--color-border);
+    }
 }
 
 @utility form-foot {

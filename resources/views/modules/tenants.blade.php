@@ -218,14 +218,14 @@
 
                             <div>
                                 <label for="ts-tz" class="field-label">Time zone</label>
-                                <input id="ts-tz" name="timezone" type="text" class="field-input font-mono"
+                                <input id="ts-tz" name="timezone" type="text" class="field-input field-short font-mono"
                                        autocomplete="off" placeholder="Asia/Kolkata">
                                 <p class="field-error hidden" data-error-for="timezone"></p>
                             </div>
                         
                             <div>
                                 <label for="ts-books" class="field-label">Books start on</label>
-                                <input id="ts-books" name="books_start_date" type="date" class="field-input">
+                                <input id="ts-books" name="books_start_date" type="date" class="field-input field-date">
                                 <p class="field-error hidden" data-error-for="books_start_date"></p>
                             </div>
 
@@ -331,7 +331,7 @@
                     <div>
                         <label for="tenant-gstin" class="field-label">GSTIN <span class="font-normal text-muted-foreground">(optional)</span></label>
                         <input id="tenant-gstin" name="gstin" type="text" maxlength="15"
-                               class="field-input font-mono uppercase" autocomplete="off" placeholder="27AAPFU0939F1ZV">
+                               class="field-input field-code font-mono uppercase" autocomplete="off" placeholder="27AAPFU0939F1ZV">
                         <p class="mt-1.5 text-xs text-muted-foreground">The first two digits set the state code.</p>
                         <p class="field-error hidden" data-error-for="gstin"></p>
                     </div>
@@ -339,7 +339,7 @@
                     <div>
                         <label for="tenant-state-code" class="field-label">State code</label>
                         <input id="tenant-state-code" name="state_code" type="text" maxlength="2" inputmode="numeric"
-                               class="field-input font-mono" autocomplete="off" placeholder="27">
+                               class="field-input field-num font-mono" autocomplete="off" placeholder="27">
                         <p class="mt-1.5 text-xs text-muted-foreground">Ignored when a GSTIN is given.</p>
                         <p class="field-error hidden" data-error-for="state_code"></p>
                     </div>

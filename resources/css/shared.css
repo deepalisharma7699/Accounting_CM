@@ -85,6 +85,42 @@
     --field-gap: 0.75rem;
     --pad-surface: 1rem;
     --pad-surface-lg: 1.25rem;
+
+    /*
+    | ## The width half of the same scale
+    |
+    | The figures above made a form shorter and left it exactly as wide, which
+    | is the half that was actually wrong. `.field-input` is `width: 100%` and a
+    | level-1 card is the full 1280px shell, so two columns gave every control
+    | about six hundred pixels — the same six hundred to a product name and to a
+    | GST rate. Nothing in the system sized a field by what it holds.
+    |
+    | `--field-min` is the narrowest a column may be before the grid drops one,
+    | and it is what replaced counting children to decide between two columns and
+    | three: a surface says how wide it is and the grid answers with however many
+    | columns fit. Fifteen rem is a label of two or three words over a control
+    | wide enough for a product name's first few words.
+    |
+    | The four below are ceilings rather than widths — `max-inline-size`, so a
+    | phone still collapses them to the cell — and each is measured against the
+    | longest thing that is ever typed into it, not against the cell it sits in:
+    |
+    |   num    a rate, a percentage, a quantity, an amount    "1,25,000.00"
+    |   code   an SKU, an HSN code, a product code            "8501.10.99"
+    |   date   the browser's own date control, which is       "29/09/2026"
+    |          wider than its text and differs per platform
+    |   short  a pincode, a phone, a short select             a ten-digit number
+    |
+    | A field with no ceiling is one whose content has no bound — a name, an
+    | address, a description, a party. Those take the cell, which is the point of
+    | there being a cell.
+    */
+    --field-min: 15rem;
+
+    --w-num: 8rem;
+    --w-code: 10.5rem;
+    --w-date: 11rem;
+    --w-short: 14rem;
 }
 
 @layer base {

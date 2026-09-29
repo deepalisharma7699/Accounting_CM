@@ -72,7 +72,7 @@
             <div class="form-grid">
                 <label class="block">
                     <span class="field-label">As at</span>
-                    <input type="date" name="date" id="opening-date" class="field-input">
+                    <input type="date" name="date" id="opening-date" class="field-input field-date">
                     <span class="mt-1 block text-xs text-muted-foreground">
                         Defaults to the day the books open. Nothing can be dated before it.
                     </span>

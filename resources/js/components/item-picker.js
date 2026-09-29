@@ -139,13 +139,20 @@ export async function searchCatalogue(term) {
     const [stock, services, bare] = await Promise.allSettled([
         can('READ', 'STOCK')
             /*
-            | Twenty-five rather than twelve. The cap exists so a one-letter term
-            | does not tip the whole shelf into the panel, not to save work: the
-            | endpoint prices every match before it slices a page, so the rows
-            | beyond the cap have already been computed. Twelve cut a capacitor
-            | family of twenty in half on the way in.
+            | Sixty rather than twelve, and the cap is about the panel rather
+            | than the work: the endpoint prices every match before it slices a
+            | page, so the rows past the cap have already been computed and
+            | asking for fewer saves the server nothing. What a cap buys is a
+            | one-letter term not tipping the whole shelf into a scroller.
+            |
+            | It was twelve, then twenty-five, and both were under the size of an
+            | ordinary family — twenty capacitors, forty bearings — so the panel
+            | said "8 more not shown" about a search somebody had already made as
+            | specific as their stock is. Sixty clears a family whole, which is
+            | the figure that matters: the message is then a real "narrow this"
+            | rather than a page boundary.
             */
-            ? auth.call(`/stock?per_page=25&is_active=1&search=${query}`, { quiet: true })
+            ? auth.call(`/stock?per_page=60&is_active=1&search=${query}`, { quiet: true })
             : Promise.resolve({ data: [] }),
         /*
         | `is_stock=0`, not `type=service`.
@@ -162,7 +169,7 @@ export async function searchCatalogue(term) {
         | complement of what /stock returns.
         */
         can('READ', 'ITEMS')
-            ? auth.call(`/items?per_page=12&is_stock=0&is_active=1&with_variants=1&search=${query}`, { quiet: true })
+            ? auth.call(`/items?per_page=40&is_stock=0&is_active=1&with_variants=1&search=${query}`, { quiet: true })
             : Promise.resolve({ data: [] }),
         /*
         | A stocked family with nothing under it yet, and the only query that
@@ -177,7 +184,7 @@ export async function searchCatalogue(term) {
         | Small on purpose: this is an exception list, not a way to browse.
         */
         can('READ', 'ITEMS')
-            ? auth.call(`/items?per_page=5&is_stock=1&has_variants=0&is_active=1&search=${query}`, { quiet: true })
+            ? auth.call(`/items?per_page=15&is_stock=1&has_variants=0&is_active=1&search=${query}`, { quiet: true })
             : Promise.resolve({ data: [] }),
     ]);
 
@@ -301,7 +308,7 @@ export function mountItemPicker(host, {
             <p class="mt-1.5 text-xs text-muted-foreground" data-item-hint>${esc(say(hint))}</p>
 
             <ul id="${uid}-results" role="listbox"
-                class="surface absolute z-30 mt-1 hidden max-h-80 w-full overflow-y-auto p-1 shadow-raised"
+                class="surface absolute z-30 mt-1 hidden max-h-[26rem] w-full overflow-y-auto p-1 shadow-raised"
                 data-item-results></ul>
         </div>`;
 

@@ -138,7 +138,7 @@
                         <div>
                             <label for="account-code" class="field-label">Code <span class="req">*</span></label>
                             <input id="account-code" name="code" type="text" inputmode="numeric" maxlength="4"
-                                   class="field-input font-mono" required autocomplete="off" placeholder="5300">
+                                   class="field-input field-num font-mono" required autocomplete="off" placeholder="5300">
                             <p class="mt-1.5 text-xs text-muted-foreground" data-code-hint>
                                 Four digits, inside the band for the chosen type.
                             </p>

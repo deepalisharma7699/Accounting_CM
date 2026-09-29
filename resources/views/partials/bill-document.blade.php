@@ -46,7 +46,7 @@
 
                 <label class="field">
                     <span class="field-label">Date</span>
-                    <input type="date" class="field-input" data-bill-date>
+                    <input type="date" class="field-input field-date" data-bill-date>
                     <span class="field-error hidden" data-error-for="date"></span>
                 </label>
             </div>

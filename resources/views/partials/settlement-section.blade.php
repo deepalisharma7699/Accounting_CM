@@ -80,7 +80,7 @@
 
                 <div>
                     <label for="{{ $direction }}-date" class="field-label">Date the money moved</label>
-                    <input id="{{ $direction }}-date" name="date" type="date" class="field-input" required>
+                    <input id="{{ $direction }}-date" name="date" type="date" class="field-input field-date" required>
                     <p class="mt-1.5 text-xs text-muted-foreground">
                         The day it was {{ $receipt ? 'taken' : 'paid' }}, not the day it is being entered.
                     </p>

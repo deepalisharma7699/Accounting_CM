@@ -75,7 +75,7 @@
                 <div>
                     <label for="ws-gstin" class="field-label">GSTIN</label>
                     <input id="ws-gstin" name="gstin" type="text" maxlength="15"
-                           class="field-input font-mono uppercase" autocomplete="off" placeholder="27AAPFU0939F1ZV">
+                           class="field-input field-code font-mono uppercase" autocomplete="off" placeholder="27AAPFU0939F1ZV">
                     <p class="mt-1.5 text-xs text-muted-foreground">
                         Sets your state, which decides CGST/SGST versus IGST on every bill.
                     </p>
@@ -85,7 +85,7 @@
                 <div>
                     <label for="ws-state-code" class="field-label">State code</label>
                     <input id="ws-state-code" name="state_code" type="text" maxlength="2" inputmode="numeric"
-                           class="field-input font-mono" autocomplete="off" placeholder="27">
+                           class="field-input field-num font-mono" autocomplete="off" placeholder="27">
                     <p class="mt-1.5 text-xs text-muted-foreground">Taken from the GSTIN when one is set.</p>
                     <p class="field-error hidden" data-error-for="state_code"></p>
                 </div>
@@ -130,7 +130,7 @@
             
                 <div>
                     <label for="ws-books-start" class="field-label">Books start date</label>
-                    <input id="ws-books-start" name="books_start_date" type="date" class="field-input">
+                    <input id="ws-books-start" name="books_start_date" type="date" class="field-input field-date">
                     <p class="mt-1.5 text-xs text-muted-foreground">
                         Your go-live day. Nothing may be dated before it — that period belongs to whatever you used
                         previously, and its closing position comes in as opening balances.
@@ -167,7 +167,7 @@
                 <label for="ws-due-days" class="field-label">
                     Payment terms <span class="font-normal text-muted-foreground">(optional)</span>
                 </label>
-                <div class="relative max-w-[16rem]">
+                <div class="relative field-short">
                     <input id="ws-due-days" name="payment_due_days" type="text" inputmode="numeric"
                            class="field-input pr-14 font-mono" autocomplete="off" placeholder="30">
                     <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">

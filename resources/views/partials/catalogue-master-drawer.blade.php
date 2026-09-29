@@ -121,7 +121,7 @@
                         <label for="category-gst" class="field-label">
                             Usual GST rate <span class="font-normal text-muted-foreground">(optional)</span>
                         </label>
-                        <div class="relative">
+                        <div class="relative field-num">
                             {{-- Prefilled rather than suggested in placeholder
                                  grey, for the reason modules/items.blade.php
                                  records. Clear it for a category that cannot
@@ -217,7 +217,7 @@
                      are stored under, and renaming it would orphan every one. --}}
                 <div id="attribute-key-row" class="hidden">
                     <label for="attribute-key" class="field-label">Stored as</label>
-                    <input id="attribute-key" type="text" class="field-input font-mono" disabled>
+                    <input id="attribute-key" type="text" class="field-input field-code font-mono" disabled>
                     <p class="mt-1.5 text-xs text-muted-foreground">
                         Fixed. Every product that answered this field is stored under this key.
                     </p>
@@ -257,7 +257,7 @@
                             Smallest allowed <span class="font-normal text-muted-foreground">(optional)</span>
                         </label>
                         <input id="attribute-min" name="min_value" type="text" inputmode="decimal"
-                               class="field-input text-right font-mono">
+                               class="field-input field-num text-right font-mono">
                         <p class="field-error hidden" data-error-for="min_value"></p>
                     </div>
                     <div>
@@ -265,7 +265,7 @@
                             Largest allowed <span class="font-normal text-muted-foreground">(optional)</span>
                         </label>
                         <input id="attribute-max" name="max_value" type="text" inputmode="decimal"
-                               class="field-input text-right font-mono">
+                               class="field-input field-num text-right font-mono">
                         <p class="field-error hidden" data-error-for="max_value"></p>
                     </div>
                 </div>
@@ -381,7 +381,7 @@
                      recorded points at this code. --}}
                 <div id="unit-code-row" class="hidden">
                     <label for="unit-code" class="field-label">Stored as</label>
-                    <input id="unit-code" type="text" class="field-input font-mono" disabled>
+                    <input id="unit-code" type="text" class="field-input field-code font-mono" disabled>
                     <p class="mt-1.5 text-xs text-muted-foreground">
                         Fixed. Every quantity ever recorded in this unit points at it.
                     </p>
@@ -432,7 +432,7 @@
                     <label for="brand-code" class="field-label">
                         Short code <span class="font-normal text-muted-foreground">(optional)</span>
                     </label>
-                    <input id="brand-code" name="code" type="text" class="field-input font-mono"
+                    <input id="brand-code" name="code" type="text" class="field-input field-code font-mono"
                            autocomplete="off" placeholder="e.g. SKF">
                     <p class="field-error hidden" data-error-for="code"></p>
                 </div>
