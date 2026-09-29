@@ -3,6 +3,7 @@
 namespace App\Http\Requests\Workspace;
 
 use App\Models\Tenant;
+use App\Support\Tenancy\TenantContext;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
@@ -41,8 +42,10 @@ class UpdateWorkspaceRequest extends FormRequest
                 'size:15',
                 'regex:'.Tenant::GSTIN_PATTERN,
                 // Ignores this workshop's own row, so re-submitting an
-                // unchanged GSTIN is not a duplicate.
-                Rule::unique('tenants', 'gstin')->ignore($this->user()?->tenant_id),
+                // unchanged GSTIN is not a duplicate. Read from the tenant
+                // context rather than the caller: a platform administrator
+                // editing a workshop's settings has no workshop of their own.
+                Rule::unique('tenants', 'gstin')->ignore(app(TenantContext::class)->current()),
             ],
             'address' => ['sometimes', 'nullable', 'string', 'max:500'],
             'state_code' => ['sometimes', 'nullable', 'string', 'size:2', 'regex:/^[0-9]{2}$/'],

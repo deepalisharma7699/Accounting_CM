@@ -58,11 +58,11 @@
 |
 | ## `enabled`
 |
-| Seventeen are converted to the §2A flow and on: Sales, Purchase, Items, Stock,
+| Eighteen are converted to the §2A flow and on: Sales, Purchase, Items, Stock,
 | Customers, Vendors, Insights, Staff, Users, Roles, Settings, Opening balances,
-| Expenses, Transactions, Jobs, Accounting and History. Two are off: Uploads and
-| Workshops. They still open on a list with a modal create, which is the *only*
-| reason each is off — turning one back on is `'enabled' => true` and nothing
+| Expenses, Transactions, Jobs, Accounting, History and Workshops. One is off:
+| Uploads. It still opens on a list with a modal create, which is the *only*
+| reason it is off — turning it back on is `'enabled' => true` and nothing
 | else.
 |
 | **Off is not unbuilt.** Every module below has a finished backend, a finished
@@ -85,12 +85,12 @@
 | be shown a trial balance that reconciles. What is left:
 |
 |   C6  uploads
-|   C7  tenants
 |
-| **History went on ahead of its step.** It was the read-mostly half of C7 and
-| needed no re-flow to speak of — one list, no create, no modal — so it took
-| `mountWorkspace(..., { canCreate: false })` and the flag. C7 is now Workshops
-| alone.
+| **C7 — Workshops — is done**, so the platform can onboard and suspend a
+| workshop and a platform administrator has a card that answers for them.
+| History went on ahead of it: it was the read-mostly half of C7 and needed no
+| re-flow to speak of, so it took `mountWorkspace(..., { canCreate: false })`
+| and the flag.
 |
 | C5 changed this file by more than a flag: it **removed the `ledger` key**, and
 | that is the only removal any of these steps makes. Do not put it back. The
@@ -484,7 +484,10 @@ return [
         'permission' => 'READ:TENANTS',
         'workspace' => false,
         'group' => 'setup',
-        'enabled' => false,
+        // Converted (C7): opens on the provisioning form, with the platform's
+        // workshops behind "Show list" and suspend, reactivate and delete on
+        // the row and in the drawer.
+        'enabled' => true,
     ],
 
     /*

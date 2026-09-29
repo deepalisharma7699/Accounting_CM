@@ -5,6 +5,7 @@ namespace App\Repositories\Eloquent;
 use App\Models\Item;
 use App\Models\ItemVariant;
 use App\Repositories\Contracts\ItemRepositoryInterface;
+use App\Support\SearchTerms;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Collection;
 
@@ -96,26 +97,34 @@ class EloquentItemRepository implements ItemRepositoryInterface
 
         $direction = strtolower((string) ($filters['direction'] ?? 'asc')) === 'desc' ? 'desc' : 'asc';
 
-        return Item::query()
-            ->when(
-                filled($filters['search'] ?? null),
-                fn ($query) => $query->where(function ($query) use ($filters) {
-                    $term = '%'.$filters['search'].'%';
+        $patterns = SearchTerms::patterns($filters['search'] ?? null);
 
-                    $query->where('name', 'like', $term)
-                        ->orWhere('code', 'like', $term)
-                        ->orWhere('hsn_sac', 'like', $term)
-                        // Through the master now that brand is a row rather than
-                        // a typed string. Somebody searching "Crompton" is after
-                        // the make, and the make lives one join away.
-                        ->orWhereHas('brand', fn ($brand) => $brand->where('name', 'like', $term))
-                        // A fitter searching for "1440" is looking for a motor by
-                        // its speed, which lives on the variant. Without this the
-                        // catalogue is only searchable by family name, which is
-                        // the one thing nobody remembers.
-                        ->orWhereHas('variants', fn ($variants) => $variants
-                            ->where('sku', 'like', $term)
-                            ->orWhere('label', 'like', $term));
+        return Item::query()
+            // One group per typed word, ANDed, because "crompton 1440" names a
+            // make on the item and a speed on the variant and no column holds
+            // both — matched as one phrase it found nothing, so each further word
+            // emptied the list instead of narrowing it. Within a word any column
+            // will do. See {@see \App\Support\SearchTerms}.
+            ->when(
+                $patterns !== [],
+                fn ($query) => $query->where(function ($query) use ($patterns) {
+                    foreach ($patterns as $term) {
+                        $query->where(fn ($word) => $word
+                            ->where('name', 'like', $term)
+                            ->orWhere('code', 'like', $term)
+                            ->orWhere('hsn_sac', 'like', $term)
+                            // Through the master now that brand is a row rather
+                            // than a typed string. Somebody searching "Crompton"
+                            // is after the make, and the make lives one join away.
+                            ->orWhereHas('brand', fn ($brand) => $brand->where('name', 'like', $term))
+                            // A fitter searching for "1440" is looking for a motor
+                            // by its speed, which lives on the variant. Without
+                            // this the catalogue is only searchable by family
+                            // name, which is the one thing nobody remembers.
+                            ->orWhereHas('variants', fn ($variants) => $variants
+                                ->where('sku', 'like', $term)
+                                ->orWhere('label', 'like', $term)));
+                    }
                 })
             )
             // The caller resolves the descendants, so "Motors" means motors and

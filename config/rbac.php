@@ -31,6 +31,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Platform-only Resources
+    |--------------------------------------------------------------------------
+    |
+    | Grants over these resources mean authority across workshops, not within
+    | one. A role that belongs to a workshop may never carry them, whoever
+    | writes it — otherwise a workshop could mint itself a way to administer
+    | every other workshop.
+    |
+    */
+
+    'platform_only_resources' => ['TENANTS'],
+
+    /*
+    |--------------------------------------------------------------------------
     | Permission Cache
     |--------------------------------------------------------------------------
     |

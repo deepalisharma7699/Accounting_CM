@@ -868,7 +868,7 @@ unchanged.
 | ~~**C4**~~ ✅ | Jobs | `jobs` | Receive-a-motor form | Retired `/bills/new`; M19's edit, delete and attribution |
 | ~~**C5**~~ ✅ | Accounting + Ledger | `accounts` (`ledger` retired) | Account form | Trial balance on a card |
 | **C6** | Uploads | `uploads` | Drop target | — |
-| **C7** | Workshops | `tenants` | Provision form | — |
+| ~~**C7**~~ ✅ | Workshops | `tenants` | Provision form | Sortable columns; the one card a platform administrator sees |
 | **C8** | — | — | — | The workshop-day test |
 
 ## What every step does
@@ -1684,9 +1684,10 @@ C4    Jobs                               ✅  the trade itself; retired
 C5    Accounting + Ledger, merged        ✅  an expense head of the workshop's
                                             own, and a trial balance that
                                             reconciles. The `ledger` key is gone
-C6    Uploads                            ← next
-C7    Workshops                            History went early, 7 Sep — it
-                                            needed no re-flow to speak of
+C6    Uploads                            ← next (the last card off)
+C7    Workshops                          ✅  the platform can provision, suspend
+                                            and reactivate a workshop; History
+                                            went early, 7 Sep
 C8    Verification — one workshop day
 ════════════ then ══════════════════════════
 M15   AI capture agent                      the PRD's headline, built last

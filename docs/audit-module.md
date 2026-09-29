@@ -231,7 +231,7 @@ the right word, and it appears in the query string, the enum and the index.
 | Not audited | Why |
 | --- | --- |
 | Transactions, journal entries, stock movements | Already immutable, with `created_by` and `posted_at` on the transaction. An entry here would restate what the ledger already proves |
-| Roles and permissions | Platform-defined: one role belongs to every workshop at once, so there is no workshop whose history it belongs in |
+| Roles and permissions | Permissions are platform-defined. Roles *were* too, and are the workshop's own since 19 September 2026 — auditing them is now unbuilt work rather than a decision. See [tenancy-module.md](tenancy-module.md) |
 | A platform administrator's own user record | They are a member of no workshop, so an edit to their name has no workshop's history to belong in. `AuditRecorder::tenantFor()` returns null and the entry is dropped |
 | An attachment's `status` | It moves from `pending` to `ready`, but nobody decides it — a queued job writes it. The same exclusion the lockout counters get |
 | Reads | Nobody has asked for it, and a row per page view would bury every row that matters. Worth revisiting if a customer's compliance regime demands it |

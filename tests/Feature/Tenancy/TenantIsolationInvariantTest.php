@@ -3,6 +3,7 @@
 namespace Tests\Feature\Tenancy;
 
 use App\Models\Concerns\BelongsToTenant;
+use App\Models\Role;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -41,6 +42,7 @@ class TenantIsolationInvariantTest extends TestCase
      */
     private const EXEMPT = [
         User::class => 'Authentication must resolve a user before a tenant exists, so users are scoped explicitly in EloquentUserRepository and covered by TenantIsolationTest.',
+        Role::class => 'A role is either the platform\'s (NULL tenant_id, shared by every workshop) or one workshop\'s. A global scope would also filter the customRole relation the authorization path loads, so roles are scoped explicitly in EloquentRoleRepository and covered by RoleTenancyTest.',
     ];
 
     #[Test]

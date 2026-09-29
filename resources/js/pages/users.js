@@ -89,6 +89,12 @@ const allInList = (selector) => $$(selector, listRoot);
 /**
  * The role catalogue, for the form's picker and the list's filter.
  *
+ * Whichever scope the caller is in, and only that one: `/roles` answers with the
+ * platform's roles for a platform user and a workshop's own for anybody inside
+ * one — no filter is sent, and none exists. So the platform administrator's
+ * Users card never offers a workshop's role, which `UserService` would refuse
+ * anyway (§6.1). Workshop users are created from the Workshops drawer.
+ *
  * A caller holding READ:USERS without READ:ROLES simply gets neither rather
  * than a broken page: they can still read the directory, and the endpoint
  * refuses the roles request regardless (§6.1).

@@ -2650,18 +2650,63 @@ class PagesRenderTest extends TestCase
         $this->assertStringNotContainsString('name="permission_ids" value=', $content);
     }
 
-    public function test_the_tenants_module_renders_its_table_and_owner_block(): void
+    public function test_the_tenants_module_opens_on_a_provisioning_form_with_its_list_behind_it(): void
     {
-        $view = $this->view('modules.tenants');
+        $declared = Modules::declared();
 
-        $view->assertSee('id="tenants-body"', escape: false)
-            ->assertSee('id="tenant-form"', escape: false)
-            ->assertSee('id="tenant-owner-block"', escape: false)
-            ->assertSee('data-requires-permission="WRITE:TENANTS"', escape: false);
+        $this->assertTrue($declared['tenants']['enabled']);
+        $this->assertFalse($declared['tenants']['workspace'], 'Workshops is the platform surface, not a workshop\'s own books.');
+        $this->assertSame('READ:TENANTS', $declared['tenants']['permission']);
+
+        // Fetched, not rendered: the route answers only while the card is on.
+        $content = $this->get('/modules/tenants')->assertOk()->getContent();
+
+        // §2A — one form surface and one list surface, and the form is written
+        // once and moved between the level-1 slot and the edit dialog.
+        $this->assertSame(1, substr_count($content, 'data-ws-form'));
+        $this->assertSame(1, substr_count($content, 'data-ws-list'));
+        $this->assertSame(1, substr_count($content, 'id="tenant-form"'));
+        $this->assertStringContainsString('data-tenant-form-slot', $content);
+        $this->assertStringContainsString('data-tenant-modal-slot', $content);
+
+        // The owner block is only offered when provisioning.
+        $this->assertStringContainsString('id="tenant-owner-block"', $content);
+
+        // The old modal-create button is gone: the switch control belongs to the workspace.
+        $this->assertStringNotContainsString('id="new-tenant"', $content);
+
+        $this->assertStringContainsString('id="tenants-body"', $content);
+        $this->assertStringContainsString('id="tenant-drawer"', $content);
+
+        // The drawer carries the workshop's people, roles and settings — each
+        // section behind its own tab, fetched when opened.
+        foreach (['details', 'users', 'roles', 'settings'] as $tab) {
+            $this->assertStringContainsString('data-tenant-tab="'.$tab.'"', $content);
+            $this->assertStringContainsString('data-tenant-panel="'.$tab.'"', $content);
+        }
+
+        $this->assertStringContainsString('id="tenant-user-form"', $content);
+        $this->assertStringContainsString('id="tenant-settings-form"', $content);
+
+        // Writing a role *for* a workshop happens here, because a role belongs
+        // to one workshop and the platform's own Roles card does not list it.
+        $this->assertStringContainsString('id="tenant-role-form"', $content);
+        $this->assertStringContainsString('id="tenant-role-matrix"', $content);
+        $this->assertStringContainsString('data-requires-permission="WRITE:ROLES"', $content);
+
+        // The permission catalogue is fetched, never rendered — it grows with
+        // every module, and a copy here would stop matching what is enforced.
+        $this->assertStringNotContainsString('name="permission_ids" value=', $content);
+
+        // The role picker is filled from the workshop's own list, never rendered.
+        $this->assertStringNotContainsString('<option value="OWNER"', $content);
+        $this->assertStringContainsString('data-requires-permission="WRITE:TENANTS"', $content);
+        $this->assertStringContainsString('data-requires-permission="UPDATE:TENANTS"', $content);
+        $this->assertStringContainsString('data-requires-permission="DELETE:TENANTS"', $content);
 
         // Status options come from the enum, so the filter cannot drift from it.
         foreach (TenantStatus::cases() as $status) {
-            $view->assertSee('value="'.$status->value.'"', escape: false);
+            $this->assertStringContainsString('value="'.$status->value.'"', $content);
         }
     }
 

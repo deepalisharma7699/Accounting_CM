@@ -99,6 +99,33 @@ function fromServiceVariant(item, variant) {
 }
 
 /**
+ * How many matches a response left behind.
+ *
+ * Each of the three requests below is capped, and the caps are deliberate — a
+ * one-letter term must not tip the whole shelf into a 320px scroller. But a cap
+ * that is not *stated* is the same to the person at the counter as a catalogue
+ * that has lost the record: a workshop holding twenty capacitors saw twelve,
+ * with nothing anywhere saying the other eight existed. The endpoints have
+ * always answered `meta.pagination.total` over the whole matched set; the picker
+ * simply threw it away.
+ *
+ * Counted against what each request *returned* rather than against the rendered
+ * rows, because a service family is expanded into one row per variant on the way
+ * out — comparing the total with `rows.length` would report a shortfall that had
+ * already been shown.
+ */
+function notShown(result) {
+    if (result.status !== 'fulfilled') return 0;
+
+    const shown = result.value.data?.length ?? 0;
+    // Absent for the empty stand-ins a missing grant resolves to, and `shown` is
+    // then the honest answer rather than nought.
+    const total = result.value.meta?.pagination?.total ?? shown;
+
+    return Math.max(0, total - shown);
+}
+
+/**
  * Search both sources for one term.
  *
  * `allSettled`, so a user without READ:STOCK still gets the services and a user
@@ -182,7 +209,7 @@ export async function searchCatalogue(term) {
         bare.value.data.forEach((item) => rows.push(needsVariant(item)));
     }
 
-    return rows;
+    return { rows, hidden: notShown(stock) + notShown(services) + notShown(bare) };
 }
 
 /**
@@ -274,7 +301,7 @@ export function mountItemPicker(host, {
     const input = $('[data-item-input]', host);
     const results = $('[data-item-results]', host);
 
-    const state = { rows: [], active: -1, open: false };
+    const state = { rows: [], hidden: 0, active: -1, open: false };
 
     const close = () => {
         state.open = false;
@@ -290,6 +317,18 @@ export function mountItemPicker(host, {
         : '';
 
     const paint = () => {
+        /*
+        | What the cap left out, said where the cap is felt. Not an option: it
+        | carries no `data-index` and no `role="option"`, so it is outside the
+        | arrow-key cycle and inert to the click handler, which is what keeps
+        | Enter landing on a row somebody can actually put on the bill.
+        */
+        const moreRow = state.hidden > 0
+            ? `<li role="presentation" class="border-t border-border px-3 py-2 text-xs text-muted-foreground">
+                   ${state.hidden} more not shown — type another word to narrow.
+               </li>`
+            : '';
+
         results.innerHTML = (state.rows.length
             ? state.rows.map((row, index) => `
                 <li role="option" aria-selected="${index === state.active}" data-index="${index}"
@@ -319,7 +358,7 @@ export function mountItemPicker(host, {
                         ${stockBadge(row)}
                     </span>
                 </li>`).join('')
-            : `<li class="px-3 py-3 text-sm text-muted-foreground">Nothing matched.</li>`) + createRow;
+            : `<li class="px-3 py-3 text-sm text-muted-foreground">Nothing matched.</li>`) + moreRow + createRow;
 
         state.open = true;
         results.classList.remove('hidden');
@@ -334,7 +373,10 @@ export function mountItemPicker(host, {
         }
 
         try {
-            state.rows = await searchCatalogue(term);
+            const { rows, hidden } = await searchCatalogue(term);
+
+            state.rows = rows;
+            state.hidden = hidden;
             state.active = state.rows.length ? 0 : -1;
             paint();
         } catch (error) {

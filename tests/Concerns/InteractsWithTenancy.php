@@ -19,7 +19,12 @@ trait InteractsWithTenancy
     /**
      * @param  array<int, array{0: string, 1: string}>  $grants
      */
-    abstract protected function roleWith(array $grants, string $name = 'Test Role', bool $system = false): Role;
+    abstract protected function roleWith(
+        array $grants,
+        string $name = 'Test Role',
+        bool $system = false,
+        Tenant|int|null $tenant = null,
+    ): Role;
 
     protected function tenantContext(): TenantContext
     {
@@ -64,9 +69,18 @@ trait InteractsWithTenancy
     {
         $tenant = Tenant::factory()->create();
 
-        // Role names carry a unique index, so distinct tenants in one test
-        // need distinct role names.
-        $role = $this->roleWith($grants, $roleName ?? 'Role '.Str::upper(Str::random(8)));
+        // The workshop's own role, never a platform one: a platform role is not
+        // visible to the workshop, cannot be assigned to somebody inside it, and
+        // would make every listing assertion in a test disagree with production.
+        //
+        // Names are unique per scope now, so two workshops could share one — the
+        // random name is kept because a test naming both is clearer to read than
+        // two rows called "Test Role".
+        $role = $this->roleWith(
+            $grants,
+            $roleName ?? 'Role '.Str::upper(Str::random(8)),
+            tenant: $tenant,
+        );
 
         $user = User::factory()->forTenant($tenant)->withRole($role)->create();
 

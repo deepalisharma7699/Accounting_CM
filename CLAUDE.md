@@ -304,20 +304,31 @@ bind future work, and update the relevant file in `docs/` otherwise.
 
 ## 10. Local development credentials
 
-10.1 The local development database has one workshop owner, and these are its
+10.1 The local development database has two logins, and these are their
 credentials. **Do not change them.** Signing in to check a change is a normal
-part of the work; resetting the password to do it is not, because the next
+part of the work; resetting a password to do it is not, because the next
 person to open the project would find a login that no longer works.
 
 | Account | Email | Password | Scope |
 |---|---|---|---|
-| Workshop owner | `owner@demo.test` | `Password123!` | Tenant 1 — "Demo Workshop" |
+| Super admin (platform administrator) | `admin@example.com` | `Admin@12345` | Platform-level, no workshop (`tenant_id` NULL) |
+| Workshop owner | `owner@choudharymotors.test` | `Owner@12345` | Tenant 1 — "Choudhary Motors" |
 
-10.2 These are for the local development database only. They are not seeded, not
-used by the test suite, and must never be a valid credential anywhere a real
-workshop's books are kept.
+10.2 These are for the local development database only. They must never be a
+valid credential anywhere a real workshop's books are kept.
 
-10.3 Do not create extra accounts to test with, and do not edit demo records as a
+10.3 **Migrations, seeders, factories and tests must not touch these accounts.**
+No migration may delete, recreate, re-hash or reset the `password`, `email`,
+`status`, `tenant_id` or role of either user, and none may delete or renumber
+tenant 1. `migrate:fresh`, `migrate:refresh`, `db:wipe` and `db:seed` destroy or
+overwrite them, so do not run them against the local database; if one is truly
+needed, say so first and re-create both accounts with the values above
+afterwards. `AdminUserSeeder` never resets an existing admin's password
+(`ADMIN_PASSWORD` in `.env` is only used when the account does not yet exist),
+and that behaviour must be kept. Tests run against their own database and must
+not use these emails.
+
+10.4 Do not create extra accounts to test with, and do not edit these records as a
 side effect of testing. If a check needs a record written, write one and remove
 it afterwards; if a check needs a record changed, say so first.
 
@@ -720,15 +731,54 @@ one file.
 **Authority is not the same question as membership.** **Users** and **Roles**
 are the administration pair, and neither is `workspace`. Users is tenant-scoped
 at the repository, so an owner reads their own staff and a platform admin reads
-the platform's — the card is right for both. Roles are defined for the whole
-platform: `OWNER` holds `READ:ROLES` and nothing else, so that module opens on
-its **list**, with `canCreate: false` and no switch control at all, and its edit
-and delete controls stripped by the permission gates. That is not an oversight
-to be fixed by widening the card — the grant lives in `RoleSeeder`, and a tenant
-creating a role would be creating it for every workshop. `ADMIN` writes there.
-System roles (`is_system_role`) are refused by the API for edit and delete, and
-their controls are **disabled rather than hidden**, so the reason stays where
-the question is asked.
+the platform's — the card is right for both.
+
+**Roles are tenant-based, and the two scopes are two separate lists.**
+`roles.tenant_id` NULL is a *platform* role — what the platform administrator's
+own Users and Roles cards run on, and `ADMIN` is the only one seeded. Anything
+else belongs to one workshop, which is given its own **OWNER, MANAGER,
+ACCOUNTANT and DATA_ENTRY** the moment it is provisioned, from the blueprints in
+`App\Services\Rbac\RoleDefaults` by way of `RoleProvisioner` — alongside its
+chart of accounts and its catalogue, in the same transaction and for the same
+kind of reason: a workshop with no roles has nothing to make a second user into.
+
+**Neither scope can see the other**, and that is the point. A workshop lists its
+own roles and nothing else — not another workshop's, and not the platform's
+either; both are a **404, never a 403**, so nothing confirms they exist. The
+platform's own card lists the platform's roles and no workshop's. This replaced
+an arrangement where `OWNER` and `DATA_ENTRY` were single shared rows listed on
+both, so deleting a role from the platform's card emptied it out of every
+workshop at once — which is exactly what it looked like, and exactly what it did.
+
+The platform reaches a workshop's roles the way it reaches its users: through
+`/api/v1/tenants/{tenant}/roles`, i.e. the **Roles section of the Workshops
+drawer**, where it can create, edit and delete a role *for that workshop*. Do not
+add a scope filter to `/roles` to do this instead — the tenant context decides
+the list, and a filter would be a second way to ask one question. Scoping is in
+`EloquentRoleRepository`, not a global scope, for the reason `users` has none:
+the authorization path loads `customRole`, and a scope on it would silently
+strip a user's grants. **What a workshop role may contain is bounded, in one
+place** — `PermissionService::grantableFor()`, which both draws the permission
+matrix and refuses a hand-crafted request: no platform-level grant (`TENANTS`,
+the wildcard), and nothing the writer does not hold themselves. It is decided by
+the role being written, not by who writes it, so the platform administrator
+editing a workshop's role is bound by the same rule. System roles are refused by
+the API for edit and delete, and their controls are **disabled rather than
+hidden**, so the reason stays where the question is asked.
+
+**The platform works inside a workshop through `/tenants/{tenant}/…`, and it is
+the same controllers.** `ActAsTenant` (`tenant.act`) re-points the tenant context
+at `{tenant}` for users, roles, permissions and workspace settings — so every
+existing rule applies unchanged and every write lands in *that workshop's*
+history. It refuses anybody who belongs to a workshop, needs `READ:TENANTS` plus
+the ordinary grant for the thing being done, and consumes the `{tenant}` route
+parameter (Laravel passes route parameters by position, so left in it would be
+read as a user id). It is deliberately not on the books: sales, stock and the
+ledger stay the workshop's own. The Workshops drawer's Users, Roles and Settings
+sections are its only caller — do not build a second way in. A user takes the
+workshop of whoever creates them and that is write-once, so a user created from
+the platform's own Users card belongs to no workshop; create workshop users
+through the drawer.
 
 **One card, four workspaces, and the shared renderer used four times.**
 **Staff** — M22 — is employees, attendance, payroll and advances: four things a
@@ -859,27 +909,23 @@ There is **no charting library**, and columns are HTML rather than SVG because a
 SVG `viewBox` scales its text and renders microscopic labels on a phone. See
 [insights-module.md](docs/insights-module.md).
 
-**What is left — two modules, both of them built.** **Items**, **Stock**,
+**What is left — one module, and it is built.** **Items**, **Stock**,
 **Purchase**, **Sales**, **Vendors**, **Customers**, **Users**, **Roles**,
 **Staff**, **Insights**, **Settings** (`workspace`), **Opening balances**
 (`opening`), **Expenses** (`bills`), **Transactions** (`journal`), **Jobs**,
-**Accounting** (`accounts`) and **History** (`audit`) have been converted and are
-on. The other two — **Uploads** and **Workshops** (`tenants`) — are
+**Accounting** (`accounts`), **History** (`audit`) and **Workshops** (`tenants`)
+have been converted and are on. The last one — **Uploads** — is
 `'enabled' => false`.
 
 Be clear about what that means, because it is the most misread fact in this
-repository: **none of them is unfinished work.** Each has a complete backend, a
+repository: **it is not unfinished work.** It has a complete backend, a
 complete `pages/*.js`, a fragment view in `resources/views/modules/{key}.blade.php`
-and feature tests. They are off for one reason only — they still open on a list
-with a modal create instead of the §2A flow. **Their APIs answer normally**; it
+and feature tests. It is off for one reason only — it still opens on a list
+with a modal create instead of the §2A flow. **Its API answers normally**; it
 is the card and the fragment route that are shut, so this is a reachability gap
 in the UI and never a security boundary. What that costs a workshop today — no
-photographed bill to keep, no way to provision a workshop, no audit trail — is
-set out module by module in
-[hidden-modules.md](docs/hidden-modules.md). **Read it before converting one**:
-some of them have had part of their job taken over by a card that is already
-on, and converting the whole of the old screen would rebuild what Sales,
-Purchase and Insights already do (§5.1).
+photographed bill to keep — is set out in
+[hidden-modules.md](docs/hidden-modules.md). **Read it before converting it.**
 
 Coverage for a module that is off stays in `PagesRenderTest`, rendered with
 `$this->view()` rather than fetched, because its fragment route answers 404 while
@@ -898,7 +944,7 @@ with Bills off its P&L has no overheads:
 ```
 C1  Settings + Opening balances ✅ C5  Accounting + Ledger, merged  ✅
 C2  Bills → expenses only       ✅ C6  Uploads                      ←
-C3  Transactions                ✅ C7  Workshops   (History ✅)
+C3  Transactions                ✅ C7  Workshops   (History ✅) ✅
 C4  Jobs                        ✅ C8  One workshop-day test
 ```
 
@@ -908,7 +954,7 @@ plan for the product — `modified-flow-plan.md` is a historical record and
 `hidden-modules.md` is the standing account of what is unreachable.
 
 The **order** the rest of it runs in is
-[execution-plan.md](docs/execution-plan.md): C6, then C7 — Workshops alone, now
+[execution-plan.md](docs/execution-plan.md): C6, then C7 (done) — Workshops alone, now
 that History has gone on — then C8 moved up to sit immediately after it, then
 seven open points (P1–P7), of which **P2 is done** — the party
 statement that no screen calls, the advance receipt, the parked-draft worklist,

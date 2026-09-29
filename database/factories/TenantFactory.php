@@ -6,6 +6,7 @@ use App\Enums\TenantStatus;
 use App\Models\Tenant;
 use App\Services\Accounting\ChartOfAccountProvisioner;
 use App\Services\Inventory\CatalogueProvisioner;
+use App\Services\Rbac\RoleProvisioner;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Str;
 
@@ -15,15 +16,21 @@ use Illuminate\Support\Str;
 class TenantFactory extends Factory
 {
     /**
-     * A workshop is not valid without its chart of accounts *or* its catalogue
-     * vocabulary — TenantService seeds both inside the same transaction that
-     * creates the tenant — so the factory produces both too. A test that built a
-     * tenant with no books, or with no units and no categories, would be testing
-     * a state production can never reach.
+     * A workshop is not valid without its chart of accounts, its catalogue
+     * vocabulary *or* its roles — TenantService seeds all three inside the same
+     * transaction that creates the tenant — so the factory produces all three
+     * too. A test that built a tenant with no books, with no units and no
+     * categories, or with nobody it could make a second user into, would be
+     * testing a state production can never reach.
      *
      * The catalogue matters as much as the chart now that the item types and
      * units are rows: without it there is no category to file a product under,
-     * and the importer would refuse every line of a valid file.
+     * and the importer would refuse every line of a valid file. The roles matter
+     * for the same kind of reason: they belong to the workshop, so a workshop
+     * with none has no role to give anybody. Their *grants* depend on the
+     * permission catalogue being seeded — a test that cares should call
+     * seedRoleCatalogue() first, or the roles come out empty, which is harmless
+     * and idempotent either way.
      *
      * Note for anyone force-deleting a factory tenant: chart_of_accounts,
      * units and item_categories are all restrictOnDelete, so they have to go
@@ -34,6 +41,7 @@ class TenantFactory extends Factory
         return $this->afterCreating(function (Tenant $tenant): void {
             app(ChartOfAccountProvisioner::class)->seedFor($tenant);
             app(CatalogueProvisioner::class)->seedFor($tenant);
+            app(RoleProvisioner::class)->seedFor($tenant);
         });
     }
 

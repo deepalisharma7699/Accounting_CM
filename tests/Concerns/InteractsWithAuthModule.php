@@ -4,6 +4,7 @@ namespace Tests\Concerns;
 
 use App\Models\Permission;
 use App\Models\Role;
+use App\Models\Tenant;
 use App\Models\User;
 use App\Services\Auth\TokenService;
 use Database\Seeders\PermissionSeeder;
@@ -12,10 +13,13 @@ use Database\Seeders\RoleSeeder;
 trait InteractsWithAuthModule
 {
     /**
-     * Seed the real permission catalogue and system roles.
+     * Seed the real permission catalogue and the platform's system roles.
      *
-     * Needed by anything that depends on a seeded role existing by name —
-     * workshop sign-up, which attaches OWNER to the first user, above all.
+     * The catalogue is the half most tests want: a workshop's own roles are
+     * stamped out by RoleProvisioner (which TenantFactory runs) and come out
+     * with no grants at all unless the permissions exist first. RoleSeeder
+     * itself only creates ADMIN, which is the platform's.
+     *
      * Most tests build a bespoke role with roleWith() instead and can skip it.
      */
     protected function seedRoleCatalogue(): void
@@ -26,15 +30,28 @@ trait InteractsWithAuthModule
     /**
      * A role holding exactly the given grants.
      *
+     * `$tenant` decides the scope, and it matters: a role with no tenant is a
+     * *platform* role, which a workshop can neither see nor be given. A role for
+     * somebody inside a workshop has to be that workshop's — see
+     * {@see \Tests\Concerns\InteractsWithTenancy::tenantWithUser()}, which
+     * passes one.
+     *
      * @param  array<int, array{0: string, 1: string}>  $grants
      */
-    protected function roleWith(array $grants, string $name = 'Test Role', bool $system = false): Role
-    {
-        // Keyed on the slug rather than created outright, so a test may both
-        // seed the real catalogue and ask for a role the seeder already made
-        // — ADMIN, most often — without tripping the unique index.
+    protected function roleWith(
+        array $grants,
+        string $name = 'Test Role',
+        bool $system = false,
+        Tenant|int|null $tenant = null,
+    ): Role {
+        $tenantId = $tenant instanceof Tenant ? (int) $tenant->getKey() : $tenant;
+
+        // Keyed on the scope *and* the slug rather than created outright, so a
+        // test may both seed the real catalogue and ask for a role that already
+        // exists — ADMIN, most often, or one of a factory workshop's four —
+        // without tripping the per-scope unique index.
         $role = Role::updateOrCreate(
-            ['slug' => Role::slugFor($name)],
+            ['tenant_id' => $tenantId, 'slug' => Role::slugFor($name)],
             [
                 'name' => $name,
                 'description' => null,

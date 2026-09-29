@@ -6,18 +6,20 @@ use Database\Factories\RoleFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
 /**
  * @property int $id
+ * @property int|null $tenant_id
  * @property string $name
  * @property string $slug
  * @property string|null $description
  * @property bool $is_system_role
  */
-#[Fillable(['name', 'slug', 'description', 'is_system_role'])]
+#[Fillable(['tenant_id', 'name', 'slug', 'description', 'is_system_role'])]
 class Role extends Model
 {
     /** @use HasFactory<RoleFactory> */
@@ -28,6 +30,16 @@ class Role extends Model
         return [
             'is_system_role' => 'boolean',
         ];
+    }
+
+    /**
+     * The workshop this role belongs to, or null for a platform role.
+     *
+     * @return BelongsTo<Tenant, $this>
+     */
+    public function tenant(): BelongsTo
+    {
+        return $this->belongsTo(Tenant::class);
     }
 
     /**
@@ -52,6 +64,16 @@ class Role extends Model
     public static function slugFor(string $name): string
     {
         return str($name)->slug('_')->upper()->value();
+    }
+
+    /**
+     * A platform role belongs to the platform's own panel; anything else is one
+     * workshop's own. The two scopes are separate lists — neither sees the
+     * other — so this is "whose list is it on", not "is it shared".
+     */
+    public function isPlatformRole(): bool
+    {
+        return $this->tenant_id === null;
     }
 
     public function isSystemRole(): bool

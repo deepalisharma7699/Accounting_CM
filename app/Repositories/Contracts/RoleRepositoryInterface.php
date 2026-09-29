@@ -8,10 +8,18 @@ use Illuminate\Database\Eloquent\Collection;
 
 interface RoleRepositoryInterface
 {
+    /**
+     * A role, if the current context may see it. Another workshop's role is
+     * simply not found — never "forbidden", which would confirm it exists.
+     */
     public function findById(int $id): ?Role;
 
-    public function findBySlug(string $slug): ?Role;
-
+    /**
+     * Whether the name (or its slug) is taken in the scope a new role would
+     * land in — this workshop's roles, or the platform's. The two scopes are
+     * independent, exactly as the unique indexes are, so a workshop may name a
+     * role whatever the platform already calls one of its own.
+     */
     public function nameExists(string $name, ?int $exceptRoleId = null): bool;
 
     /**

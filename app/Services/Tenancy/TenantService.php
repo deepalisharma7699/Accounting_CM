@@ -9,11 +9,11 @@ use App\Exceptions\ResourceNotFoundException;
 use App\Exceptions\Tenancy\NoWorkspaceException;
 use App\Models\Tenant;
 use App\Models\User;
-use App\Repositories\Contracts\RoleRepositoryInterface;
 use App\Repositories\Contracts\TenantRepositoryInterface;
 use App\Repositories\Contracts\UserRepositoryInterface;
 use App\Services\Accounting\ChartOfAccountProvisioner;
 use App\Services\Inventory\CatalogueProvisioner;
+use App\Services\Rbac\RoleProvisioner;
 use App\Services\Auth\TokenService;
 use App\Support\Tenancy\TenantContext;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
@@ -34,11 +34,11 @@ class TenantService
     public function __construct(
         private readonly TenantRepositoryInterface $tenants,
         private readonly UserRepositoryInterface $users,
-        private readonly RoleRepositoryInterface $roles,
         private readonly TokenService $tokens,
         private readonly TenantContext $context,
         private readonly ChartOfAccountProvisioner $chartOfAccounts,
         private readonly CatalogueProvisioner $catalogue,
+        private readonly RoleProvisioner $roles,
     ) {}
 
     /* ---------------------------------------------------------------------
@@ -103,20 +103,26 @@ class TenantService
         }
 
         $ownerRoleSlug = (string) config('tenancy.owner_role', 'OWNER');
-        $ownerRole = $this->roles->findBySlug($ownerRoleSlug);
 
-        if ($ownerRole === null) {
-            // Loudly, and before anything is written. An owner with no role
-            // can sign in and then do nothing at all, which presents as a
-            // baffling support ticket rather than as the install error it is.
-            // Same reasoning as AdminUserSeeder refusing to run without ADMIN.
-            throw new RuntimeException(
-                "The [{$ownerRoleSlug}] role is missing, so a workspace owner cannot be created. Run `php artisan db:seed`."
-            );
-        }
-
-        return DB::transaction(function () use ($tenantData, $ownerData, $email, $ownerRole) {
+        return DB::transaction(function () use ($tenantData, $ownerData, $email, $ownerRoleSlug) {
             $tenant = $this->createTenant($tenantData);
+
+            // The workshop's *own* OWNER, minted by createTenant() a line above
+            // — never the platform's. Handing the first user a platform role
+            // was the bug this whole change exists to fix: it is the same row
+            // for every workshop, so it appears in every workshop's list and
+            // deleting it from one empties it from all of them.
+            $ownerRole = $this->roles->findFor($tenant, $ownerRoleSlug);
+
+            if ($ownerRole === null) {
+                // Loudly, and inside the transaction, so nothing is left
+                // behind. An owner with no role can sign in and then do
+                // nothing at all, which presents as a baffling support ticket
+                // rather than as the install error it is.
+                throw new RuntimeException(
+                    "The [{$ownerRoleSlug}] default role was not created for this workshop, so its owner cannot be. Check ".RoleProvisioner::class.' and that the permission catalogue is seeded.'
+                );
+            }
 
             // Run the rest as the new tenant. Nothing below strictly needs it
             // yet, but this is the seam where per-tenant bootstrapping lands —
@@ -338,6 +344,12 @@ class TenantService
         // breath: a workshop with no units and no categories cannot record a
         // product at all, and the create form would open on an empty dropdown.
         $this->catalogue->seedFor($tenant);
+
+        // And its roles — OWNER, MANAGER, ACCOUNTANT, DATA_ENTRY — which are
+        // this workshop's own rows and nobody else's. Same breath again, and
+        // for the same kind of reason: a workshop with no roles cannot be given
+        // a second user, because there is nothing to give them.
+        $this->roles->seedFor($tenant);
 
         return $tenant;
     }

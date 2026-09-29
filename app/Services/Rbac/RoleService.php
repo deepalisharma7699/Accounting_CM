@@ -3,11 +3,14 @@
 namespace App\Services\Rbac;
 
 use App\Exceptions\ConflictException;
+use App\Exceptions\Rbac\PlatformRoleImmutableException;
+use App\Exceptions\Rbac\RoleGrantNotAllowedException;
 use App\Exceptions\Rbac\RoleInUseException;
 use App\Exceptions\Rbac\SystemRoleImmutableException;
 use App\Exceptions\ResourceNotFoundException;
 use App\Models\Role;
 use App\Repositories\Contracts\RoleRepositoryInterface;
+use App\Support\Tenancy\TenantContext;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -16,6 +19,14 @@ use Illuminate\Support\Facades\Log;
  * Custom role management. System roles (ADMIN) are read-only here by design:
  * if the seeded superuser role could be edited through the API, a single
  * compromised admin session could silently lock everyone else out.
+ *
+ * Roles are tenant-based, and the two scopes are two separate lists. A workshop
+ * creates and edits roles of its own and sees nothing else — not another
+ * workshop's, and not the platform's either. The platform's own panel sees the
+ * platform's roles, and reaches a workshop's through `/tenants/{tenant}/roles`,
+ * where the context is re-pointed and every rule below applies unchanged. What a
+ * workshop role may *contain* is bounded — see
+ * {@see PermissionService::grantableFor()}.
  */
 class RoleService
 {
@@ -23,6 +34,7 @@ class RoleService
         private readonly RoleRepositoryInterface $roles,
         private readonly PermissionService $permissions,
         private readonly AuthorizationService $authorization,
+        private readonly TenantContext $context,
     ) {}
 
     /**
@@ -54,7 +66,12 @@ class RoleService
             );
         }
 
-        $permissionIds = $this->assertPermissionsExist($data['permission_ids'] ?? []);
+        // A role made inside a workshop is that workshop's; one made with no
+        // workshop in context is the platform's.
+        $permissionIds = $this->assertGrantable(
+            $this->assertPermissionsExist($data['permission_ids'] ?? []),
+            workshopRole: $this->context->hasTenant(),
+        );
 
         $role = DB::transaction(function () use ($name, $data, $permissionIds) {
             $role = $this->roles->create([
@@ -111,7 +128,10 @@ class RoleService
             if (array_key_exists('permission_ids', $data)) {
                 $role = $this->roles->syncPermissions(
                     $role,
-                    $this->assertPermissionsExist($data['permission_ids'])
+                    $this->assertGrantable(
+                        $this->assertPermissionsExist($data['permission_ids']),
+                        workshopRole: ! $role->isPlatformRole(),
+                    )
                 );
             }
 
@@ -160,7 +180,10 @@ class RoleService
 
         $this->assertMutable($role, 'modified');
 
-        $role = $this->roles->syncPermissions($role, $this->assertPermissionsExist($permissionIds));
+        $role = $this->roles->syncPermissions($role, $this->assertGrantable(
+            $this->assertPermissionsExist($permissionIds),
+            workshopRole: ! $role->isPlatformRole(),
+        ));
 
         $this->authorization->flushRoleCache($role);
 
@@ -172,6 +195,45 @@ class RoleService
         if ($role->isSystemRole()) {
             throw new SystemRoleImmutableException($role->name, $operation);
         }
+
+        // Belt and braces. A workshop cannot even *see* a platform role any
+        // more — the repository's scope answers 404 before this is reached — so
+        // this is the service layer refusing on its own terms rather than
+        // trusting the layer below to have filtered. A platform role is shared,
+        // so a change would land on every workshop at once.
+        if ($role->isPlatformRole() && $this->context->hasTenant()) {
+            throw new PlatformRoleImmutableException($role->name, $operation);
+        }
+    }
+
+    /**
+     * Refuse a grant the role may not carry.
+     *
+     * Decided by the role being written, not by who is writing it: the platform
+     * administrator editing a workshop's role is bound by the same rules as the
+     * workshop's owner, because the role is the workshop's either way.
+     *
+     * @param  array<int, int>  $ids
+     * @return array<int, int>
+     */
+    private function assertGrantable(array $ids, bool $workshopRole): array
+    {
+        if ($ids === [] || ! $workshopRole) {
+            return $ids;
+        }
+
+        $allowed = $this->permissions->grantableFor(auth()->user(), workshopRole: true)->modelKeys();
+        $refused = array_diff($ids, $allowed);
+
+        if ($refused === []) {
+            return $ids;
+        }
+
+        $labels = $this->permissions->resolve(array_values($refused))['found']
+            ->map(fn ($permission) => $permission->action.':'.$permission->resource)
+            ->all();
+
+        throw new RoleGrantNotAllowedException($labels);
     }
 
     /**

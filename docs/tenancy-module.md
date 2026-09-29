@@ -17,8 +17,9 @@
 > absent rather than blanked, because a disabled Save asks somebody to work out
 > for themselves why it will not press.
 >
-> **Workshops** (the platform's list — provisioning, suspend, reactivate) is
-> still off, scheduled as C7. See [hidden-modules.md](hidden-modules.md).
+> **Workshops** (the platform's list — provisioning, suspend, reactivate) is on
+> (C7). It is `workspace => false` and gated on `READ:TENANTS`, so it is the card
+> a platform administrator sees and a workshop's owner does not.
 
 Every workshop's books are isolated from every other workshop's. This module is
 the boundary that makes that true, and Step 1 of the Phase 1 build sequence —
@@ -206,8 +207,8 @@ form whose endpoint refuses is worse than no form.
 
 Roles are **platform-global, not per-tenant**: Phase 1 needs only this fixed
 list, and `WRITE:ROLES` is held by no tenant role, so a workshop cannot create
-one for everybody. If per-tenant roles are ever needed, the change is a
-`roles.tenant_id` column and the trait.
+one for everybody. **This is historical** — per-tenant roles landed on
+19 September 2026; see "Roles are tenant-based" below.
 
 A wildcard grant is *authority, not omniscience*. The tenant boundary is
 orthogonal to permissions: a platform admin with `*`/`*` still cannot list a
@@ -420,8 +421,93 @@ alongside `InteractsWithAuthModule`, which supplies `roleWith()`.
 
 ```bash
 php artisan migrate
-php artisan db:seed        # adds the OWNER and DATA_ENTRY roles
+php artisan db:seed        # permission catalogue + the platform ADMIN role
 ```
 
 The seeded platform administrator has `tenant_id = NULL` — it exists above the
 workshops, to provision and suspend them, and owns no books.
+
+## Roles are tenant-based, and the platform works inside a workshop
+
+**Roles.** `roles.tenant_id` NULL is a platform role — the platform
+administrator's own panel, where `ADMIN` is the only seeded row. Anything else
+belongs to exactly one workshop. Name and slug are unique *per scope* — a
+generated `scope_key` (`coalesce(tenant_id, 0)`) carries the unique indexes,
+because MySQL treats NULLs as distinct — so two workshops may each have a
+"Cashier", and the platform may have one of its own as well.
+
+**The two scopes are two separate lists, and neither can see the other.**
+
+| Caller | Sees | Writes |
+|---|---|---|
+| Workshop owner | that workshop's roles, and only those | its own only |
+| Platform administrator, own panel | the platform's roles (`ADMIN`, plus any it made for its own staff) | the platform's own |
+| Platform administrator, inside a workshop | that workshop's roles | that workshop's |
+
+Another workshop's role answers **404**, never 403 — and so does a platform role
+asked for from inside a workshop, and a workshop's role asked for on the
+platform's own card. Scoping lives in `EloquentRoleRepository` rather than a
+global scope (a scope would also filter the `customRole` relation the
+authorization path loads), and `Role` is exempt from
+`TenantIsolationInvariantTest` for that reason, with `RoleTenancyTest` as its
+guard.
+
+There is deliberately **no scope filter** on `GET /roles`. Which roles it answers
+with is decided by the tenant context and nothing else; the platform asks about a
+workshop by asking `/tenants/{tenant}/roles`.
+
+### Every workshop is given four roles when it is provisioned
+
+`App\Services\Rbac\RoleDefaults` holds the blueprints and
+`App\Services\Rbac\RoleProvisioner` stamps them out, inside the same
+transaction that creates the tenant — beside `ChartOfAccountProvisioner` and
+`CatalogueProvisioner`, and for the same kind of reason: a workshop with no roles
+cannot be given a second user, because there is nothing to give them.
+`TenantFactory` runs it too, so a test workshop is the workshop production makes.
+
+| Role | What it is for |
+|---|---|
+| `OWNER` | Full control of the workshop: its people, its roles and its books. The first user gets this one. |
+| `MANAGER` | Runs the floor — jobs, parties, catalogue, stock, staff, transactions, the ledger. No `USERS`, no `ROLES`, no `WORKSPACE`, no `AUDIT`. |
+| `ACCOUNTANT` | The books: extends the chart, posts and corrects transactions, reads the whole ledger. No `STAFF` (privacy, as `DATA_ENTRY`), and none of the administration `MANAGER` stops at. |
+| `DATA_ENTRY` | The counter clerk: captures transactions, adds a walk-in party or an unrecorded part, books a motor in. No `LEDGER`, no `STAFF`, no administration. |
+
+They are **not system roles**. A workshop — or the platform acting inside it —
+can rename one, retune its grants or delete it, which is the whole point of the
+role belonging to the workshop. The one anybody holds is protected already:
+`RoleService::delete()` refuses a role in use. `ADMIN` is the system role, and it
+is the platform's.
+
+`RoleProvisioner::seedFor()` is idempotent and create-only: a slug the workshop
+already has — including one it has since deleted — is left alone, so a later
+backfill never undoes a workshop's own decision.
+
+**Workshops that predate this** were given their four by
+`2026_09_19_100002_give_existing_workshops_their_own_roles`, which is purely
+additive. Moving their *users* off the old shared platform roles, and retiring
+those rows, is a separate one-time operation in `database/manual/` — see the
+README there. It is out of the migration path for CLAUDE.md §4.5's reason and for
+§10.3's, which forbids a migration changing either local account's role.
+
+**What a workshop role may contain** is decided by
+`PermissionService::grantableFor()`, and by the role's scope rather than the
+writer's: no `TENANTS` grant, no wildcard, nothing the writer does not hold. The
+permission matrix is drawn from the same list, so nobody is offered a tick that
+would be refused. Configured by `rbac.platform_only_resources`.
+
+**The platform inside a workshop.** `/api/v1/tenants/{tenant}/users|roles|
+permissions|workspace` are served by the *same controllers* as `/users`, `/roles`,
+`/permissions` and `/workspace`. The `tenant.act` middleware (`ActAsTenant`)
+re-points the tenant context at `{tenant}`, so every rule applies unchanged and
+every write is stamped into that workshop's history. Only a platform user may use
+it, `READ:TENANTS` is required on top of the ordinary grant, and it is on the
+people, the roles and the settings — never the books.
+
+In the UI these are the **Users**, **Roles** and **Settings** sections of the
+Workshops drawer, and the Roles section is where the platform writes a role *for*
+a workshop: add, edit, retune the grants, delete. The permission matrix there is
+the same `components/permission-matrix.js` the Roles module draws, filled from
+`/tenants/{tenant}/permissions?grouped=1` — already narrowed to what a workshop
+role may carry, so nobody is offered a tick the API would refuse. See
+`tests/Feature/Rbac/RoleTenancyTest.php` and
+`tests/Feature/Tenancy/PlatformWorkshopAccessTest.php`.

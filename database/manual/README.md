@@ -88,3 +88,77 @@ rather than by unwinding a transaction afterwards.
 
 Moving this file back into `database/migrations` would put the recovery hazard
 back. The guard would still refuse, but it is the second lock, not the first.
+
+---
+
+## `2026_09_19_100003_move_workshop_users_onto_their_own_workshops_roles.php`
+
+**Finishes the move to per-workshop roles: takes each workshop user off the
+shared platform role they still hold and puts them on their own workshop's.**
+
+Roles used to be platform-wide. One `OWNER` row and one `DATA_ENTRY` row were
+shared by every workshop *and* listed on the platform administrator's own Roles
+card, so deleting a role from that card emptied it out of every workshop at
+once. They are per workshop now — `App\Services\Rbac\RoleDefaults` holds the
+blueprints and `RoleProvisioner` stamps them out when a workshop is created.
+
+The automatic migration `2026_09_19_100002` gave every workshop that already
+existed its own `OWNER`, `MANAGER`, `ACCOUNTANT` and `DATA_ENTRY`. It stopped
+there on purpose. This file does the rest:
+
+| Does | Never does |
+| --- | --- |
+| Moves a workshop user from a platform `OWNER`/`DATA_ENTRY` to their own workshop's role of the same slug | Touches `ADMIN`, or any platform user |
+| Soft-deletes the platform `OWNER`/`DATA_ENTRY` rows **once nobody holds them** | Deletes a role somebody is still on |
+| Leaves a user alone, and logs them, when their workshop has no role of that slug | Strips anybody of their grants |
+
+### Why it is not in the migration path
+
+Two reasons, and the second is the sharper one.
+
+§4.5, the same hazard the file above records: restore a dump taken before it
+ran, then migrate — which is what a recovery is — and it runs a second time.
+
+§10.3: **no migration may change the role of the two local development
+accounts**, and `owner@choudharymotors.test` is precisely the record this moves.
+A file in `database/migrations` doing this would break that rule on every
+developer's machine, by design rather than by accident.
+
+### Running it
+
+**1 · Take a database dump.** There is no `down()`. Which user held which role
+beforehand is recorded nowhere this could read back.
+
+```
+mysqldump -u <user> -p <database> > before-role-repoint-<date>.sql
+```
+
+**2 · Ask for it explicitly.**
+
+```bash
+# bash
+ALLOW_ROLE_REPOINT=yes php artisan migrate --path=database/manual
+```
+
+```powershell
+# PowerShell
+$env:ALLOW_ROLE_REPOINT='yes'; php artisan migrate --path=database/manual
+Remove-Item Env:\ALLOW_ROLE_REPOINT
+```
+
+The variable is read from the process environment rather than through `env()`,
+so a cached config cannot make a deliberate run silently refuse.
+
+**3 · Check the log.** It writes one `rbac.roles_repointed` entry with how many
+users moved, how many platform roles were retired, and every user it left alone
+because their workshop had no role of that slug.
+
+Running it twice is harmless: a user already on a workshop role is not a
+candidate, and a retired platform role is not found.
+
+### Until it has been run
+
+Nothing is broken. A workshop user still holding a platform role keeps every
+grant they had — authorization loads `customRole` directly and is not scoped.
+What they will notice is that their own role is not in their workshop's role
+list, because it is not one of that workshop's roles.

@@ -653,12 +653,16 @@ class TransactionApiTest extends TestCase
     }
 
     #[Test]
-    public function the_seeded_roles_carry_the_grants_this_module_needs(): void
+    public function the_default_workshop_roles_carry_the_grants_this_module_needs(): void
     {
         $this->seedRoleCatalogue();
 
-        $owner = Role::where('slug', Role::slugFor('OWNER'))->firstOrFail();
-        $dataEntry = Role::where('slug', Role::slugFor('DATA_ENTRY'))->firstOrFail();
+        // A workshop's roles are its own, provisioned with it — so they are
+        // looked up inside one rather than in the platform's list.
+        $workshop = Tenant::factory()->create();
+
+        $owner = Role::where('tenant_id', $workshop->id)->where('slug', 'OWNER')->firstOrFail();
+        $dataEntry = Role::where('tenant_id', $workshop->id)->where('slug', 'DATA_ENTRY')->firstOrFail();
 
         $grants = fn ($role) => $role->permissions->map(fn ($p) => "{$p->action}:{$p->resource}")->all();
 

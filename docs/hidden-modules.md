@@ -1,4 +1,4 @@
-# The two hidden modules
+# The hidden module
 
 What is behind each `'enabled' => false` in
 [config/modules.php](../config/modules.php): which part of its job an enabled
@@ -7,20 +7,20 @@ workshop that the card is off.
 
 **This file says what is unreachable. It does not say how to convert it** — that
 is Part E of [implementation-roadmap.md](implementation-roadmap.md), which
-schedules the rest as **C6–C7** and carries each one's shape, its *do not
+schedules the rest as **C6** and carries each one's shape, its *do not
 rebuild* list and its test checklist. The **order**, the gates between the steps
 and what the pre-flight sweep found are
 [execution-plan.md](execution-plan.md). Read them before starting a conversion:
 the roadmap for what to build, the execution plan for when, this file for what
 the workshop is missing while you do not.
 
-**This file is scheduled for deletion.** When C7 flips the last two flags there
+**This file is scheduled for deletion.** When C6 flips the last flag there
 will be no hidden module left to describe, and a status document that outlives
 its subject is the kind that gets believed. P7 of the execution plan either
 rewrites it as the record of what hiding cost or folds its two surviving notes —
 the removed dashboard service, and what "off" meant — into the roadmap.
 
-**C1 to C5 are done**, and their sections have been deleted from this file
+**C1 to C5 and C7 are done**, and their sections have been deleted from this file
 rather than left to go stale. A workshop can now go from sign-up to a correct
 opening trial balance without a developer; the three trading rules the API had
 always accepted — `payment_due_days`, `allow_negative_stock`,
@@ -85,7 +85,6 @@ re-flow to speak of, are done and gone from this table.
 | Step | Card | Key | Grant | Covered elsewhere? | What only it can still do |
 |---|---|---|---|---|---|
 | **C6** | Uploads | `uploads` | `READ:ATTACHMENTS` | No | Store and retrieve a photographed bill |
-| **C7** | Workshops | `tenants` | `READ:TENANTS` | No | Provision, suspend or reactivate a workshop |
 
 ---
 
@@ -107,21 +106,6 @@ other consumer either.
 things a workshop most wants from software like this, and the stored file is the
 evidence behind a posted document. It is also the surface M15's image capture
 starts from.
-
-### Workshops — `tenants` · C7
-
-**What it is.** The platform surface: every workshop on the platform, its
-provisioning, and suspend/reactivate. `'workspace' => false` — this is the one
-module about other people's books.
-
-**Already on a card.** Nothing.
-
-**Only here.** All of it. A platform admin signs in holding every grant, owns no
-books, and with this card off the only cards that answer for them are Users and
-Roles.
-
-**Why it matters.** Onboarding a workshop, and suspending one that has stopped
-paying, is the platform's entire job.
 
 ## Gaps that belong to no module
 

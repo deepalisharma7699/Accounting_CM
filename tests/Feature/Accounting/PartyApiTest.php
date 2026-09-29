@@ -761,7 +761,7 @@ class PartyApiTest extends TestCase
         // authority over the books.
         $role = $this->roleWith([
             ['READ', 'PARTIES'], ['WRITE', 'PARTIES'], ['READ', 'TRANSACTIONS'], ['WRITE', 'TRANSACTIONS'],
-        ], 'Counter Clerk');
+        ], 'Counter Clerk', tenant: $this->tenant);
 
         $clerk = User::factory()->forTenant($this->tenant)->withRole($role)->create();
 

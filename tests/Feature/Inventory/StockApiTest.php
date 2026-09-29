@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\Inventory;
 
+use App\Models\Item;
 use App\Models\ItemVariant;
 use App\Models\Tenant;
 use App\Models\Transaction;
@@ -318,6 +319,120 @@ class StockApiTest extends TestCase
         $this->assertSame('-3000.00', $movements[2]['value']);
 
         $this->assertSame('12000.00', $response->json('data.closing.value'));
+    }
+
+    /* ---------------------------------------------------------------------
+     | Searching — the bill form's item picker runs on this endpoint
+     |-------------------------------------------------------------------- */
+
+    /**
+     * Typing the specification narrows the family instead of emptying it.
+     *
+     * The reported case: twenty capacitors under one family called "Capacitor",
+     * each variant labelled with its capacitance. `capacitor` returned the
+     * endpoint's first page and `capacitor 36` returned **nothing at all** —
+     * matched as one phrase, `items.name` is "Capacitor" and does not contain
+     * "capacitor 36", `item_variants.label` is "36 MFD" and does not either, and
+     * no column anywhere holds both words. So the one thing a person does to cut
+     * twenty rows down to one was the one thing that guaranteed an empty picker.
+     */
+    #[Test]
+    public function a_search_narrows_on_every_word_rather_than_matching_the_whole_phrase(): void
+    {
+        $this->capacitors();
+
+        $response = $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/stock?search=capacitor+36')
+            ->assertOk()
+            ->assertJsonCount(1, 'data');
+
+        $this->assertSame('36 MFD', $response->json('data.0.display_label'));
+
+        // Order is not significance: the family name and the spec are matched
+        // independently, so either way round finds the same row.
+        $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/stock?search=36+capacitor')
+            ->assertOk()
+            ->assertJsonCount(1, 'data');
+
+        // And a word that matches nothing removes the row rather than being
+        // ignored — the AND is real.
+        $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/stock?search=capacitor+36+crompton')
+            ->assertOk()
+            ->assertJsonCount(0, 'data');
+    }
+
+    /**
+     * A capped page says so, over the whole matched set.
+     *
+     * The picker asks for twelve and draws its "n more not shown" line off this
+     * figure. It has to count every match rather than the slice, or the notice
+     * would report nought on exactly the search that needed it.
+     */
+    #[Test]
+    public function a_capped_search_reports_how_many_matched_in_total(): void
+    {
+        $this->capacitors();
+
+        $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/stock?search=capacitor&per_page=12')
+            ->assertOk()
+            ->assertJsonCount(12, 'data')
+            ->assertJsonPath('meta.pagination.total', 20)
+            ->assertJsonPath('meta.pagination.has_more', true);
+    }
+
+    /**
+     * A typed wildcard is a character, not an operator.
+     *
+     * `%` and `_` are LIKE's own, so `MFD_A` had matched `MFD-A` and `MFD A`
+     * as well — a SKU search that answered with three different parts.
+     */
+    #[Test]
+    public function a_search_matches_likes_wildcards_literally(): void
+    {
+        $this->actingForTenant($this->tenant, function () {
+            $item = Item::factory()->ofCategory('part')->create(['name' => 'Capacitor clamp']);
+
+            ItemVariant::factory()->for($item)->create(['label' => 'MFD-A']);
+            ItemVariant::factory()->for($item)->create(['label' => 'MFD_A']);
+        });
+
+        $response = $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/stock?search=MFD_A')
+            ->assertOk()
+            ->assertJsonCount(1, 'data');
+
+        $this->assertSame('MFD_A', $response->json('data.0.display_label'));
+    }
+
+    /**
+     * One family, twenty specifications — the shape of the reported case.
+     *
+     * Labelled rather than left to `derivedLabel()`, because what is stored in
+     * `item_variants.label` is what the search can currently see at all; the
+     * attributes bag is not reached by any query, which is the next thing to fix.
+     *
+     * @return array<int, string>
+     */
+    private function capacitors(): array
+    {
+        $labels = [
+            '2.5 MFD', '4 MFD', '6 MFD', '8 MFD', '9 MFD', '12 MFD', '16 MFD',
+            '18 MFD', '20 MFD', '24 MFD', '25 MFD', '30 MFD', '36 MFD', '40 MFD',
+            '45 MFD', '50 MFD', '60 MFD', '72 MFD', '80 MFD', '100 MFD',
+        ];
+
+        $this->actingForTenant($this->tenant, function () use ($labels) {
+            $item = Item::factory()->ofCategory('part')->create(['name' => 'Capacitor']);
+
+            foreach ($labels as $label) {
+                ItemVariant::factory()->for($item)->create(['label' => $label]);
+            }
+        });
+
+        return $labels;
     }
 
     /* ---------------------------------------------------------------------

@@ -123,7 +123,7 @@ forbids. Adding a row to §10 is part of C7.
 ```
 ──── Pass 1 · the last two cards ───────────────────────────────
 C6   Uploads                          1 session
-C7   Workshops        (History ✅)    1 session
+C7   Workshops  ✅    (History ✅)    1 session
                                       ▸ gate: every card is on
 C8   One workshop day                 1 session
                                       ▸ gate: the modules agree
@@ -573,7 +573,7 @@ this is in the plan above, and each is a phase rather than a loose end.
 | Step | What | Size | Status |
 | --- | --- | --- | --- |
 | **C6** | Uploads | 1 | ⬜ |
-| **C7** | Workshops (History ✅ 7 Sep) | 1 | ⬜ |
+| **C7** | Workshops (History ✅ 7 Sep) | 1 | ✅ |
 | **C8** | One workshop day | 1 | ⬜ |
 | **P1** | Party statements | 1–2 | ⬜ |
 | **P2** | Invoice delivery, extracted | 1–2 | ✅ 8 Sep |

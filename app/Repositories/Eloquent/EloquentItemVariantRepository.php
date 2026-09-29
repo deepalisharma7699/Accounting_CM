@@ -5,6 +5,7 @@ namespace App\Repositories\Eloquent;
 use App\Models\Item;
 use App\Models\ItemVariant;
 use App\Repositories\Contracts\ItemVariantRepositoryInterface;
+use App\Support\SearchTerms;
 use Illuminate\Support\Collection;
 
 class EloquentItemVariantRepository implements ItemVariantRepositoryInterface
@@ -47,7 +48,7 @@ class EloquentItemVariantRepository implements ItemVariantRepositoryInterface
 
     public function stocked(array $filters = []): Collection
     {
-        $search = trim((string) ($filters['search'] ?? ''));
+        $patterns = SearchTerms::patterns($filters['search'] ?? null);
 
         return ItemVariant::query()
             ->stocked()
@@ -78,18 +79,27 @@ class EloquentItemVariantRepository implements ItemVariantRepositoryInterface
             // A fitter looking for "1440" is after a motor by its speed, and the
             // family name is the one thing nobody remembers — so the search
             // reaches the variant's own label and SKU as well as the item's.
-            ->when($search !== '', fn ($query) => $query->where(function ($outer) use ($search) {
-                $like = '%'.$search.'%';
-
-                $outer->where('label', 'like', $like)
-                    ->orWhere('sku', 'like', $like)
-                    ->orWhere('barcode', 'like', $like)
-                    ->orWhereHas('item', fn ($item) => $item
-                        ->where('name', 'like', $like)
-                        ->orWhere('code', 'like', $like)
-                        // Through the Brand Master, which is where a make lives
-                        // now that it is a row rather than a typed string.
-                        ->orWhereHas('brand', fn ($brand) => $brand->where('name', 'like', $like)));
+            //
+            // One group per word, ANDed: "capacitor 36" is (something says
+            // capacitor) AND (something says 36), because the family name and the
+            // capacitance live in different tables and no column holds both.
+            // Matched as one phrase this returned nothing at all, so typing the
+            // spec to narrow twenty variants down emptied the picker instead.
+            // See {@see \App\Support\SearchTerms}.
+            ->when($patterns !== [], fn ($query) => $query->where(function ($outer) use ($patterns) {
+                foreach ($patterns as $like) {
+                    $outer->where(fn ($word) => $word
+                        ->where('label', 'like', $like)
+                        ->orWhere('sku', 'like', $like)
+                        ->orWhere('barcode', 'like', $like)
+                        ->orWhereHas('item', fn ($item) => $item
+                            ->where('name', 'like', $like)
+                            ->orWhere('code', 'like', $like)
+                            // Through the Brand Master, which is where a make
+                            // lives now that it is a row rather than a typed
+                            // string.
+                            ->orWhereHas('brand', fn ($brand) => $brand->where('name', 'like', $like))));
+                }
             }))
             ->orderBy('item_id')
             ->orderBy('label')

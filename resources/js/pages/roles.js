@@ -4,6 +4,7 @@ import {
     $, $$, clearFormErrors, confirmAction, debounce, esc,
     hideModal, setSubmitting, showFormErrors, showModal, tableMessage, toast,
 } from '../ui';
+import { checkedPermissionIds, renderPermissionMatrix } from '../components/permission-matrix';
 import { adoptForm, mountWorkspace } from '../workspace';
 
 /**
@@ -13,18 +14,28 @@ import { adoptForm, mountWorkspace } from '../workspace';
  *
  * The module opens on its create form and the roles sit behind one switch
  * control beside the heading (§2A.1). A caller who may read roles but not write
- * them lands on the list instead and is painted no switch at all — which is the
- * ordinary case here: the workshop OWNER holds READ:ROLES and nothing more,
- * because a role is defined for the whole platform and a tenant creating one
- * would be creating it for everybody. Only ADMIN writes here.
+ * them lands on the list instead and is painted no switch at all.
  *
- * ## The matrix comes from the API
+ * ## This screen shows one scope, and it is the caller's own
  *
- * `#permission-matrix` is filled from GET /permissions?grouped=1. The catalogue
- * grows with every module that gets built, so a copy of it in this file — or in
- * the markup — would be a list of grants that quietly stops matching the ones
- * the middleware checks: a role given permissions that no longer exist, and
- * refused ones that do.
+ * A role belongs to a scope. A workshop's OWNER sees that workshop's roles and
+ * nothing else — not another workshop's, and not the platform's either. The
+ * platform administrator sees the platform's own roles, which is ADMIN and
+ * whatever they have made for their own staff; a workshop's roles are reached
+ * from the Workshops drawer, where the API serves the very same endpoints
+ * against that workshop. So there is no scope to label and no scope filter here:
+ * the tenant context decides the list, and this file just draws it.
+ *
+ * What the API says the caller may change arrives as `role.editable`; this file
+ * follows it rather than working it out.
+ *
+ * ## The matrix comes from the API, and it is drawn in one place
+ *
+ * `#permission-matrix` is filled from GET /permissions?grouped=1 by
+ * [components/permission-matrix.js](../components/permission-matrix.js), which
+ * the Workshops drawer uses too. The catalogue grows with every module that gets
+ * built, so a copy of it in this file — or in the markup — would be a list of
+ * grants that quietly stops matching the ones the middleware checks.
  *
  * ## System roles are shown, not hidden
  *
@@ -37,6 +48,15 @@ import { adoptForm, mountWorkspace } from '../workspace';
 
 const COLUMNS = 5;
 const PAGE_SIZE = 25;
+
+/**
+ * Whether the caller may not change this role.
+ *
+ * The API says — `editable` — and the screen follows the answer rather than
+ * working it out (§4.4). `is_system_role` is checked alongside it so a response
+ * that predates the field still locks ADMIN.
+ */
+const isLocked = (role) => Boolean(role.is_system_role) || role.editable === false;
 
 // The roles endpoint caps per_page at 100.
 const FETCH_SIZE = 100;
@@ -159,8 +179,8 @@ function scoped() {
 }
 
 function matchesPill(role) {
-    if (state.pill === 'system') return role.is_system_role;
-    if (state.pill === 'custom') return !role.is_system_role;
+    if (state.pill === 'system') return isLocked(role);
+    if (state.pill === 'custom') return !isLocked(role);
     if (state.pill === 'unassigned') return (role.users_count ?? 0) === 0;
 
     return true;
@@ -212,9 +232,9 @@ function render() {
 function renderTiles(scope) {
     inList('#stat-total').textContent = scope.length.toLocaleString('en-IN');
     inList('#stat-custom').textContent = scope
-        .filter((role) => !role.is_system_role).length.toLocaleString('en-IN');
+        .filter((role) => !isLocked(role)).length.toLocaleString('en-IN');
     inList('#stat-system').textContent = scope
-        .filter((role) => role.is_system_role).length.toLocaleString('en-IN');
+        .filter((role) => isLocked(role)).length.toLocaleString('en-IN');
     inList('#stat-unassigned').textContent = scope
         .filter((role) => (role.users_count ?? 0) === 0).length.toLocaleString('en-IN');
 
@@ -255,7 +275,7 @@ function renderRows(roles) {
     const start = (state.page - 1) * PAGE_SIZE;
 
     body.innerHTML = roles.slice(start, start + PAGE_SIZE).map((role) => {
-        const locked = Boolean(role.is_system_role);
+        const locked = isLocked(role);
         const flash = workspace?.isNew(role.id) ? ' row-new' : '';
 
         /*
@@ -268,7 +288,8 @@ function renderRows(roles) {
 
             return locked
                 ? `<button type="button" class="btn btn-ghost btn-icon opacity-40" disabled
-                           title="System roles cannot be changed" aria-label="${label} (not available)">${icon}</button>`
+                           title="System roles cannot be changed"
+                           aria-label="${label} (not available)">${icon}</button>`
                 : `<button type="button" class="btn btn-ghost btn-icon ${danger ? 'hover:!text-rose-600' : ''}"
                            ${attrs} title="${label}" aria-label="${label}">${icon}</button>`;
         };
@@ -284,7 +305,7 @@ function renderRows(roles) {
                         <div class="min-w-0">
                             <div class="flex items-center gap-2">
                                 <span class="truncate text-[0.875rem] font-semibold text-foreground">${esc(role.name)}</span>
-                                ${locked ? '<span class="badge bg-accent text-accent-foreground">System</span>' : ''}
+                                ${role.is_system_role ? '<span class="badge bg-accent text-accent-foreground">System</span>' : ''}
                             </div>
                             <div class="truncate font-mono text-[0.75rem] text-muted-foreground">${esc(role.slug)}</div>
                         </div>
@@ -430,11 +451,11 @@ function openDrawer(id) {
 
     state.openRole = role;
 
-    const locked = Boolean(role.is_system_role);
+    const locked = isLocked(role);
 
     $('#role-drawer-title').textContent = role.name;
     $('#role-drawer-slug').textContent = role.slug;
-    $('#role-drawer-badge').innerHTML = locked
+    $('#role-drawer-badge').innerHTML = role.is_system_role
         ? '<span class="badge bg-accent text-accent-foreground">System</span>'
         : '';
     $('#role-drawer-grants').textContent = isWildcard(role) ? 'All' : String(grantsOf(role).length);
@@ -449,8 +470,8 @@ function openDrawer(id) {
     remove.classList.toggle('hidden', !can('DELETE', 'ROLES'));
     edit.disabled = locked;
     remove.disabled = locked;
-    edit.title = locked ? 'System roles cannot be changed' : '';
-    remove.title = locked ? 'System roles cannot be deleted' : '';
+    edit.title = locked ? 'This role cannot be changed here' : '';
+    remove.title = locked ? 'This role cannot be deleted here' : '';
 
     $('#role-drawer-body').innerHTML = drawerBody(role);
 
@@ -504,61 +525,9 @@ function drawerBody(role) {
  | ---------------------------------------------------------------------- */
 
 function renderMatrix(selectedIds = []) {
-    const host = $('#permission-matrix', roleForm);
-    const resources = Object.keys(state.permissions);
-
-    if (!resources.length) {
-        host.innerHTML = `<p class="text-[0.8125rem] text-muted-foreground">${
-            can('READ', 'PERMISSIONS')
-                ? 'The permission catalogue could not be loaded. A role saved now would keep the grants it has.'
-                : 'Reading the permission catalogue needs READ:PERMISSIONS, so the grants cannot be shown here.'
-        }</p>`;
-
-        return;
-    }
-
-    const selected = new Set(selectedIds.map(String));
-
-    /*
-    | The `*` resource holds the full-access grant the ADMIN role uses. Left
-    | inline it is simply the first checkbox in the list, which makes it far too
-    | easy to hand a custom role superuser rights by accident — so it gets its
-    | own labelled block, away from the ordinary per-resource grants.
-    */
-    const wildcard = resources.includes('*')
-        ? `<fieldset class="rounded-[10px] border border-amber-200 bg-amber-50/60 p-3">
-               <legend class="px-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-amber-700">
-                   Full access
-               </legend>
-               <div class="mt-1 space-y-1.5">
-                   ${state.permissions['*'].map((permission) => `
-                       <label class="flex cursor-pointer items-start gap-2 text-[0.8125rem] text-amber-900">
-                           <input type="checkbox" name="permission_ids" value="${permission.id}"
-                                  class="mt-0.5 size-4 rounded border-amber-300 text-amber-600 focus:ring-2 focus:ring-amber-300"
-                                  ${selected.has(String(permission.id)) ? 'checked' : ''}>
-                           <span>Grants <strong>every action on every resource</strong>, including ones that do not
-                           exist yet. Prefer explicit grants below.</span>
-                       </label>`).join('')}
-               </div>
-           </fieldset>`
-        : '';
-
-    host.innerHTML = wildcard + resources.filter((resource) => resource !== '*').map((resource) => `
-        <fieldset class="rounded-[10px] border border-border p-3">
-            <legend class="px-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
-                ${esc(resource)}
-            </legend>
-            <div class="mt-1 flex flex-wrap gap-x-5 gap-y-2">
-                ${state.permissions[resource].map((permission) => `
-                    <label class="flex cursor-pointer items-center gap-2 text-[0.8125rem] text-secondary-foreground"
-                           title="${esc(permission.description ?? '')}">
-                        <input type="checkbox" name="permission_ids" value="${permission.id}"
-                               class="size-4 rounded border-border text-primary focus:ring-2 focus:ring-ring"
-                               ${selected.has(String(permission.id)) ? 'checked' : ''}>
-                        <span>${esc(permission.action)}</span>
-                    </label>`).join('')}
-            </div>
-        </fieldset>`).join('');
+    renderPermissionMatrix($('#permission-matrix', roleForm), state.permissions, selectedIds, {
+        mayRead: can('READ', 'PERMISSIONS'),
+    });
 }
 
 /* -------------------------------------------------------------------------
@@ -648,8 +617,7 @@ async function submitRole(event) {
     | silently disable everybody who has it.
     */
     if (state.matrixLoaded) {
-        payload.permission_ids = $$('input[name="permission_ids"]:checked', roleForm)
-            .map((input) => Number(input.value));
+        payload.permission_ids = checkedPermissionIds(roleForm);
     }
 
     setSubmitting(roleForm, true);
@@ -804,14 +772,14 @@ export default async function initRoles() {
     /* The drawer ------------------------------------------------------- */
 
     $('#role-drawer-edit', root).addEventListener('click', () => {
-        if (!state.openRole || state.openRole.is_system_role) return;
+        if (!state.openRole || isLocked(state.openRole)) return;
 
         hideModal('#role-drawer');
         openRoleForm(state.openRole);
     });
 
     $('#role-drawer-delete', root).addEventListener('click', () => {
-        if (state.openRole && !state.openRole.is_system_role) destroy(state.openRole.id);
+        if (state.openRole && !isLocked(state.openRole)) destroy(state.openRole.id);
     });
 
     /* The form --------------------------------------------------------- */

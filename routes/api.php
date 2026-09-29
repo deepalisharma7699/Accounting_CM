@@ -204,6 +204,90 @@ Route::prefix('v1')->group(function () {
         });
 
         /*
+        | A platform administrator working inside one workshop.
+        |
+        | The workshop's users, its roles and its settings — and nothing else.
+        | These are the *same controllers* a workshop's own owner reaches through
+        | /users, /roles and /workspace; `tenant.act` only re-points the tenant
+        | context at `{tenant}` (and refuses anybody who belongs to a workshop of
+        | their own), so every rule that already governs those endpoints applies
+        | unchanged and every write lands in that workshop's history.
+        |
+        | Deliberately not the books. Sales, stock and the ledger stay the
+        | workshop's own.
+        |
+        | Two grants are needed on every route: TENANTS, which is what makes the
+        | caller a platform administrator at all, and the ordinary grant for the
+        | thing being done — so a platform role that may read users but not write
+        | them is still refused the write.
+        */
+        Route::prefix('tenants/{tenant}')
+            ->whereNumber('tenant')
+            ->middleware(['permission:READ,TENANTS', 'tenant.act'])
+            ->group(function () {
+                Route::get('users', [UserController::class, 'index'])
+                    ->middleware('permission:READ,USERS');
+
+                Route::get('users/{user}', [UserController::class, 'show'])
+                    ->whereNumber('user')
+                    ->middleware('permission:READ,USERS');
+
+                Route::post('users', [UserController::class, 'store'])
+                    ->middleware('permission:WRITE,USERS');
+
+                Route::patch('users/{user}', [UserController::class, 'update'])
+                    ->whereNumber('user')
+                    ->middleware('permission:UPDATE,USERS');
+
+                Route::put('users/{user}/role', [UserController::class, 'assignRole'])
+                    ->whereNumber('user')
+                    ->middleware('permission:UPDATE:USERS,READ:ROLES');
+
+                Route::put('users/{user}/status', [UserController::class, 'updateStatus'])
+                    ->whereNumber('user')
+                    ->middleware('permission:UPDATE,USERS');
+
+                Route::delete('users/{user}', [UserController::class, 'destroy'])
+                    ->whereNumber('user')
+                    ->middleware('permission:DELETE,USERS');
+
+                // What that workshop can see — its own roles and the platform's —
+                // and what one of its roles may be given.
+                Route::get('roles', [RoleController::class, 'index'])
+                    ->middleware('permission:READ,ROLES');
+
+                Route::get('roles/{role}', [RoleController::class, 'show'])
+                    ->whereNumber('role')
+                    ->middleware('permission:READ,ROLES');
+
+                Route::post('roles', [RoleController::class, 'store'])
+                    ->middleware('permission:WRITE,ROLES');
+
+                Route::patch('roles/{role}', [RoleController::class, 'update'])
+                    ->whereNumber('role')
+                    ->middleware('permission:UPDATE,ROLES');
+
+                Route::delete('roles/{role}', [RoleController::class, 'destroy'])
+                    ->whereNumber('role')
+                    ->middleware('permission:DELETE,ROLES');
+
+                Route::put('roles/{role}/permissions', [RoleController::class, 'syncPermissions'])
+                    ->whereNumber('role')
+                    ->middleware('permission:UPDATE:ROLES,READ:PERMISSIONS');
+
+                Route::get('permissions', [PermissionController::class, 'index'])
+                    ->middleware('permission:READ,PERMISSIONS');
+
+                // The workshop's settings. Identity and trading rules alike — the
+                // status stays where it is, on PUT /tenants/{tenant}/status.
+                Route::get('workspace', [WorkspaceController::class, 'show'])
+                    ->middleware('permission:READ,TENANTS');
+
+                Route::patch('workspace', [WorkspaceController::class, 'update'])
+                    ->middleware('permission:UPDATE,TENANTS');
+            });
+
+        /*
         | Chart of accounts. Tenant-owned: the global scope on ChartOfAccount
         | filters every query, so there is nothing tenant-shaped to guard here.
         |

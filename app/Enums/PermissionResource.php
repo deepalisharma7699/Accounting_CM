@@ -108,10 +108,13 @@ enum PermissionResource: string
      * records what they did, and being able to read it is not part of doing it.
      *
      * Note the boundary. This covers the workshop's own master data: its chart,
-     * its parties, its catalogue, its settings, its people. Roles and
-     * permissions are platform-defined — one role belongs to every workshop at
-     * once — so there is no workshop whose history they belong in, and they are
-     * not on the trail. See {@see \App\Enums\AuditResource}.
+     * its parties, its catalogue, its settings, its people. Roles are not on the
+     * trail, which is now a gap rather than a principle: they *were*
+     * platform-defined, one row belonging to every workshop at once, so there
+     * was no workshop whose history they belonged in. They are the workshop's
+     * own since 19 September 2026, and auditing them is unbuilt work rather than
+     * a decision. Permissions remain platform-defined. See
+     * {@see \App\Enums\AuditResource}.
      */
     case Audit = 'AUDIT';
 

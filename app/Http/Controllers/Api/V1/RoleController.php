@@ -29,10 +29,18 @@ class RoleController extends Controller
             'per_page' => ['nullable', 'integer', 'between:1,100'],
         ]);
 
+        // No scope filter, deliberately. Which roles this answers with is
+        // decided by the tenant context and nothing else: the platform's own
+        // panel gets the platform's roles, and `/tenants/{tenant}/roles` gets
+        // that workshop's. A filter here would be a second way to ask the same
+        // question, and the one a caller could get wrong.
         return ApiResponse::paginated(
             $this->roles->paginate(
                 array_filter(
-                    ['search' => $validated['search'] ?? null, 'system' => $validated['system'] ?? null],
+                    [
+                        'search' => $validated['search'] ?? null,
+                        'system' => $validated['system'] ?? null,
+                    ],
                     fn ($value) => $value !== null
                 ),
                 (int) ($validated['per_page'] ?? 15)

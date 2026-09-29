@@ -1,6 +1,7 @@
 <?php
 
 use App\Exceptions\ApiExceptionRenderer;
+use App\Http\Middleware\ActAsTenant;
 use App\Http\Middleware\EnsurePermission;
 use App\Http\Middleware\ForceJsonResponse;
 use App\Http\Middleware\JwtAuthenticate;
@@ -28,6 +29,9 @@ return Application::configure(basePath: dirname(__DIR__))
             'auth.jwt' => JwtAuthenticate::class,
             // permissionGuard — checks the route's required grant(s).
             'permission' => EnsurePermission::class,
+            // A platform administrator working inside one workshop's people,
+            // roles and settings — see ActAsTenant.
+            'tenant.act' => ActAsTenant::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
