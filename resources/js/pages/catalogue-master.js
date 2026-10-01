@@ -26,6 +26,7 @@
  */
 
 import auth from '../auth-client';
+import { applyPermissionGates } from '../permissions';
 import {
     $, $$, clearFormErrors, confirmAction, esc, hideModal,
     setSubmitting, showFormErrors, showModal, toast,
@@ -128,18 +129,36 @@ function renderLoading() {
     $('#catalogue-foot').innerHTML = '';
 }
 
+/**
+ * Paint the tab that is open, then gate what was just painted.
+ *
+ * The gating pass runs **here** rather than once at mount, because everything
+ * this file draws is written with `innerHTML` after the module's fragment was
+ * gated — `applyPermissionGates()` runs on boot and on
+ * [shell.js](../shell.js)'s mount, and every row and footer below arrives long
+ * after both. Left out, `data-requires-permission` on a button this file writes
+ * does nothing at all, and a clerk holding WRITE:ITEMS but not UPDATE:ITEMS is
+ * shown Edit and Delete on every category, field, brand and unit — then refused
+ * by the server, which is §3.4's "never left unsure" failing in the one
+ * direction that looks like a broken product rather than a locked one.
+ *
+ * Presentation only, exactly as §6.2 says: the grant is checked server-side on
+ * every one of these endpoints whatever the button does.
+ */
 function render() {
     syncTabs();
 
-    if (state.open) {
-        renderCategoryFields();
-
-        return;
-    }
-
-    if (state.tab === 'units') renderUnits();
+    if (state.open) renderCategoryFields();
+    else if (state.tab === 'units') renderUnits();
     else if (state.tab === 'brands') renderBrands();
     else renderCategories();
+
+    // Guarded, because `applyPermissionGates` defaults to the document only when
+    // the argument is *absent* — handed an explicit null it throws on the first
+    // `querySelectorAll` and takes the render down with it.
+    const drawer = $('#catalogue-drawer');
+
+    if (drawer) applyPermissionGates(drawer);
 }
 
 const SUBTITLES = {
@@ -482,6 +501,10 @@ function openCategoryForm(category = null) {
     $('#category-modal-title').textContent = editing ? `Edit ${category.name}` : 'New category';
     form.elements.id.value = editing ? category.id : '';
 
+    // On an edit only, for the reason openBrandForm() records: a category being
+    // created is by definition one the shop wants offered.
+    $('#category-active-row').classList.toggle('hidden', !editing);
+
     // The parent picker cannot offer the category itself or anything under it —
     // the server refuses the cycle, and offering it would be offering a choice
     // that can only be refused.
@@ -510,6 +533,7 @@ function openCategoryForm(category = null) {
         $('#category-hsn').value = category.default_hsn_sac ?? '';
         $('#category-holds-stock').checked = category.holds_stock;
         $('#category-sac').checked = category.uses_sac_code;
+        $('#category-active').checked = category.is_active;
     }
 
     showModal('#category-modal');
@@ -552,6 +576,10 @@ async function submitCategory(event) {
         holds_stock: $('#category-holds-stock').checked,
         uses_sac_code: $('#category-sac').checked,
     };
+
+    // Only on an edit — see openCategoryForm(). Sending it on a create would be
+    // sending the default back as though somebody had chosen it.
+    if (id) body.is_active = $('#category-active').checked;
 
     setSubmitting(form, true);
 
@@ -600,6 +628,7 @@ function openAttributeForm(field = null) {
             .join('')}`;
 
     $('#attribute-key-row').classList.toggle('hidden', !editing);
+    $('#attribute-active-row').classList.toggle('hidden', !editing);
 
     if (editing) {
         $('#attribute-key').value = field.key;
@@ -612,6 +641,7 @@ function openAttributeForm(field = null) {
         $('#attribute-default').value = field.default_value ?? '';
         $('#attribute-help').value = field.help_text ?? '';
         $('#attribute-required').checked = field.is_required;
+        $('#attribute-active').checked = field.is_active;
     }
 
     applyAttributeType();
@@ -663,6 +693,9 @@ async function submitAttribute(event) {
         help_text: $('#attribute-help').value.trim() || null,
         is_required: $('#attribute-required').checked,
     };
+
+    // Only on an edit — see openCategoryForm().
+    if (id) body.is_active = $('#attribute-active').checked;
 
     setSubmitting(form, true);
 
@@ -772,6 +805,7 @@ function openUnitForm(unit = null) {
     $('#unit-modal-title').textContent = editing ? `Edit ${unit.label}` : 'New unit';
     form.elements.id.value = editing ? unit.id : '';
     $('#unit-code-row').classList.toggle('hidden', !editing);
+    $('#unit-active-row').classList.toggle('hidden', !editing);
 
     if (editing) {
         $('#unit-code').value = unit.code;
@@ -779,6 +813,7 @@ function openUnitForm(unit = null) {
         $('#unit-symbol').value = unit.symbol;
         $('#unit-kind').value = unit.kind;
         $('#unit-decimals').value = String(unit.decimals);
+        $('#unit-active').checked = unit.is_active;
     }
 
     showModal('#unit-modal');
@@ -799,6 +834,9 @@ async function submitUnit(event) {
         kind: $('#unit-kind').value,
         decimals: Number($('#unit-decimals').value),
     };
+
+    // Only on an edit — see openCategoryForm().
+    if (id) body.is_active = $('#unit-active').checked;
 
     setSubmitting(form, true);
 

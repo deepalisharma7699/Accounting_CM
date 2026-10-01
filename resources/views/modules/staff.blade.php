@@ -487,7 +487,7 @@
 
                         <div>
                             <label for="advance-date" class="field-label">Date</label>
-                            <input type="date" id="advance-date" name="date" class="field-input field-date">
+                            <input type="date" id="advance-date" name="date" class="field-input">
                             <p class="field-error hidden" data-error-for="date"></p>
                         </div>
                     </div>
@@ -822,7 +822,7 @@
                 
                     <div>
                         <label for="employee-joined" class="field-label">Joined</label>
-                        <input id="employee-joined" name="joined_on" type="date" class="field-input field-date">
+                        <input id="employee-joined" name="joined_on" type="date" class="field-input">
                         <p class="field-error hidden" data-error-for="joined_on"></p>
                     </div>
 
@@ -831,7 +831,7 @@
                          the create form would be a question with one answer. --}}
                     <div class="hidden" data-employee-left>
                         <label for="employee-left" class="field-label">Left</label>
-                        <input id="employee-left" name="left_on" type="date" class="field-input field-date">
+                        <input id="employee-left" name="left_on" type="date" class="field-input">
                         <p class="mt-1.5 text-xs text-muted-foreground">
                             They come off the day sheet and the next payroll. Months already paid are untouched.
                         </p>
@@ -840,7 +840,7 @@
                 
                     <div>
                         <label for="employee-phone" class="field-label">Phone</label>
-                        <input id="employee-phone" name="phone" type="tel" class="field-input field-short"
+                        <input id="employee-phone" name="phone" type="tel" class="field-input"
                                autocomplete="off" placeholder="98765 43210">
                         <p class="field-error hidden" data-error-for="phone"></p>
                     </div>

@@ -65,8 +65,8 @@ answer:
 
 | | |
 | --- | --- |
-| `category_id` | Which kind of thing — an `item_categories` row |
-| `kind_label` | That category's name, **copied** at intake |
+| `job_kind_id` | Which kind of thing — a `job_kinds` row |
+| `kind_label` | That kind's name, **copied** at intake |
 | `specs` | The answers, keyed by attribute — `item_variants.attributes` shape |
 
 beside `brand`, `model` and `serial_no`, which every electric thing has and which
@@ -81,20 +81,47 @@ week: a cooler came in and the only fields the job card offered were two that
 mean nothing about a cooler, under a heading telling the counter it had the wrong
 screen.
 
-#### Why the catalogue's vocabulary and not a second list of kinds
+#### Why its own list, and not the catalogue's
 
-Because `item_categories` already answers exactly this question — what kinds of
-thing exist and what to record about each — and `item_attributes` is already the
-question set, with data types, units, fixed option lists, inheritance from a
-parent category, and an admin screen to edit all of it. A `job_categories` table
-beside it would be a second master, a second schema resolver, a second admin
-screen and two vocabularies to keep in step (§4.4, §5.1).
+It *was* the catalogue's, and this section used to explain why: `item_categories`
+already answers "what kinds of thing exist and what to record about each", and a
+second master would be a second schema resolver, a second admin screen and two
+vocabularies to keep in step.
 
-So a workshop that starts repairing coolers adds a Cooler category from the Items
-card, and the bench asks what a cooler is described by. No column, no migration,
-no deployment — the catalogue module's own acceptance criterion, one module
-along. The fields are drawn by `components/attribute-fields.js`, which is also
-what the Items create form draws a variant's specification with.
+The argument conflated one list with one implementation. The bench's list was
+`item_categories` filtered on `holds_stock` — chosen because a category holding
+no stock is *produced at the moment it is sold* and nobody wheels one of those
+through a door. True, and beside the point: `holds_stock` separates **kept on a
+shelf** from **made when sold**, which says nothing about whether a customer
+brings one in. So the intake form offered Part, Bulk material, Bearing, Capacitor
+and Wire, none of which anybody brings in, and offered no cooler, fan, mixer or
+submersible at all — because a repair shop does not stock the things it repairs.
+
+The intersection of the two lists is Motor and pumps, and even there the
+questions differ: a motor on a price list is identified by its frame and its
+mounting, a motor on a bench by its serial number and what is wrong with it. Two
+lists that only looked alike.
+
+So there is `job_kinds`, with `job_kind_attributes` under it. **The list is
+separate; the machinery is not** — `AttributeDefinition` (what a field means),
+`DefinesAQuestionSet` (the shape a form reads it in), `AttributeFieldShape` (what
+may be stored), `Catalogue\StoreAttributeRequest` (what is accepted) and
+`components/attribute-fields.js` (what is drawn) each serve both masters and must
+go on serving both. A third list over them is cheap; a second copy of any of them
+is the drift the old rule was right to fear.
+
+`JobKind` is thinner than `ItemCategory` by everything that describes a thing for
+**sale** — no HSN or SAC, no GST rate, no default unit, no `holds_stock` — and by
+**no parent**. A category tree earns its complexity on hundreds of products,
+where "Submersible Motor" inherits a motor's question set and adds Head and Flow
+Rate. A bench takes in eight or ten kinds of thing and a cooler inherits nothing
+from a fan. That is the one place the two genuinely differ, and it is why the
+shared piece is a trait rather than a base class.
+
+So a workshop that starts repairing sewing machines adds the kind under **Kinds**
+on the Jobs card, and the bench asks what a sewing machine is described by. No
+column, no migration, no deployment — the catalogue module's own acceptance
+criterion, reached from the other side.
 
 #### Three things about it that are the opposite of the catalogue's
 
@@ -120,23 +147,23 @@ answered it.
 
 The rule the `brand` and `model` columns beside it already follow. A job card is
 the record of a physical object on a day: the casing said "Motor" when it arrived
-and must still say so next year, after somebody has renamed the category or
+and must still say so next year, after somebody has renamed the kind or
 archived it. It also means a list row renders with no join, `search=cooler` finds
-the coolers without one, and a job whose category was deleted still says what came
+the coolers without one, and a job whose kind was archived still says what came
 in rather than going blank.
 
 #### How the bag becomes words
 
 `{"hp": "7.5"}` is unreadable on its own. `JobService::attachSpecSchema()`
 resolves the labels and units through the categories a page of jobs spans — **one
-lookup per distinct category**, not per row, because a bench is mostly motors and
+lookup per distinct kind**, not per row, because a bench is mostly motors and
 twenty-five jobs are typically two categories. `WorkshopJobResource` then sends
 both: `specs`, the raw bag the edit form writes back, and `specs_display`, the
-same values labelled, unitised and in the order the category asks them.
+same values labelled, unitised and in the order the kind asks them.
 
 `WorkshopJob::equipmentLabel()` is the one-liner every screen prints — "Motor
 7.5 HP, 3 ph · Crompton CR-1234", two groups: what the thing is, and whose it is.
-It summarises the first two fields the category asks about, which for every kind
+It summarises the first two fields the kind asks about, which for every kind
 seeded or templated are the two that identify one at a counter. **Nothing from
 the bag reaches it without the resolved schema**: a bare "7.5 3 1440" says less
 than leaving it out.
@@ -350,7 +377,7 @@ the permission model rather than a convenience.
 | | |
 | --- | --- |
 | `GET /workshop-jobs` | The worklist. `open=1`, `status=`, `overdue=1`, `search=` |
-| `GET /workshop-jobs/meta` | The statuses, the legal moves from each, the counts, and the **kinds** that can be booked in |
+| `GET /workshop-jobs/meta` | The statuses, the legal moves from each, the counts, the **kinds** that can be booked in, and the units the Kind Master's editor offers |
 | `GET /workshop-jobs/{job}` | The job card |
 | `GET /workshop-jobs/{job}/bill-preview` | The payload the counter opens pre-filled |
 | `POST /workshop-jobs` | Book something in |
@@ -370,15 +397,16 @@ the permission model rather than a convenience.
 a motor in is exactly the person who may hold the second and not the first —
 fetching the intake form's fields from the items route would 403 the form for its
 main user. It is the trap M22's attribution pickers avoid by riding on
-`GET /transactions/meta` rather than on `/staff`. The list is filtered to
-categories that `holds_stock`: in this application a category that holds none is
-one whose things are produced at the moment they are sold — an hour of rewinding
-— and nobody wheels one of those through a door. That is a property of the
-category rather than a flag invented for this module, which is why there is no
-`repairable` column to keep in step with it.
+`GET /transactions/meta` rather than on `/staff`. The same call carries the
+workshop's **units**, for the Kind Master's field editor, and for the same
+reason.
 
-`category_id` and `specs` travel together on a `PATCH`. The bag is filtered
-against whichever category the job ends up under, so correcting a motor to a
+The list is every active `job_kinds` row — no filter, because a kind exists
+precisely to be offered here. That replaced a filter on `holds_stock`, which is
+the mistake the section above is about.
+
+`job_kind_id` and `specs` travel together on a `PATCH`. The bag is filtered
+against whichever kind the job ends up under, so correcting a motor to a
 cooler cannot leave a motor's answers behind — `hp` is not a field a cooler has,
 and a bag its kind cannot read is one nothing can print.
 

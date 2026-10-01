@@ -9,7 +9,7 @@ use App\Models\ItemAttribute;
 use App\Models\ItemCategory;
 use App\Repositories\Contracts\ItemAttributeRepositoryInterface;
 use App\Repositories\Contracts\ItemCategoryRepositoryInterface;
-use App\Support\Units\UnitRegistry;
+use App\Support\Catalogue\AttributeFieldShape;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Log;
 
@@ -43,7 +43,7 @@ class ItemAttributeService
     public function __construct(
         private readonly ItemAttributeRepositoryInterface $attributes,
         private readonly ItemCategoryRepositoryInterface $categories,
-        private readonly UnitRegistry $units,
+        private readonly AttributeFieldShape $shape,
     ) {}
 
     /* ---------------------------------------------------------------------
@@ -346,111 +346,51 @@ class ItemAttributeService
      | Normalisation
      |-------------------------------------------------------------------- */
 
-    /**
-     * The JSON key, derived from the label where nobody supplied one.
-     *
-     * Snake case and starting with a letter, because it is used as an object key
-     * in the browser, as a form field name, and — in one place — interpolated
-     * into a JSON path in SQL. Anything outside that is refused rather than
-     * escaped, because a key nobody can type is a key nobody can debug.
-     */
+    /* ---------------------------------------------------------------------
+    | Field shape
+    |
+    | Every rule below moved to App\Support\Catalogue\AttributeFieldShape when
+    | the bench got its own question sets: `job_kind_attributes` is the same
+    | shape as this table, and none of these rules is about what a field
+    | describes — a key has to be typable either way, a yes/no cannot carry a
+    | unit either way. Two copies would be two places the snake-case rule
+    | lives, and the one that drifts is discovered when a key that works on one
+    | form is refused on the other (§4.4).
+    |
+    | They stay here as one-line delegations rather than being inlined at each
+    | call site, so the diff that moved them changed no behaviour.
+    |-------------------------------------------------------------------- */
+
     private function normaliseKey(?string $key, string $label): string
     {
-        $source = trim((string) ($key ?? ''));
-
-        if ($source === '') {
-            $source = $label;
-        }
-
-        $slug = strtolower(preg_replace('/[^A-Za-z0-9]+/', '_', $source) ?? '');
-        $slug = trim($slug, '_');
-
-        if ($slug === '' || preg_match('/^[a-z]/', $slug) !== 1) {
-            $slug = 'f_'.$slug;
-        }
-
-        return substr($slug, 0, 40);
+        return $this->shape->key($key, $label);
     }
 
     private function resolveType(mixed $type): AttributeType
     {
-        return AttributeType::tryFrom((string) $type) ?? AttributeType::Text;
+        return $this->shape->type($type);
     }
 
-    /**
-     * The unit, dropped where the type cannot carry one.
-     *
-     * A yes/no with "kg" printed after it is a form somebody has to stop and
-     * puzzle over, and it would come from a type change rather than from anybody
-     * choosing it. Unknown codes are dropped for the same reason: printing a unit
-     * the workshop has never heard of is worse than printing none.
-     */
     private function resolveUnitCode(AttributeType $type, mixed $code): ?string
     {
-        if (! $type->acceptsUnit()) {
-            return null;
-        }
-
-        $code = $this->trimmed($code);
-
-        if ($code === null) {
-            return null;
-        }
-
-        return $this->units->has($code) ? $code : null;
+        return $this->shape->unitCode($type, $code);
     }
 
     /**
-     * The option list, or null where the type has none.
-     *
-     * Order is preserved: it is what the select renders, and alphabetising "Deep
-     * groove, Needle, Tapered" would bury the common one in the middle.
-     * Duplicates are dropped — two identical choices is a list nobody can pick
-     * from unambiguously.
-     *
      * @return array<int, string>|null
      */
     private function normaliseOptions(AttributeType $type, mixed $options): ?array
     {
-        if (! $type->hasOptions()) {
-            return null;
-        }
-
-        if (! is_array($options)) {
-            return [];
-        }
-
-        $cleaned = [];
-
-        foreach ($options as $option) {
-            $option = trim((string) $option);
-
-            if ($option === '' || in_array($option, $cleaned, true)) {
-                continue;
-            }
-
-            $cleaned[] = $option;
-        }
-
-        return $cleaned;
+        return $this->shape->options($type, $options);
     }
 
-    /**
-     * A bound, dropped where the type has no range.
-     */
     private function normaliseBound(AttributeType $type, mixed $value): ?string
     {
-        if (! $type->acceptsRange() || $value === null || $value === '') {
-            return null;
-        }
-
-        return number_format((float) $value, 3, '.', '');
+        return $this->shape->bound($type, $value);
     }
 
     private function trimmed(mixed $value): ?string
     {
-        $value = trim((string) ($value ?? ''));
-
-        return $value === '' ? null : $value;
+        return $this->shape->trimmed($value);
     }
 }

@@ -1293,62 +1293,59 @@
     | when what a form needs is columns of a fixed width and however many of them
     | fit.
     |
-    | So: `auto-fit` against `--field-min`. A 1232px card gives four columns, a
+    | So: `auto-fill` against `--field-min`. A 1232px card gives four columns, a
     | 52rem one gives three, a 500px drawer two — and none of them is written
     | down anywhere or has to be revisited when a surface changes width. A group
     | of two fields now occupies two of four columns and stops, which is what it
     | should always have done, and `span-all` is still how the one field that
     | genuinely wants the row asks for it.
     |
+    | `auto-fill` and **not** `auto-fit`, which is the whole difference between a
+    | form that lines up and one that does not. `auto-fit` *collapses* a track no
+    | item landed in and shares its width out among the rest, so the number of
+    | columns a group gets depends on how many fields are in it: on a 1204px
+    | surface a group of four sits on 292px columns and a group of three sits on
+    | 393px ones. The items form puts exactly that pair next to each other — a
+    | variant's three specification fields directly above its four of SKU,
+    | barcode and the two prices — and nothing in the block lined up with
+    | anything below it. `auto-fill` keeps the empty track, so every grid on a
+    | surface is on the same column rhythm whatever is in it, and a field in the
+    | second column of one group is over the second column of the next.
+    |
+    | The threshold is where this first beats the fallback: two 15rem tracks and
+    | a gap need 492px, so below 32rem the container rule would give one column
+    | where the two-column fallback gives two.
+    |
     | It degrades to the two columns above: a browser without container queries,
     | or a surface that declares none, simply never matches this.
     */
-    @container form-surface (width >= 30rem) {
-        grid-template-columns: repeat(auto-fit, minmax(var(--field-min), 1fr));
+    @container form-surface (width >= 32rem) {
+        grid-template-columns: repeat(auto-fill, minmax(var(--field-min), 1fr));
     }
 }
 
 /*
-| What a control is *for*, said on the control.
+| ## Why there is no `field-num`, `field-code` or `field-date` here
 |
-| These are ceilings, not widths: `max-inline-size` over `.field-input`'s
-| `width: 100%`, so the cell still governs on a phone and the ceiling only ever
-| takes width away. That asymmetry is the whole of why they are safe to apply
-| broadly — the worst a wrong one does is make a field narrower than it needed
-| to be, on a screen where the text is still legible.
+| There was, briefly, and the screenshot of the items form is the argument
+| against it. A control sized to what it holds — 8rem for a rate, 10.5rem for an
+| SKU, 11rem for a date — leaves a row of four fields with four different right
+| edges, and the hint under a 128px box runs to the full 292px of the column it
+| is in. Every row read as a different shape, and the form looked like it had
+| been assembled rather than laid out.
 |
-| Reach for one whenever what goes in the box has a bound. A rate is four
-| characters however wide the card is; giving it the column's full width is not
-| generosity, it is the reader having to work out that the long box and the
-| short box mean the same kind of thing.
+| A field fills its column. The column is what carries the width decision
+| (`--field-min` and `form-grid`), and it is one decision for the whole form
+| rather than one per control, so a row of fields has one left edge and one right
+| edge and the eye has nothing to re-measure. This is also what makes a group of
+| four sit squarely under a group of four.
 |
-| Put it on the **outermost box of the control**, which is not always the input.
-| A rate and a percentage sit inside a `relative` wrapper carrying an absolutely
-| positioned `%` or `₹` at `right-3`; capping the input there would leave the
-| wrapper full width and the symbol stranded three-hundred pixels from the box it
-| belongs to. The wrapper takes the class and the input keeps its `width: 100%`.
-|
-| For the same reason, none of these goes on a `<select>`:
-| `components/searchable-select.js` takes every one of them off the screen and
-| draws its own box beside it, so a ceiling written on the select would be a
-| ceiling on the hidden element. Cap the field's wrapper if a select ever needs
-| one, and see that file's note on which properties it mirrors.
+| That a GST rate does not *need* 292px is true and is not the point: the width
+| that was actually wrong was the 600px two columns gave it, and the column count
+| is what fixed that. If a genuinely fixed-width control is ever needed — a
+| colour swatch, a spinner — give it its own width at the call site and keep it
+| out of `form-grid`.
 */
-@utility field-num {
-    max-inline-size: var(--w-num);
-}
-
-@utility field-code {
-    max-inline-size: var(--w-code);
-}
-
-@utility field-date {
-    max-inline-size: var(--w-date);
-}
-
-@utility field-short {
-    max-inline-size: var(--w-short);
-}
 
 @utility span-all {
     grid-column: 1 / -1;

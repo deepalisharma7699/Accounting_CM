@@ -573,6 +573,39 @@ class OpeningBalanceService
         $creates = [];
         $confidence = null;
 
+        /*
+        | A caller that already knows the variant is believed, and nothing is
+        | matched or created.
+        |
+        | This is the Items drawer declaring opening stock for the one variant it
+        | has open. Everything below resolves *names*, because that is what a
+        | pasted spreadsheet contains — and putting a known id through a fuzzy
+        | name match would be the one way this path could go wrong: a shop with
+        | "Bearing 6204" and "Bearing 6204 ZZ" would have a near-miss decide
+        | which shelf a declaration landed on, silently, with both answers
+        | looking right on the preview.
+        |
+        | `findWithItem` is tenant-scoped like every read on these models, so an
+        | id belonging to another workshop is *not found* rather than found and
+        | refused — and a row naming an id that does not resolve is an error on
+        | that row, never a quiet fallback to matching the name beside it. A
+        | fallback is what would turn a stale id in a held page into a
+        | declaration against the wrong variant.
+        */
+        if ($row->variantId !== null) {
+            $variant = $this->variantRepository->findWithItem($row->variantId);
+
+            if ($variant === null || $variant->item === null) {
+                return sprintf(
+                    'The variant this declaration names (#%d) no longer exists. Reopen the product and try '.
+                    'again — nothing has been posted.',
+                    $row->variantId,
+                );
+            }
+
+            return [$variant->item, $variant, [], null];
+        }
+
         $found = $this->matcher->best($name, $this->allItems(), fn (Item $item) => $item->name);
 
         if ($found === null) {

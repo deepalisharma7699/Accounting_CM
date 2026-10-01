@@ -121,7 +121,7 @@
                         <label for="category-gst" class="field-label">
                             Usual GST rate <span class="font-normal text-muted-foreground">(optional)</span>
                         </label>
-                        <div class="relative field-num">
+                        <div class="relative">
                             {{-- Prefilled rather than suggested in placeholder
                                  grey, for the reason modules/items.blade.php
                                  records. Clear it for a category that cannot
@@ -177,6 +177,25 @@
                         </label>
                     </div>
                 </div>
+
+                {{-- Shown on an edit only, and the answer to a category that
+                     cannot be deleted because products are filed under it.
+                     Archiving takes it off the create form and leaves every
+                     product that already carries it reading exactly as before. --}}
+                <div id="category-active-row" class="hidden border-t border-muted pt-4">
+                    <div class="flex items-start gap-2.5">
+                        <input id="category-active" name="is_active" type="checkbox"
+                               class="mt-0.5 size-4 rounded border-border" checked>
+                        <label for="category-active" class="text-sm text-secondary-foreground">
+                            Offer this category on the create form
+                            <span class="mt-0.5 block text-xs text-muted-foreground">
+                                Turn it off for a kind of thing the shop no longer deals in. Products
+                                already filed under it keep it, and go on being counted and billed.
+                            </span>
+                        </label>
+                    </div>
+                    <p class="field-error hidden" data-error-for="is_active"></p>
+                </div>
             </div>
 
             <div class="flex gap-2 border-t border-muted px-6 py-4">
@@ -217,7 +236,7 @@
                      are stored under, and renaming it would orphan every one. --}}
                 <div id="attribute-key-row" class="hidden">
                     <label for="attribute-key" class="field-label">Stored as</label>
-                    <input id="attribute-key" type="text" class="field-input field-code font-mono" disabled>
+                    <input id="attribute-key" type="text" class="field-input font-mono" disabled>
                     <p class="mt-1.5 text-xs text-muted-foreground">
                         Fixed. Every product that answered this field is stored under this key.
                     </p>
@@ -257,7 +276,7 @@
                             Smallest allowed <span class="font-normal text-muted-foreground">(optional)</span>
                         </label>
                         <input id="attribute-min" name="min_value" type="text" inputmode="decimal"
-                               class="field-input field-num text-right font-mono">
+                               class="field-input text-right font-mono">
                         <p class="field-error hidden" data-error-for="min_value"></p>
                     </div>
                     <div>
@@ -265,7 +284,7 @@
                             Largest allowed <span class="font-normal text-muted-foreground">(optional)</span>
                         </label>
                         <input id="attribute-max" name="max_value" type="text" inputmode="decimal"
-                               class="field-input field-num text-right font-mono">
+                               class="field-input text-right font-mono">
                         <p class="field-error hidden" data-error-for="max_value"></p>
                     </div>
                 </div>
@@ -302,6 +321,25 @@
                     </label>
                 </div>
                 <p class="field-error hidden" data-error-for="is_required"></p>
+
+                {{-- Shown on an edit only, and the answer to a field that cannot
+                     be deleted because products have answered it. Switching it
+                     off stops the create form asking, and keeps the label that
+                     explains what every stored value means. --}}
+                <div id="attribute-active-row" class="hidden border-t border-muted pt-4">
+                    <div class="flex items-start gap-2.5">
+                        <input id="attribute-active" name="is_active" type="checkbox"
+                               class="mt-0.5 size-4 rounded border-border" checked>
+                        <label for="attribute-active" class="text-sm text-secondary-foreground">
+                            Ask for this field on the create form
+                            <span class="mt-0.5 block text-xs text-muted-foreground">
+                                Turn it off to stop collecting it. Products that already answered it keep
+                                their value, and it goes on being labelled and printed.
+                            </span>
+                        </label>
+                    </div>
+                    <p class="field-error hidden" data-error-for="is_active"></p>
+                </div>
             </div>
 
             <div class="flex gap-2 border-t border-muted px-6 py-4">
@@ -381,10 +419,28 @@
                      recorded points at this code. --}}
                 <div id="unit-code-row" class="hidden">
                     <label for="unit-code" class="field-label">Stored as</label>
-                    <input id="unit-code" type="text" class="field-input field-code font-mono" disabled>
+                    <input id="unit-code" type="text" class="field-input font-mono" disabled>
                     <p class="mt-1.5 text-xs text-muted-foreground">
                         Fixed. Every quantity ever recorded in this unit points at it.
                     </p>
+                </div>
+
+                {{-- Shown on an edit only, and the answer to a unit that cannot
+                     be deleted because something is counted in it. The footer
+                     has promised this switch since the master was built. --}}
+                <div id="unit-active-row" class="hidden border-t border-muted pt-4">
+                    <div class="flex items-start gap-2.5">
+                        <input id="unit-active" name="is_active" type="checkbox"
+                               class="mt-0.5 size-4 rounded border-border" checked>
+                        <label for="unit-active" class="text-sm text-secondary-foreground">
+                            Offer this unit on the catalogue's forms
+                            <span class="mt-0.5 block text-xs text-muted-foreground">
+                                Turn it off for a unit the shop has stopped using. Every quantity already
+                                recorded in it is unchanged and goes on reading the same way.
+                            </span>
+                        </label>
+                    </div>
+                    <p class="field-error hidden" data-error-for="is_active"></p>
                 </div>
             </div>
 
@@ -432,7 +488,7 @@
                     <label for="brand-code" class="field-label">
                         Short code <span class="font-normal text-muted-foreground">(optional)</span>
                     </label>
-                    <input id="brand-code" name="code" type="text" class="field-input field-code font-mono"
+                    <input id="brand-code" name="code" type="text" class="field-input font-mono"
                            autocomplete="off" placeholder="e.g. SKF">
                     <p class="field-error hidden" data-error-for="code"></p>
                 </div>

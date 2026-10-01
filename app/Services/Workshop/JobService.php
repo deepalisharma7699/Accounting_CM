@@ -2,6 +2,7 @@
 
 namespace App\Services\Workshop;
 
+use App\Contracts\QuestionSet;
 use App\Enums\DocumentSeries;
 use App\Enums\PartyRole;
 use App\Enums\TransactionType;
@@ -73,7 +74,10 @@ class JobService
         private readonly WorkshopJobRepositoryInterface $jobs,
         private readonly PartyRepositoryInterface $parties,
         private readonly ItemRepositoryInterface $items,
+        // Still here, and only for the window before the bench's own kinds
+        // exist — see resolveCategoryAsKind().
         private readonly ItemCategoryRepositoryInterface $categories,
+        private readonly JobKindService $jobKinds,
         private readonly ItemVariantRepositoryInterface $variants,
         private readonly TransactionService $transactions,
         private readonly BillService $bills,
@@ -154,7 +158,7 @@ class JobService
      */
     private function attachSpecSchema(Collection $jobs): void
     {
-        $ids = $jobs->pluck('category_id')->filter()->unique()->values();
+        $ids = $jobs->pluck($this->kindKey())->filter()->unique()->values();
 
         if ($ids->isEmpty()) {
             return;
@@ -163,7 +167,7 @@ class JobService
         $schemas = [];
 
         foreach ($ids as $id) {
-            $category = $this->categories->findWithSchema((int) $id);
+            $category = $this->questionSet((int) $id);
 
             if ($category === null) {
                 continue;
@@ -184,7 +188,7 @@ class JobService
         }
 
         foreach ($jobs as $job) {
-            $job->specSchema = $schemas[(int) $job->category_id] ?? null;
+            $job->specSchema = $schemas[(int) $job->{$this->kindKey()}] ?? null;
         }
     }
 
@@ -273,7 +277,7 @@ class JobService
     public function create(array $data, ?User $actor = null): WorkshopJob
     {
         $party = $this->requireCustomer((int) $data['party_id']);
-        $kind = $this->resolveKind($data['category_id'] ?? null);
+        $kind = $this->resolveKind($this->kindIdFrom($data));
         $receivedDate = $data['received_date'] ?? now()->toDateString();
 
         $job = DB::transaction(fn () => $this->jobs->create([
@@ -283,7 +287,7 @@ class JobService
             ),
             'party_id' => $party->id,
             'item_id' => $this->resolveItemId($data['item_id'] ?? null),
-            'category_id' => $kind?->id,
+            $this->kindKey() => $kind?->id,
             // Copied, not joined — the migration's reason, and the same one the
             // brand and the model beside it are copied for.
             'kind_label' => $kind?->name,
@@ -343,18 +347,22 @@ class JobService
         | request that changes the kind without resending the answers clears
         | them rather than keeping a bag nothing can read.
         */
-        $kind = array_key_exists('category_id', $data)
-            ? $this->resolveKind($data['category_id'])
-            : $job->category;
+        $kindSent = array_key_exists($this->kindKey(), $data);
 
-        if (array_key_exists('category_id', $data)) {
-            $attributes['category_id'] = $kind?->id;
+        $kind = $kindSent
+            ? $this->resolveKind($this->kindIdFrom($data))
+            : $this->kindOf($job);
+
+        if ($kindSent) {
+            $attributes[$this->kindKey()] = $kind?->id;
             $attributes['kind_label'] = $kind?->name;
         }
 
-        if (array_key_exists('specs', $data) || array_key_exists('category_id', $data)) {
+        if (array_key_exists('specs', $data) || $kindSent) {
             $attributes['specs'] = $this->normaliseSpecs(
-                $data['specs'] ?? ($kind?->id === $job->category_id ? $job->specs : null),
+                // Held only while the kind has not moved: answers keyed to one
+                // question set mean nothing under another.
+                $data['specs'] ?? ($kind?->id === $job->{$this->kindKey()} ? $job->specs : null),
                 $kind,
             );
         }
@@ -881,19 +889,88 @@ class JobService
      * omits them: a category switched off is still the answer on the jobs that
      * carry it, and must not be the answer to a new one.
      */
-    private function resolveKind(mixed $categoryId): ?ItemCategory
+    /**
+     * Which key on an incoming payload names the kind.
+     *
+     * `job_kind_id` once the bench has its own list, `category_id` in the
+     * window before it (§4.6) — and **never both at once**. A payload's
+     * `category_id` is an `item_categories` id, so reading it as a kind id
+     * after the tables exist would not be a fallback, it would be a lookup of
+     * one table's id in another: a 404 where the ids happen not to collide, and
+     * the wrong kind on the card where they do. A client that has not been
+     * reloaded therefore books a job with no kind, which is a state the form
+     * already allows and a person can correct.
+     */
+    private function kindKey(): string
     {
-        if ($categoryId === null || $categoryId === '') {
+        return $this->jobKinds->isInstalled() ? 'job_kind_id' : 'category_id';
+    }
+
+    /**
+     * @param  array<string, mixed>  $data
+     */
+    private function kindIdFrom(array $data): mixed
+    {
+        return $data[$this->kindKey()] ?? null;
+    }
+
+    private function resolveKind(mixed $kindId): ?QuestionSet
+    {
+        if ($kindId === null || $kindId === '') {
             return null;
         }
 
-        $category = $this->categories->findWithSchema((int) $categoryId);
+        if (! $this->jobKinds->isInstalled()) {
+            return $this->resolveCategoryAsKind((int) $kindId);
+        }
+
+        $kind = $this->jobKinds->byId()->get((int) $kindId);
+
+        if ($kind === null || ! $kind->is_active) {
+            throw new ResourceNotFoundException('Job kind', (int) $kindId);
+        }
+
+        return $kind;
+    }
+
+    /**
+     * The list the bench read before it had one of its own.
+     *
+     * Reached only in the window between this code deploying and
+     * `database/manual/sql/2026_09_30_001_job_kinds.sql` being run (§4.6), and
+     * it is the old behaviour unchanged — `holds_stock` and all, wrong filter
+     * included, because being wrong in exactly the way it was yesterday is the
+     * point of a fallback.
+     */
+    private function resolveCategoryAsKind(int $categoryId): ItemCategory
+    {
+        $category = $this->categories->findWithSchema($categoryId);
 
         if ($category === null || ! $category->is_active || ! $category->holds_stock) {
-            throw new ResourceNotFoundException('Item category', (int) $categoryId);
+            throw new ResourceNotFoundException('Item category', $categoryId);
         }
 
         return $category;
+    }
+
+    /**
+     * The question set a job was booked in under, whichever shape it is.
+     */
+    private function kindOf(WorkshopJob $job): ?QuestionSet
+    {
+        $id = $job->{$this->kindKey()};
+
+        return $id === null ? null : $this->questionSet((int) $id);
+    }
+
+    /**
+     * One id, resolved with its fields loaded, on whichever side is live.
+     */
+    private function questionSet(int $id): ?QuestionSet
+    {
+        return $this->jobKinds->isInstalled()
+            ? $this->jobKinds->byId()->get($id)
+            : $this->categories->findWithSchema($id);
     }
 
     /**
@@ -926,7 +1003,7 @@ class JobService
      * @param  mixed  $raw
      * @return array<string, string>|null
      */
-    private function normaliseSpecs(mixed $raw, ?ItemCategory $kind): ?array
+    private function normaliseSpecs(mixed $raw, ?QuestionSet $kind): ?array
     {
         if ($kind === null || ! is_array($raw)) {
             return null;

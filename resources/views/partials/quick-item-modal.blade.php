@@ -61,14 +61,14 @@
 
                     <div>
                         <label for="quick-hsn" class="field-label" id="quick-hsn-label">HSN code</label>
-                        <input id="quick-hsn" name="hsn_sac" type="text" inputmode="numeric" class="field-input field-code"
+                        <input id="quick-hsn" name="hsn_sac" type="text" inputmode="numeric" class="field-input"
                                autocomplete="off" placeholder="4 to 8 digits">
                         <p class="field-error hidden" data-error-for="hsn_sac"></p>
                     </div>
 
                     <div>
                         <label for="quick-gst" class="field-label">GST rate</label>
-                        <div class="relative field-num">
+                        <div class="relative">
                             {{-- See the note on the same field in modules/items.blade.php:
                                  prefilled as a real value, because a greyed numeral
                                  in this box reads as a filled-in one and saved 0%. --}}
@@ -106,7 +106,7 @@
                             <label for="quick-sku" class="field-label">
                                 SKU <span class="font-normal text-muted-foreground">(optional)</span>
                             </label>
-                            <input id="quick-sku" name="sku" type="text" class="field-input field-code" autocomplete="off">
+                            <input id="quick-sku" name="sku" type="text" class="field-input" autocomplete="off">
                             <p class="field-error hidden" data-error-for="sku"></p>
                         </div>
 
@@ -115,7 +115,7 @@
                                 Selling price <span class="font-normal text-muted-foreground">(optional)</span>
                             </label>
                             <input id="quick-price" name="sell_price" type="text" inputmode="decimal"
-                                   class="field-input field-num text-right font-mono" placeholder="0.00">
+                                   class="field-input text-right font-mono" placeholder="0.00">
                             <p class="mt-1.5 text-xs text-muted-foreground">
                                 Fills the rate on the line. Leave blank if you quote per job.
                             </p>

@@ -115,6 +115,17 @@
                 <input type="date" data-filter-to class="field-input w-auto" aria-label="To date">
             </label>
 
+            {{-- Off by default, so the list is the working one: a bill
+                 cancelled ten minutes ago is not still taking up two rows on
+                 the screen somebody is trying to read. Both halves come back
+                 together when this is pressed — see the `hide_cancelled` filter
+                 in EloquentTransactionRepository. Nothing is deleted and
+                 nothing is hidden from the books: the pair is on the Day Book
+                 and on the audit trail exactly as it always was. --}}
+            <button type="button" data-filter-cancelled class="pill" aria-pressed="false">
+                Show cancelled
+            </button>
+
             <button type="button" data-filter-outstanding class="pill" aria-pressed="false">
                 Only what is still owed
             </button>

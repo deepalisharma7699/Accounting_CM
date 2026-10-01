@@ -302,6 +302,35 @@ stop opening without anything having to remember. A bad token, a revoked one and
 a reversed one all answer the same 404. See
 [billing-module.md](billing-module.md#the-customers-copy--m20).
 
+### Cancelling is what reversing is called on this screen
+
+A posted document is immutable and is corrected by **reversing** it — that has
+not changed and cannot. Posting a purchase recomputes the weighted average cost
+of every variant on it, so once anything has been sold the shelf is valued off
+that document and deleting the row could not un-blend it; a sale issues at an
+average that is on no document at all, which is what `REVISION_WOULD_RESTATE_COST`
+already refuses. The GST position and the audit trail have to survive either way.
+
+What changed is the wording and the list. The control says **"Cancel this
+&lt;noun&gt;"** rather than "Reverse", because people looking for "delete" do not
+recognise the accounting term, and because "Cancel" alone beside "Close" in a
+drawer footer reads as "cancel what I am doing". The confirmation then says what
+cancelling actually does.
+
+And the cancelled pair — the document with `status = reversed` **and** the entry
+with `reverses_id` that undid it — comes **off the working list by default**,
+behind a "Show cancelled" toggle. Both halves go together: hiding one would leave
+a negative document referring to nothing. Nothing is hidden from the books; the
+pair is untouched in the ledger, on the Day Book and on the audit trail, which is
+the whole reason it is safe to take off this one screen.
+
+It is a `hide_cancelled` filter on `GET /transactions`, and it is **opt-in at the
+API**: the party statement, the journal and the expenses list are all asking
+books questions where a cancelled document is part of the answer, so the default
+had to stay exactly as it was. The screen also stops sending it the moment
+somebody picks a state from the filter — asking for "Reversed" and being handed
+an empty table would be the screen doing the opposite of what it was told.
+
 ## Idempotency
 
 Three references, and they are not the same one.

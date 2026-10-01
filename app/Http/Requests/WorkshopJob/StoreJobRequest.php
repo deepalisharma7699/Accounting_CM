@@ -45,9 +45,15 @@ class StoreJobRequest extends FormRequest
             // fallback for it — see the migration.
             'item_id' => ['nullable', 'integer', 'min:1'],
 
-            // What kind of thing came in — an `item_categories` row. Whether it
-            // exists, is active and can be a physical object belongs to the
-            // service, which every entry point passes through.
+            // What kind of thing came in — a `job_kinds` row. Whether it
+            // exists and is active belongs to the service, which every entry
+            // point passes through.
+            //
+            // `category_id` is the same field under the name the form sent
+            // before the bench had its own kinds, and it is still accepted for
+            // the deployment window §4.6 requires — a client that has not been
+            // reloaded must not silently stop recording what came in.
+            'job_kind_id' => ['nullable', 'integer', 'min:1'],
             'category_id' => ['nullable', 'integer', 'min:1'],
 
             /*
@@ -104,6 +110,7 @@ class StoreJobRequest extends FormRequest
         return [
             'party_id' => (int) $this->input('party_id'),
             'item_id' => $this->filled('item_id') ? (int) $this->input('item_id') : null,
+            'job_kind_id' => $this->filled('job_kind_id') ? (int) $this->input('job_kind_id') : null,
             'category_id' => $this->filled('category_id') ? (int) $this->input('category_id') : null,
             'specs' => $this->input('specs'),
             'brand' => $this->input('brand'),

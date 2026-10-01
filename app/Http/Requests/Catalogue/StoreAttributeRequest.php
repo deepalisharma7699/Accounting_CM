@@ -8,7 +8,16 @@ use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
 /**
- * A field on a category, new or edited.
+ * A field on a question set, new or edited.
+ *
+ * Used by **both** masters — a category's fields in the catalogue and a job
+ * kind's on the bench — because nothing it validates is about what the field
+ * describes. A label is a label, a key has to be typable, a dropdown's options
+ * are strings, and a bound is a number to three places, whichever side asked.
+ * A second copy would be a second set of rules and a second set of messages,
+ * and the one that drifted would refuse on one form what it accepted on the
+ * other (§5.1). It stays in the `Catalogue` namespace because that is where it
+ * was written and moving it would rename it for no gain.
  *
  * `data_type` is validated against an enum here, unlike almost everything else in
  * this module — and the asymmetry is the point. Categories and units became

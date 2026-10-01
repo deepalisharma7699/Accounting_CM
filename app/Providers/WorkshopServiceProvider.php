@@ -2,7 +2,9 @@
 
 namespace App\Providers;
 
+use App\Repositories\Contracts\JobKindRepositoryInterface;
 use App\Repositories\Contracts\WorkshopJobRepositoryInterface;
+use App\Repositories\Eloquent\EloquentJobKindRepository;
 use App\Repositories\Eloquent\EloquentWorkshopJobRepository;
 use Illuminate\Support\ServiceProvider;
 
@@ -27,6 +29,7 @@ class WorkshopServiceProvider extends ServiceProvider
      */
     private const REPOSITORIES = [
         WorkshopJobRepositoryInterface::class => EloquentWorkshopJobRepository::class,
+        JobKindRepositoryInterface::class => EloquentJobKindRepository::class,
     ];
 
     public function register(): void

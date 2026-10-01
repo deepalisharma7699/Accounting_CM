@@ -56,6 +56,15 @@ class IndexTransactionRequest extends FormRequest
             // "Show me only what is still owed" — the toggle above a bills list,
             // and a shorthand for every payment status except paid.
             'outstanding' => ['nullable', 'boolean'],
+            /*
+            | Drop cancelled documents and the reversals that cancelled them —
+            | the working-list view a counter wants, where a mistake corrected
+            | ten minutes ago is not still taking up two rows.
+            |
+            | Opt-in, so no existing caller's results change. See the filter
+            | itself in EloquentTransactionRepository for why both halves go.
+            */
+            'hide_cancelled' => ['nullable', 'boolean'],
             'sort' => ['nullable', Rule::in(['date', 'total', 'created_at'])],
             'direction' => ['nullable', Rule::in(['asc', 'desc'])],
             'per_page' => ['nullable', 'integer', 'between:1,200'],
@@ -85,6 +94,9 @@ class IndexTransactionRequest extends FormRequest
             // nothing — `outstanding=0` is "I did not ask", not "show me the
             // settled ones", which is what `payment_status=paid` is for.
             'outstanding' => $this->boolean('outstanding') ?: null,
+            // Absent rather than false when the toggle is off, for the reason
+            // `outstanding` is: it must narrow nothing unless it was asked for.
+            'hide_cancelled' => $this->boolean('hide_cancelled') ?: null,
             'sort' => $this->input('sort'),
             'direction' => $this->input('direction'),
         ];

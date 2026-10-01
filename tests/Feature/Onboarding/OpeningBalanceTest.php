@@ -18,6 +18,7 @@ use App\Models\User;
 use App\Services\Onboarding\OpeningBalanceService;
 use App\Services\Onboarding\OpeningCsvParser;
 use App\Services\Onboarding\OpeningPlan;
+use App\Services\Onboarding\OpeningRow;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use PHPUnit\Framework\Attributes\Test;
 use Tests\Concerns\InteractsWithAuthModule;
@@ -81,6 +82,40 @@ class OpeningBalanceTest extends TestCase
             $date,
             'opening.csv',
             $this->owner,
+        ));
+    }
+
+    /**
+     * Import structured rows rather than a file — what the Items drawer sends
+     * when it declares opening stock for one variant it already has open.
+     *
+     * @param  array<int, array<string, mixed>>  $rows
+     */
+    private function importRows(array $rows, ?string $date = null): OpeningImport
+    {
+        return $this->actingForTenant($this->tenant, fn () => $this->service()->import(
+            array_map(
+                fn (array $row, int $i) => [$i + 2, OpeningRow::from($row)],
+                $rows,
+                array_keys($rows),
+            ),
+            $date,
+            'Opening stock',
+            $this->owner,
+        ));
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $rows
+     */
+    private function planRows(array $rows): OpeningPlan
+    {
+        return $this->actingForTenant($this->tenant, fn () => $this->service()->plan(
+            array_map(
+                fn (array $row, int $i) => [$i + 2, OpeningRow::from($row)],
+                $rows,
+                array_keys($rows),
+            ),
         ));
     }
 
@@ -288,6 +323,175 @@ class OpeningBalanceTest extends TestCase
         payable,Kohli Traders,32000.00
         receivable,Sharma Motors,15000.00
         CSV);
+    }
+
+    /* ---------------------------------------------------------------------
+     | Declaring one variant by id — the Items drawer's path
+     |-------------------------------------------------------------------- */
+
+    /**
+     * Two variants of one product, identical names, and the id decides.
+     *
+     * This is the case the name matcher cannot do and must not be asked to: the
+     * Items drawer is looking at one variant and knows its id, and a fuzzy match
+     * on a name both share would let a near-miss choose which shelf a
+     * declaration landed on.
+     */
+    #[Test]
+    public function a_row_naming_a_variant_id_lands_on_that_variant(): void
+    {
+        [$first, $second] = $this->twinVariants();
+
+        $this->importRows([[
+            'kind' => 'stock',
+            'name' => 'Ball Bearing',
+            'variant_id' => $second->id,
+            'quantity' => '10',
+            'unit_cost' => '120.00',
+        ]]);
+
+        $this->actingForTenant($this->tenant, function () use ($first, $second) {
+            $movement = StockMovement::query()->firstOrFail();
+
+            $this->assertSame($second->id, $movement->variant_id, 'The declaration landed on the wrong variant.');
+            $this->assertNotSame($first->id, $movement->variant_id);
+            $this->assertSame('opening', $movement->type->value);
+
+            // Nothing was invented: the id resolved an existing record.
+            $this->assertSame(1, Item::query()->count());
+            $this->assertSame(2, ItemVariant::query()->count());
+        });
+    }
+
+    /**
+     * The same declaration is an error without the id, which is what proves the
+     * id did the work above rather than luck.
+     */
+    #[Test]
+    public function the_same_row_without_an_id_is_ambiguous_and_refused(): void
+    {
+        $this->twinVariants();
+
+        $plan = $this->planRows([[
+            'kind' => 'stock', 'name' => 'Ball Bearing', 'quantity' => '10', 'unit_cost' => '120.00',
+        ]]);
+
+        $this->assertTrue($plan->hasErrors());
+        $this->assertStringContainsString('has 2 variants', (string) $plan->rows[0]->reason);
+    }
+
+    /**
+     * An id that does not resolve is an error on that row, never a quiet fall
+     * back to matching the name beside it — a fall-back is what would turn a
+     * stale id in a held page into a declaration against the wrong variant.
+     */
+    #[Test]
+    public function an_unresolvable_variant_id_is_an_error_rather_than_a_guess(): void
+    {
+        $this->twinVariants();
+
+        $plan = $this->planRows([[
+            'kind' => 'stock', 'name' => 'Ball Bearing', 'variant_id' => 99999999,
+            'quantity' => '10', 'unit_cost' => '120.00',
+        ]]);
+
+        $this->assertTrue($plan->hasErrors());
+        $this->assertStringContainsString('no longer exists', (string) $plan->rows[0]->reason);
+    }
+
+    /**
+     * One workshop's declaration cannot name another workshop's variant.
+     *
+     * The id is resolved through the ordinary tenant-scoped read, so a foreign
+     * id is *not found* rather than found and refused.
+     */
+    #[Test]
+    public function a_variant_id_from_another_workshop_does_not_resolve(): void
+    {
+        $this->twinVariants();
+
+        [$other] = $this->tenantWithUser([['READ', 'ITEMS'], ['WRITE', 'ITEMS']]);
+        $theirs = $this->variantFor($other, 'part');
+
+        $plan = $this->planRows([[
+            'kind' => 'stock', 'name' => 'Ball Bearing', 'variant_id' => $theirs->id,
+            'quantity' => '10', 'unit_cost' => '120.00',
+        ]]);
+
+        $this->assertTrue($plan->hasErrors());
+        $this->assertStringContainsString('no longer exists', (string) $plan->rows[0]->reason);
+    }
+
+    /**
+     * Both variants can be declared at the same figures.
+     *
+     * The bug this pins: the import fingerprint did not include the variant id,
+     * so two variants of one product declared at one quantity and cost hashed
+     * identically and the second was refused outright as a file already
+     * imported — a correct figure the product would not accept.
+     */
+    #[Test]
+    public function two_variants_of_one_product_can_each_be_declared_at_the_same_figures(): void
+    {
+        [$first, $second] = $this->twinVariants();
+
+        $row = fn (int $id) => [
+            'kind' => 'stock', 'name' => 'Ball Bearing', 'variant_id' => $id,
+            'quantity' => '10', 'unit_cost' => '120.00',
+        ];
+
+        $this->importRows([$row($first->id)]);
+        $this->importRows([$row($second->id)]);
+
+        $this->actingForTenant($this->tenant, function () {
+            $this->assertSame(2, StockMovement::query()->count(), 'The second declaration was swallowed.');
+        });
+    }
+
+    /**
+     * And the whole accounting point: it is an opening declaration, not a count.
+     *
+     * A stock adjustment posts `Dr Inventory / Cr COGS`, which credits cost of
+     * goods sold and puts the value of the shelf into this period's gross profit
+     * as though the workshop had earned it. This must land on Opening Balance
+     * Equity instead, and claim no GST.
+     */
+    #[Test]
+    public function declaring_one_variant_credits_equity_and_never_cost_of_goods_sold(): void
+    {
+        [, $second] = $this->twinVariants();
+
+        $this->importRows([[
+            'kind' => 'stock', 'name' => 'Ball Bearing', 'variant_id' => $second->id,
+            'quantity' => '10', 'unit_cost' => '120.00',
+        ]]);
+
+        $this->assertSame('1200.00', $this->balanceOf($this->tenant, SystemAccount::Inventory));
+        $this->assertSame('0.00', $this->balanceOf($this->tenant, SystemAccount::Cogs));
+        $this->assertSame('0.00', $this->balanceOf($this->tenant, SystemAccount::GstInput));
+        $this->assertSame('0.00', $this->balanceOf($this->tenant, SystemAccount::Payables));
+
+        $this->assertBooksBalance($this->tenant, 'after declaring one variant by id');
+    }
+
+    /**
+     * Two variants under one product, sharing a name — the shape the Items
+     * drawer is looking at when it offers this.
+     *
+     * @return array{0: ItemVariant, 1: ItemVariant}
+     */
+    private function twinVariants(): array
+    {
+        $first = $this->variantFor($this->tenant, 'part');
+
+        return $this->actingForTenant($this->tenant, function () use ($first) {
+            $first->item->update(['name' => 'Ball Bearing']);
+            $first->update(['label' => 'Ball Bearing']);
+
+            $second = ItemVariant::factory()->for($first->item)->create(['label' => 'Ball Bearing']);
+
+            return [$first->fresh(), $second];
+        });
     }
 
     /* ---------------------------------------------------------------------

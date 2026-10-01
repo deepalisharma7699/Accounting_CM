@@ -358,6 +358,89 @@
 @include('partials.stock-adjust')
 
 {{--
+    Declaring what was on the shelf at go-live, for a variant that missed it —
+    level 3, over the drawer.
+
+    This is **not** the dialog above it, and the difference is the whole reason
+    it exists. "Record a count" posts a stock adjustment: `Dr Inventory / Cr
+    COGS`, dated today, which is right for shrinkage found at a stock-take and
+    badly wrong for stock the workshop already owned — it credits cost of goods
+    sold, so the entire value of the shelf lands in this period's gross profit as
+    if it had been earned.
+
+    What this posts instead is an ordinary opening declaration —
+    `POST /opening-balances`, `Dr Inventory / Cr Opening Balance Equity`, dated
+    at the workshop's go-live day. Same endpoint, same service and same
+    duplicate guards as the paste box on the Opening balances card; there is no
+    second writer and no second set of rules (§4.3, §4.4).
+
+    It is offered only while the variant has nothing on its shelf and nothing
+    has ever been declared for it, because that is the only state in which it is
+    the right answer. Once anything has moved, a count is.
+--}}
+{{-- z-55 for the reason partials/stock-adjust.blade.php is: this is level 3 over
+     the item drawer, and the drawer is itself a `modal-backdrop` at z-50. Equal
+     z-index would leave which one is on top decided by document order, which is
+     not something to rely on. `#confirm-modal` sits above both at z-60. --}}
+<div id="opening-stock-modal" class="modal-backdrop hidden" data-modal role="dialog" aria-modal="true"
+     aria-labelledby="opening-stock-title" style="z-index: 55">
+    <div class="modal-panel max-w-md">
+        <form id="opening-stock-form" novalidate>
+            <input type="hidden" name="variant_id">
+
+            <div class="flex items-center justify-between border-b border-muted px-6 py-4">
+                <div class="min-w-0">
+                    <h2 id="opening-stock-title" class="text-base font-bold text-foreground">Opening stock</h2>
+                    <p id="opening-stock-subtitle" class="mt-0.5 truncate text-xs text-muted-foreground"></p>
+                </div>
+                <button type="button" class="btn btn-ghost btn-icon" data-modal-close aria-label="Close">
+                    <x-icon name="x" :size="18" />
+                </button>
+            </div>
+
+            <div class="space-y-4 px-6 py-5">
+                <p class="rounded-[10px] border border-border bg-secondary/40 px-3.5 py-2.5 text-xs text-secondary-foreground">
+                    What was already on the shelf when the books opened — not a correction to a count.
+                    It is posted against the owner's stake and dated at your go-live day, so it never
+                    reaches this period's profit.
+                </p>
+
+                <div class="form-grid">
+                    <div>
+                        <label for="opening-stock-quantity" class="field-label">Quantity</label>
+                        <div class="relative">
+                            <input id="opening-stock-quantity" name="quantity" type="text" inputmode="decimal"
+                                   class="field-input pr-12 text-right font-mono" required autocomplete="off">
+                            <span id="opening-stock-unit"
+                                  class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"></span>
+                        </div>
+                        <p class="field-error hidden" data-error-for="rows.0.quantity"></p>
+                    </div>
+
+                    <div>
+                        <label for="opening-stock-cost" class="field-label">Cost each</label>
+                        <input id="opening-stock-cost" name="unit_cost" type="text" inputmode="decimal"
+                               class="field-input text-right font-mono" required autocomplete="off">
+                        {{-- Refused server-side rather than defaulted: stock
+                             carried at nothing reports a margin of 100% on the
+                             first one sold. --}}
+                        <p class="mt-1.5 text-xs text-muted-foreground">What it cost you, not what you sell it for.</p>
+                        <p class="field-error hidden" data-error-for="rows.0.unit_cost"></p>
+                    </div>
+                </div>
+
+                <p id="opening-stock-total" class="text-[0.8125rem] text-muted-foreground"></p>
+            </div>
+
+            <div class="flex gap-2 border-t border-muted px-6 py-4">
+                <button type="button" class="btn btn-secondary flex-1" data-modal-close>Cancel</button>
+                <button type="submit" class="btn btn-primary flex-1">Declare it</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{{--
     Editing an item family — level 2.
 
     The panel is empty in the markup: `#item-form` below starts life in the
@@ -453,7 +536,7 @@
                         <label for="item-code" class="field-label">
                             Product code <span class="font-normal text-muted-foreground">(optional)</span>
                         </label>
-                        <input id="item-code" name="code" type="text" class="field-input field-code"
+                        <input id="item-code" name="code" type="text" class="field-input"
                                autocomplete="off" placeholder="e.g. MOT-3PH">
                         <p class="field-error hidden" data-error-for="code"></p>
                     </div>
@@ -469,14 +552,14 @@
 
                     <div>
                         <label for="item-hsn" class="field-label" id="item-hsn-label">HSN code</label>
-                        <input id="item-hsn" name="hsn_sac" type="text" inputmode="numeric" class="field-input field-code"
+                        <input id="item-hsn" name="hsn_sac" type="text" inputmode="numeric" class="field-input"
                                autocomplete="off" placeholder="4 to 8 digits">
                         <p class="field-error hidden" data-error-for="hsn_sac"></p>
                     </div>
 
                     <div>
                         <label for="item-gst" class="field-label">GST rate</label>
-                        <div class="relative field-num">
+                        <div class="relative">
                             {{-- Prefilled at the rate most of this trade charges,
                                  as a real value and not a greyed placeholder.
                                  This box used to suggest "18" in placeholder
@@ -547,13 +630,20 @@
                          an edit withholds, because opening stock is a transaction
                          that posted once and is corrected from Stock afterwards.
                          Everything else about a variant is editable. --}}
+                    {{-- A lone field is still a field in a column. Without the
+                         grid it takes the width of the box it is in, and a date
+                         control twelve hundred pixels wide is the failure this
+                         whole scale exists to remove — the same one, one field
+                         at a time instead of all of them. --}}
+                    <div class="form-grid">
                     <div id="item-opening-date-field" data-opening-field>
                         <label for="item-opening-date" class="field-label">Counted on</label>
-                        <input id="item-opening-date" name="opening_date" type="date" class="field-input field-date">
+                        <input id="item-opening-date" name="opening_date" type="date" class="field-input">
                         <p class="mt-1.5 text-xs text-muted-foreground">
                             The day the shelf was counted. One stock adjustment covers every variant below.
                         </p>
                         <p class="field-error hidden" data-error-for="opening_date"></p>
+                    </div>
                     </div>
                 </div>
 
@@ -672,7 +762,7 @@
                                     <label class="field-label" data-variant-label="sku">
                                         SKU <span class="font-normal text-muted-foreground">(optional)</span>
                                     </label>
-                                    <input type="text" class="field-input field-code" data-variant-field="sku"
+                                    <input type="text" class="field-input" data-variant-field="sku"
                                            autocomplete="off" placeholder="e.g. MOT-5HP-1440">
                                     <p class="field-error hidden" data-variant-error="sku"></p>
                                 </div>
@@ -690,7 +780,7 @@
                                     <label class="field-label" data-variant-label="purchase_price">
                                         Purchase price <span class="font-normal text-muted-foreground">(optional)</span>
                                     </label>
-                                    <div class="relative field-num">
+                                    <div class="relative">
                                         <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">₹</span>
                                         <input type="text" inputmode="decimal" data-variant-field="purchase_price"
                                                class="field-input pl-7 text-right font-mono" placeholder="0.00">
@@ -712,7 +802,7 @@
                                     <label class="field-label" data-variant-label="sell_price">
                                         Selling price <span class="font-normal text-muted-foreground">(optional)</span>
                                     </label>
-                                    <div class="relative field-num">
+                                    <div class="relative">
                                         <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">₹</span>
                                         <input type="text" inputmode="decimal" data-variant-field="sell_price"
                                                class="field-input pl-7 text-right font-mono" placeholder="0.00">
@@ -749,7 +839,7 @@
                                     <label class="field-label" data-variant-label="markup_percent">
                                         Target markup <span class="font-normal text-muted-foreground">(optional)</span>
                                     </label>
-                                    <div class="relative field-num">
+                                    <div class="relative">
                                         <input type="text" inputmode="decimal" data-variant-field="markup_percent"
                                                class="field-input pr-8 text-right font-mono" placeholder="0">
                                         <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground">%</span>
@@ -770,7 +860,7 @@
                                     <label class="field-label" data-variant-label="opening_stock">
                                         Opening stock <span class="font-normal text-muted-foreground">(optional)</span>
                                     </label>
-                                    <div class="relative field-num">
+                                    <div class="relative">
                                         <input type="text" inputmode="decimal" data-variant-field="opening_stock"
                                                class="field-input pr-14 text-right font-mono" placeholder="0">
                                         <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground"
@@ -790,7 +880,7 @@
                                     <label class="field-label" data-variant-label="opening_cost">
                                         Opening stock cost <span class="font-normal text-muted-foreground">(per unit)</span>
                                     </label>
-                                    <div class="relative field-num">
+                                    <div class="relative">
                                         <span class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">₹</span>
                                         <input type="text" inputmode="decimal" data-variant-field="opening_cost"
                                                class="field-input pl-7 text-right font-mono" placeholder="0.00">
@@ -812,7 +902,7 @@
                                         Reorder level <span class="font-normal text-muted-foreground">(optional)</span>
                                     </label>
                                     <input type="text" inputmode="decimal" data-variant-field="reorder_level"
-                                           class="field-input field-num text-right font-mono" placeholder="0">
+                                           class="field-input text-right font-mono" placeholder="0">
                                     <p class="mt-1.5 text-xs text-muted-foreground">Order more when it drops to this.</p>
                                     <p class="field-error hidden" data-variant-error="reorder_level"></p>
                                 </div>
@@ -822,7 +912,7 @@
                                         Minimum stock <span class="font-normal text-muted-foreground">(optional)</span>
                                     </label>
                                     <input type="text" inputmode="decimal" data-variant-field="min_stock"
-                                           class="field-input field-num text-right font-mono" placeholder="0">
+                                           class="field-input text-right font-mono" placeholder="0">
                                     <p class="mt-1.5 text-xs text-muted-foreground">Never let it fall below this.</p>
                                     <p class="field-error hidden" data-variant-error="min_stock"></p>
                                 </div>

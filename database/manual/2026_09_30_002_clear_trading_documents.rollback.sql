@@ -1,0 +1,39 @@
+-- =============================================================================
+-- 2026_09_30_002  ·  ROLLBACK
+--
+-- There is no SQL in this file, and that is the honest answer rather than a gap.
+--
+-- The forward step DELETEs rows. A deleted row is not recoverable from anything
+-- left in the database: `journal_entries` held the only record of what each
+-- document posted, `stock_movements` held the only record of what moved, and
+-- neither is derived from anything that survives. An `INSERT` here could only
+-- invent figures, and a rollback that quietly invents a workshop's stock and
+-- ledger is worse than no rollback at all.
+--
+-- THE ONLY UNDO IS THE DUMP YOU TOOK BEFORE RUNNING IT
+--
+--   mysql -u <user> -p <database> < before-clear-<date>.sql
+--
+-- If the dump was taken with `mysqldump` without --single-transaction while the
+-- application was serving requests, it may be inconsistent across tables. Take
+-- the next one as:
+--
+--   mysqldump --single-transaction --routines --triggers \
+--             -u <user> -p <database> > before-clear-$(date +%F).sql
+--
+-- WHAT A RESTORE COSTS
+--   Everything written after the dump was taken. If the workshop went on
+--   trading between the dump and the decision to roll back, that work is lost
+--   too — there is no way to replay it selectively, because the rows the forward
+--   step removed and the rows written since are interleaved by id.
+--
+--   So: run the forward step with the application stopped, and decide whether to
+--   keep the result before letting anybody back in.
+--
+-- PARTIAL FAILURE IS NOT A CASE YOU HAVE TO HANDLE
+--   The forward step runs inside one START TRANSACTION / COMMIT with foreign
+--   keys left enabled. If any statement fails, nothing is committed and the
+--   database is exactly as it was. There is no half-cleared state to repair.
+-- =============================================================================
+
+SELECT 'This step has no SQL rollback. Restore the pre-clear dump. See the notes above.' AS rollback_;

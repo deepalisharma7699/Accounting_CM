@@ -64,6 +64,19 @@ class OpeningBalanceRequest extends FormRequest
             'rows.*.kind' => ['required', 'string', 'in:'.implode(',', OpeningRowKind::values())],
             'rows.*.name' => ['nullable', 'string', 'max:200'],
             'rows.*.variant' => ['nullable', 'string', 'max:200'],
+            /*
+            | The variant this row is about, where the caller knows it — the
+            | Items drawer declaring opening stock for the one variant on
+            | screen. Never sent by the paste box, which has names in it.
+            |
+            | Not validated as `exists` here: whether it resolves, and whether
+            | it belongs to this workshop, is OpeningBalanceService's business
+            | for the reason this class records at the top — a rule enforced
+            | here would apply to neither the preview nor any later caller. It
+            | is tenant-scoped at the repository, so another workshop's id is
+            | simply not found.
+            */
+            'rows.*.variant_id' => ['nullable', 'integer', 'min:1'],
             // A category name or code. Not constrained to a list here: the
             // categories are rows an admin edits, so what is valid is a question
             // for the database — and OpeningBalanceService answers it with a

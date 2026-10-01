@@ -57,7 +57,7 @@
                 <div class="mt-4 form-grid">
                     <div>
                         <label for="expense-date" class="field-label">Date</label>
-                        <input id="expense-date" name="date" type="date" class="field-input field-date" required>
+                        <input id="expense-date" name="date" type="date" class="field-input" required>
                         <p class="field-error hidden" data-error-for="date"></p>
                     </div>
 
@@ -80,7 +80,7 @@
                     <div>
                         <label for="expense-amount" class="field-label">Amount before tax</label>
                         <input id="expense-amount" name="amount" type="text" inputmode="decimal"
-                               class="field-input field-num font-mono" required autocomplete="off" placeholder="0.00">
+                               class="field-input font-mono" required autocomplete="off" placeholder="0.00">
                         <p class="field-error hidden" data-error-for="amount"></p>
                     </div>
 
@@ -94,7 +94,7 @@
                             Claimable GST <span class="font-normal text-muted-foreground">(optional)</span>
                         </label>
                         <input id="expense-gst" name="gst_amount" type="text" inputmode="decimal"
-                               class="field-input field-num font-mono" autocomplete="off" placeholder="0.00">
+                               class="field-input font-mono" autocomplete="off" placeholder="0.00">
                         {{-- The sentence was the placeholder, which a field sized
                              for an amount cannot hold. It is a hint now, where it
                              survives the box being the width of the figure it

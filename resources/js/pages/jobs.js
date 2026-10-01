@@ -11,7 +11,7 @@ import { openQuickParty } from '../components/quick-party';
 import { can } from '../permissions';
 import { clearModuleParams, moduleParams, registerEscape } from '../shell';
 import {
-    $, clearFormErrors, confirmAction, debounce, esc, formatDate, formatMoney,
+    $, $$, clearFormErrors, confirmAction, debounce, esc, formatDate, formatMoney,
     hideModal, setSubmitting, showFormErrors, showModal, tableMessage, toast,
 } from '../ui';
 import { adoptForm, mountWorkspace } from '../workspace';
@@ -100,7 +100,7 @@ const state = {
 
     /*
     | What can be booked in, and what each kind asks about — the workshop's own
-    | categories, from the server.
+    | kinds, from the server.
     |
     | Held for the life of the module and refreshed with the rest of the meta,
     | because the intake form redraws its fields on every change of the Kind
@@ -357,10 +357,16 @@ async function loadMeta() {
         state.statuses = data.statuses ?? [];
         state.counts = data.counts ?? {};
         state.kinds = data.kinds ?? [];
+
+        // For the Kind Master's unit dropdown. Ridden in on the meta the intake
+        // form already fetches rather than asked for separately — see the
+        // controller for why it is not `/items/meta`.
+        state.units = data.units ?? [];
     } catch {
         state.statuses = [];
         state.counts = {};
         state.kinds = [];
+        state.units = [];
     }
 
     renderTabs();
@@ -1067,11 +1073,12 @@ function openBill(job, billId) {
  | ---------------------------------------------------------------------- */
 
 /**
- * The Kind select, from the workshop's own categories.
+ * The Kind select, from the workshop's own Kind list.
  *
- * Written here rather than into the Blade template, for the reason the
- * catalogue records: a list of product kinds in the markup is a list that goes
- * stale the moment an admin adds one. The choice already made survives the
+ * The bench's list, not the catalogue's — see the Kind Master. Written here
+ * rather than into the Blade template, for the reason the catalogue records: a
+ * list of kinds in the markup is a list that goes stale the moment somebody
+ * adds one. The choice already made survives the
  * repaint, because `loadMeta()` runs again after every booking (§2A.8 clears
  * the form, and the counts have moved) and re-selecting nothing would silently
  * unset the kind the operator picked for the *next* one.
@@ -1079,7 +1086,7 @@ function openBill(job, billId) {
 function renderKinds() {
     if (!form) return;
 
-    const select = form.elements.category_id;
+    const select = form.elements.job_kind_id;
     const chosen = select.value;
 
     select.innerHTML = `
@@ -1114,7 +1121,7 @@ function paintSpecFields() {
 
     if (!host || !section) return;
 
-    const kind = kindMeta(form.elements.category_id.value);
+    const kind = kindMeta(form.elements.job_kind_id.value);
     const schema = kind?.attributes ?? {};
 
     section.classList.toggle('hidden', !kind || Object.keys(schema).length === 0);
@@ -1123,7 +1130,7 @@ function paintSpecFields() {
 
     if (hint) {
         hint.textContent = state.kinds.length === 0
-            ? 'No kinds defined yet — add a category from the Items card.'
+            ? 'No kinds defined yet — add one under Kinds on this card.'
             : (kind ? `Asks for ${describeAttributes(schema, 'nothing in particular')}.` : '');
     }
 
@@ -1149,7 +1156,7 @@ function paintSpecFields() {
 function specsOf(job) {
     if (!job) return null;
 
-    return String(job.category_id ?? '') === String(form.elements.category_id.value)
+    return String(job.job_kind_id ?? '') === String(form.elements.job_kind_id.value)
         ? (job.specs ?? {})
         : {};
 }
@@ -1174,12 +1181,12 @@ const formOrDrawer = (selector) => $(selector, form);
  * comes back from an edit, where the kind on it belongs to somebody else's job.
  */
 function resetForm({ keepKind = false } = {}) {
-    const kind = form.elements.category_id.value;
+    const kind = form.elements.job_kind_id.value;
 
     clearFormErrors(form);
     form.reset();
 
-    if (keepKind) form.elements.category_id.value = kind;
+    if (keepKind) form.elements.job_kind_id.value = kind;
 
     form.elements.received_date.value = new Date().toISOString().slice(0, 10);
     jobParty.set(null);
@@ -1190,7 +1197,7 @@ function fillForm(job) {
     clearFormErrors(form);
 
     form.elements.complaint.value = job.complaint ?? '';
-    form.elements.category_id.value = job.category_id ?? '';
+    form.elements.job_kind_id.value = job.job_kind_id ?? '';
     form.elements.brand.value = job.brand ?? '';
     form.elements.model.value = job.model ?? '';
     form.elements.serial_no.value = job.serial_no ?? '';
@@ -1260,7 +1267,7 @@ async function submitForm(event) {
                     // server filters the bag against whichever category the job
                     // ends up under, so sending one without the other would
                     // clear a specification nobody meant to clear.
-                    category_id: form.elements.category_id.value || null,
+                    job_kind_id: form.elements.job_kind_id.value || null,
                     specs: collectAttributes(formOrDrawer('[data-job-specs]')),
                     brand: form.elements.brand.value.trim() || null,
                     model: form.elements.model.value.trim() || null,
@@ -1285,7 +1292,7 @@ async function submitForm(event) {
             body: {
                 party_id: jobParty?.id() ?? null,
                 complaint: form.elements.complaint.value.trim(),
-                category_id: form.elements.category_id.value || null,
+                job_kind_id: form.elements.job_kind_id.value || null,
                 specs: collectAttributes(formOrDrawer('[data-job-specs]')),
                 brand: form.elements.brand.value.trim() || null,
                 model: form.elements.model.value.trim() || null,
@@ -1541,8 +1548,12 @@ export default async function initJobs() {
 
     // Before `mountWorkspace`, which is what takes both surfaces out of the
     // document. After it, these lookups would find nothing.
-    formRoot = $('[data-ws-form]', root);
-    listRoot = $('[data-ws-list]', root);
+    // Scoped to the bench's own section: the fragment carries a second
+    // `[data-ws-form]` and `[data-ws-list]` for the Kind Master.
+    const benchRoot = $('[data-jobs-section="bench"]', root);
+
+    formRoot = $('[data-ws-form]', benchRoot);
+    listRoot = $('[data-ws-list]', benchRoot);
 
     intakePane = $('[data-job-intake]', formRoot);
     billPane = $('[data-job-bill]', formRoot);
@@ -1701,7 +1712,7 @@ export default async function initJobs() {
 
     // Whatever the kind asks, asked. Bound to the node rather than the pane,
     // because the same select goes into the drawer for an edit.
-    form.elements.category_id.addEventListener('change', paintSpecFields);
+    form.elements.job_kind_id.addEventListener('change', paintSpecFields);
 
     formEl('[data-job-bill-cancel]').addEventListener('click', cancelBill);
 
@@ -1730,7 +1741,7 @@ export default async function initJobs() {
 
     const canWrite = can('WRITE', 'WORKSHOP_JOBS');
 
-    workspace = mountWorkspace(root, {
+    workspace = mountWorkspace(benchRoot, {
         key: 'jobs',
         title: 'Jobs',
         formSubtitle: 'Take something in. A job number is issued straight away, so there is something to write on the casing.',
@@ -1778,6 +1789,14 @@ export default async function initJobs() {
         return true;
     });
 
+    kinds.root = $('[data-jobs-section="kinds"]', root);
+
+    $('[data-jobs-tabs]', root).addEventListener('click', (event) => {
+        const tab = event.target.closest('[data-jobs-tab]');
+
+        if (tab) openJobSection(tab.dataset.jobsTab);
+    });
+
     applyDeepLink(moduleParams());
 
     /*
@@ -1786,6 +1805,741 @@ export default async function initJobs() {
     | list reloaded without the module being rebuilt.
     */
     root.addEventListener('module:params', (event) => applyDeepLink(event.detail));
+}
+
+
+/* -------------------------------------------------------------------------
+ | The Kind Master — what the workshop takes in
+ |
+ | An ordinary §2A workspace on the same card, mounted lazily on the first
+ | click of its tab. It is here rather than on the Items card because it is the
+ | *bench's* vocabulary: what a workshop sells and what a customer wheels
+ | through the door barely overlap, and the one list that served both offered
+ | Bearing and Wire to the intake form while offering no cooler at all.
+ |
+ | Nothing in here knows what a motor is. The questions a kind asks are rows —
+ | the same shape the catalogue's are, drawn by the same renderer — so a shop
+ | that starts repairing sewing machines says so and the bench asks the right
+ | things, with no deployment.
+ | ---------------------------------------------------------------------- */
+
+const kinds = {
+    root: null,
+    workspace: null,
+
+    /*
+    | Both surfaces, held as nodes from the moment they are mounted.
+    |
+    | §2A.2 keeps exactly one of the form and the list attached, so the other is
+    | not in `document` and not under `kinds.root` either — `$('[data-kind-search]',
+    | kinds.root)` answers null for the whole time the form is up, which is every
+    | time this module is opened. Querying a *node* works detached, so the list
+    | is already current when it comes back to the screen. This is the trap
+    | CLAUDE.md records under "A detached surface is not in `document`".
+    */
+    formRoot: null,
+    listRoot: null,
+
+    form: null,
+    rows: [],
+    loaded: false,
+    search: '',
+    archived: 'active',
+    current: null,
+    editing: null,
+    editingField: null,
+};
+
+/** The table's column count, for the states that span the whole of it. */
+const KIND_COLUMNS = 4;
+
+const inKindList = (selector) => $(selector, kinds.listRoot);
+
+/** The list, filtered as the toolbar asks. */
+function visibleKinds() {
+    const needle = kinds.search.trim().toLowerCase();
+
+    return kinds.rows.filter((kind) => {
+        if (kinds.archived === 'active' && !kind.is_active) return false;
+        if (kinds.archived === 'archived' && kind.is_active) return false;
+
+        if (needle === '') return true;
+
+        return `${kind.name} ${kind.description ?? ''}`.toLowerCase().includes(needle);
+    });
+}
+
+async function loadKinds() {
+    const host = inKindList('[data-kind-list]');
+
+    if (host) host.innerHTML = tableMessage(KIND_COLUMNS, 'Loading…');
+
+    try {
+        const { data } = await auth.call('/job-kinds');
+
+        kinds.rows = data ?? [];
+        kinds.loaded = true;
+
+        renderKindList();
+        paintKindCount();
+    } catch (error) {
+        if (host) {
+            host.innerHTML = tableMessage(
+                KIND_COLUMNS, error.message ?? 'The list could not be loaded.', 'error',
+            );
+        }
+    }
+}
+
+function paintKindCount() {
+    const badgeEl = $('[data-jobs-kind-count]', root);
+
+    if (badgeEl) {
+        const live = kinds.rows.filter((kind) => kind.is_active).length;
+
+        badgeEl.textContent = kinds.loaded ? String(live) : '';
+    }
+
+    kinds.workspace?.refresh();
+}
+
+function renderKindList() {
+    const host = inKindList('[data-kind-list]');
+
+    if (!host) return;
+
+    const rows = visibleKinds();
+
+    paintKindSummary(rows.length);
+
+    if (rows.length === 0) {
+        host.innerHTML = tableMessage(KIND_COLUMNS, kinds.rows.length === 0
+            ? 'Nothing defined yet. Add the first thing customers bring in.'
+            : 'Nothing matches that.');
+
+        return;
+    }
+
+    host.innerHTML = rows.map(renderKindRow).join('');
+}
+
+/**
+ * What the toolbar left out, in the bench's own words.
+ *
+ * The count on the Show control is every kind there is (§2A.4); this is how
+ * many of them the search and the archived filter left, which is the only
+ * figure that moves as somebody types — and the only thing on the screen that
+ * says an empty-looking list is a filtered one rather than an empty master.
+ */
+function paintKindSummary(shown) {
+    const summaryEl = inKindList('[data-kind-summary]');
+
+    if (!summaryEl) return;
+
+    summaryEl.textContent = kinds.loaded ? `${shown} of ${kinds.rows.length}.` : '';
+}
+
+function renderKindRow(kind) {
+    // §2A.8 — a kind written while the list was detached carries the flash
+    // whenever the list is next looked at, not at a moment nobody was watching.
+    const flash = kinds.workspace?.isNew(kind.id) ? ' row-new' : '';
+
+    return `
+        <tr class="cursor-pointer border-t border-border transition hover:bg-secondary/60${flash}"
+            data-kind-row="${kind.id}" tabindex="0" role="link" aria-label="Open ${esc(kind.name)}">
+
+            <td class="table-cell">
+                <span class="flex flex-wrap items-center gap-1.5">
+                    <span class="text-[0.8125rem] font-semibold text-foreground">${esc(kind.name)}</span>
+                    ${kind.is_active ? '' : '<span class="badge badge-muted">Archived</span>'}
+                </span>
+                ${kind.description
+                    ? `<span class="mt-0.5 block text-xs text-muted-foreground">${esc(kind.description)}</span>`
+                    : ''}
+            </td>
+
+            <td class="table-cell text-[0.8125rem] text-muted-foreground">
+                ${esc(describeAttributes(kind.attributes ?? {}, 'nothing yet'))}
+            </td>
+
+            <td class="table-cell w-24 text-right font-mono text-[0.8125rem]">${kind.jobs ?? 0}</td>
+
+            <td class="table-cell w-10 text-right text-muted-foreground" aria-hidden="true">›</td>
+        </tr>`;
+}
+
+/* ---------------------------------------------------------------------
+ | One kind — level 2
+ | ------------------------------------------------------------------ */
+
+async function openKind(id) {
+    try {
+        const { data } = await auth.call(`/job-kinds/${id}`);
+
+        kinds.current = data;
+        paintKindDrawer();
+        showModal('#job-kind-drawer');
+    } catch (error) {
+        toast(error.message ?? 'That kind could not be opened.', 'error');
+    }
+}
+
+function paintKindDrawer() {
+    const kind = kinds.current;
+
+    if (!kind) return;
+
+    $('#job-kind-drawer-title').textContent = kind.name;
+    $('[data-kind-subtitle]', $('#job-kind-drawer')).textContent = kind.description
+        ?? `${kind.jobs ?? 0} job${(kind.jobs ?? 0) === 1 ? '' : 's'} booked in under it`;
+
+    const fields = kind.fields ?? [];
+    const canEdit = can('UPDATE', 'WORKSHOP_JOBS');
+
+    $('[data-kind-body]', $('#job-kind-drawer')).innerHTML = `
+        <div class="flex items-center justify-between gap-2">
+            <h4 class="text-[0.8125rem] font-semibold text-foreground">What the form asks</h4>
+            ${canEdit
+                ? '<button type="button" class="btn btn-secondary btn-sm" data-kind-add-field>Add a question</button>'
+                : ''}
+        </div>
+
+        <p class="mt-1 text-xs text-muted-foreground">
+            Asked when something of this kind is booked in. None of it is ever insisted on — a pump
+            whose plate nobody could read is already on the bench.
+        </p>
+
+        ${fields.length === 0
+            ? `<p class="mt-4 rounded-[10px] border border-dashed border-border px-3.5 py-6 text-center
+                          text-[0.8125rem] text-muted-foreground">
+                   No questions yet. A kind with none is still perfectly usable — the card records the
+                   brand, the model, the serial number and the complaint whatever it is.
+               </p>`
+            : `<ul class="mt-4 space-y-2">
+                ${fields.map((field) => `
+                    <li class="flex items-start justify-between gap-3 rounded-[10px] border border-border
+                               px-3.5 py-2.5${field.is_active ? '' : ' opacity-60'}">
+                        <div class="min-w-0">
+                            <span class="text-sm font-semibold text-foreground">${esc(field.label)}</span>
+                            ${field.suffix ? ` <span class="text-xs text-muted-foreground">${esc(field.suffix)}</span>` : ''}
+                            ${field.is_active ? '' : ' <span class="badge badge-muted">Not asked</span>'}
+                            <span class="mt-0.5 block font-mono text-[0.6875rem] text-muted-foreground">
+                                ${esc(field.key)} · ${esc(field.data_type)}${
+                                    field.options?.length ? ` · ${esc(field.options.join(', '))}` : ''}
+                            </span>
+                        </div>
+                        ${canEdit
+                            ? `<div class="flex shrink-0 gap-1">
+                                   <button type="button" class="btn btn-ghost btn-sm"
+                                           data-kind-edit-field="${field.id}">Edit</button>
+                                   <button type="button" class="btn btn-ghost btn-sm text-destructive"
+                                           data-kind-delete-field="${field.id}">Remove</button>
+                               </div>`
+                            : ''}
+                    </li>`).join('')}
+               </ul>`}`;
+
+    paintKindActions();
+}
+
+/**
+ * The drawer's footer.
+ *
+ * Delete is **disabled with the reason on it** rather than left out when jobs
+ * are filed under the kind — the judgement C4 already made about Generate bill:
+ * a control that is simply absent says nothing about why.
+ */
+function paintKindActions() {
+    const kind = kinds.current;
+    const actions = $('[data-kind-actions]', $('#job-kind-drawer'));
+
+    if (!kind || !actions) return;
+
+    if (!can('UPDATE', 'WORKSHOP_JOBS')) {
+        actions.innerHTML = '';
+
+        return;
+    }
+
+    // While the form is adopted in, its own footer carries the buttons — a
+    // second set underneath it would be two ways to save one record.
+    if (kinds.editing) {
+        actions.innerHTML = '';
+
+        return;
+    }
+
+    const blocked = (kind.jobs ?? 0) > 0;
+
+    actions.innerHTML = `
+        <button type="button" class="btn btn-secondary" data-kind-edit>Rename or describe</button>
+
+        <button type="button" class="btn btn-secondary" data-kind-toggle>
+            ${kind.is_active ? 'Stop offering it' : 'Offer it again'}
+        </button>
+
+        ${can('DELETE', 'WORKSHOP_JOBS')
+            ? `<button type="button" class="btn btn-ghost text-destructive" data-kind-delete
+                       ${blocked
+                           ? `disabled title="${kind.jobs} job${kind.jobs === 1 ? '' : 's'} filed under it — stop offering it instead"`
+                           : ''}>
+                   Delete
+               </button>`
+            : ''}`;
+}
+
+/**
+ * Correcting a kind — a *state* of its drawer, not a form stacked over it.
+ *
+ * §2.2 allows nothing above level 3, and a form on a drawer would be level 3
+ * doing level 2's job. So the create form travels in here — `adoptForm()`, the
+ * same node — and the read-only body steps aside while it is up. Jobs and
+ * Accounting both do this; it is the module convention (§7.4).
+ */
+function openKindEdit() {
+    const kind = kinds.current;
+
+    if (!kind) return;
+
+    kinds.editing = kind;
+
+    clearFormErrors(kinds.form);
+
+    kinds.form.elements.name.value = kind.name ?? '';
+    kinds.form.elements.description.value = kind.description ?? '';
+
+    const drawer = $('#job-kind-drawer');
+
+    $('[data-kind-body]', drawer).classList.add('hidden');
+    $('[data-kind-edit-slot]', drawer).classList.remove('hidden');
+
+    adoptForm(kinds.form, $('[data-kind-edit-slot]', drawer), { chrome: 'modal' });
+    paintKindActions();
+
+    kinds.form.elements.name.focus();
+}
+
+/** Hand the form back to its level-1 slot, whether saved or abandoned. */
+function closeKindEdit() {
+    if (!kinds.editing) return;
+
+    kinds.editing = null;
+
+    /*
+    | Before the move, while the drawer's own Save is still the visible submit
+    | button. `setSubmitting` restores whichever one is on screen — releasing it
+    | afterwards would leave "Saving…", disabled, on the create surface's button.
+    */
+    setSubmitting(kinds.form, false);
+
+    const drawer = $('#job-kind-drawer');
+
+    $('[data-kind-edit-slot]', drawer).classList.add('hidden');
+    $('[data-kind-body]', drawer).classList.remove('hidden');
+
+    adoptForm(kinds.form, $('[data-kind-form-slot]', kinds.formRoot), { chrome: 'inline' });
+
+    kinds.form.reset();
+    clearFormErrors(kinds.form);
+
+    paintKindActions();
+}
+
+/* ---------------------------------------------------------------------
+ | One question — level 3
+ | ------------------------------------------------------------------ */
+
+function openFieldModal(field = null) {
+    kinds.editingField = field;
+
+    const form = $('#job-kind-field-form');
+
+    clearFormErrors(form);
+    form.reset();
+
+    $('#job-kind-field-title').textContent = field ? 'Edit the question' : 'Add a question';
+
+    // The key is shown and never editable — it is what the answers are stored
+    // under, so renaming it would orphan every bag already written.
+    $('[data-field-key-note]', form).textContent = field
+        ? `Stored as "${field.key}" — that never changes, so what is already recorded keeps its meaning.`
+        : 'The name it is stored under is worked out from this.';
+
+    paintUnitOptions(form);
+
+    if (field) {
+        form.elements.label.value = field.label ?? '';
+        form.elements.data_type.value = field.data_type ?? 'text';
+        form.elements.unit_code.value = field.unit_code ?? '';
+        form.elements.options.value = (field.options ?? []).join('\n');
+        form.elements.help_text.value = field.help_text ?? '';
+        form.elements.is_active.checked = field.is_active !== false;
+    }
+
+    paintFieldShape(form);
+    showModal('#job-kind-field-modal');
+}
+
+/** The units the workshop has, from the meta the intake form already fetched. */
+function paintUnitOptions(form) {
+    const select = form.elements.unit_code;
+    const held = select.value;
+
+    select.innerHTML = `<option value="">None</option>${
+        (state.units ?? []).map((unit) => `
+            <option value="${esc(unit.code)}">${esc(unit.label)} (${esc(unit.symbol)})</option>`).join('')}`;
+
+    select.value = held;
+}
+
+/** Only the boxes the chosen type can actually carry. */
+function paintFieldShape(form) {
+    const type = form.elements.data_type.value;
+
+    $('[data-field-options-wrap]', form).classList.toggle('hidden', type !== 'dropdown');
+    $('[data-field-unit-wrap]', form).classList.toggle(
+        'hidden',
+        !['number', 'decimal', 'text'].includes(type),
+    );
+}
+
+function fieldPayload(form) {
+    const type = form.elements.data_type.value;
+
+    return {
+        label: form.elements.label.value.trim(),
+        data_type: type,
+        unit_code: form.elements.unit_code.value || null,
+        options: type === 'dropdown'
+            ? form.elements.options.value.split('\n').map((line) => line.trim()).filter(Boolean)
+            : [],
+        help_text: form.elements.help_text.value.trim() || null,
+        is_active: form.elements.is_active.checked,
+    };
+}
+
+/* ---------------------------------------------------------------------
+ | Wiring
+ | ------------------------------------------------------------------ */
+
+function bindKinds() {
+    const canEdit = can('UPDATE', 'WORKSHOP_JOBS');
+
+    /*
+    | Create and edit, one handler over one form node — `kinds.editing` is the
+    | whole of the difference. A second form would be a second set of these
+    | fields and a second place their validation lives (§5.1).
+    */
+    kinds.form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        clearFormErrors(kinds.form);
+
+        const editing = kinds.editing;
+
+        const payload = {
+            name: kinds.form.elements.name.value.trim(),
+            description: kinds.form.elements.description.value.trim() || null,
+        };
+
+        setSubmitting(kinds.form, true, editing ? 'Saving…' : 'Adding…');
+
+        try {
+            const saved = await auth.call(
+                editing ? `/job-kinds/${editing.id}` : '/job-kinds',
+                { method: editing ? 'PATCH' : 'POST', body: payload },
+            );
+
+            if (editing) {
+                closeKindEdit();
+
+                kinds.current = saved?.data ?? kinds.current;
+                paintKindDrawer();
+            } else {
+                // §2A.8: stay on the form, clear it, focus the first box. A
+                // workshop setting itself up writes several of these in a row.
+                kinds.form.reset();
+                kinds.form.elements.name.focus();
+
+                kinds.workspace?.flagNew(saved?.data?.id);
+            }
+
+            await loadKinds();
+            await loadMeta();
+
+            toast(editing ? `"${saved?.data?.name}" saved.` : `"${saved?.data?.name}" added.`, 'success');
+        } catch (error) {
+            showFormErrors(kinds.form, error);
+        } finally {
+            setSubmitting(kinds.form, false);
+        }
+    });
+
+    kinds.form.addEventListener('click', (event) => {
+        if (event.target.closest('[data-kind-cancel-edit]')) closeKindEdit();
+    });
+
+    const rerender = debounce(() => renderKindList(), 200);
+
+    inKindList('[data-kind-search]').addEventListener('input', (event) => {
+        kinds.search = event.target.value;
+        rerender();
+    });
+
+    inKindList('[data-kind-archived]').addEventListener('change', (event) => {
+        kinds.archived = event.target.value;
+        renderKindList();
+    });
+
+    kinds.listRoot.addEventListener('click', (event) => {
+        const row = event.target.closest('[data-kind-row]');
+
+        if (row) openKind(Number(row.dataset.kindRow));
+    });
+
+    kinds.listRoot.addEventListener('keydown', (event) => {
+        const row = event.target.closest('[data-kind-row]');
+
+        if (row && (event.key === 'Enter' || event.key === ' ')) {
+            event.preventDefault();
+            openKind(Number(row.dataset.kindRow));
+        }
+    });
+
+    if (!canEdit) return;
+
+    bindKindDrawer();
+    bindFieldModal();
+}
+
+function bindKindDrawer() {
+    const drawer = $('#job-kind-drawer');
+
+    drawer.addEventListener('click', async (event) => {
+        const kind = kinds.current;
+
+        if (!kind) return;
+
+        if (event.target.closest('[data-kind-edit]')) {
+            openKindEdit();
+
+            return;
+        }
+
+        if (event.target.closest('[data-kind-add-field]')) {
+            openFieldModal(null);
+
+            return;
+        }
+
+        const edit = event.target.closest('[data-kind-edit-field]');
+
+        if (edit) {
+            openFieldModal(
+                (kind.fields ?? []).find((f) => String(f.id) === edit.dataset.kindEditField) ?? null,
+            );
+
+            return;
+        }
+
+        const remove = event.target.closest('[data-kind-delete-field]');
+
+        if (remove) {
+            const field = (kind.fields ?? [])
+                .find((f) => String(f.id) === remove.dataset.kindDeleteField);
+
+            const ok = await confirmAction({
+                title: `Stop asking "${field?.label}"?`,
+                body: 'Jobs already booked in keep what they recorded. If any of them answered it, '
+                    + 'the server will refuse and offer to switch the question off instead.',
+                confirmLabel: 'Remove it',
+                tone: 'danger',
+            });
+
+            if (!ok) return;
+
+            try {
+                await auth.call(`/job-kinds/${kind.id}/fields/${field.id}`, { method: 'DELETE' });
+                await refreshOpenKind();
+                await loadMeta();
+                toast('Question removed.', 'success');
+            } catch (error) {
+                toast(error.message ?? 'That question could not be removed.', 'error');
+            }
+
+            return;
+        }
+
+        if (event.target.closest('[data-kind-toggle]')) {
+            try {
+                await auth.call(`/job-kinds/${kind.id}`, {
+                    method: 'PATCH',
+                    body: { is_active: !kind.is_active },
+                });
+
+                await refreshOpenKind();
+                await loadKinds();
+                await loadMeta();
+            } catch (error) {
+                toast(error.message ?? 'That could not be saved.', 'error');
+            }
+
+            return;
+        }
+
+        if (event.target.closest('[data-kind-delete]')) {
+            const ok = await confirmAction({
+                title: `Delete "${kind.name}"?`,
+                body: 'Only possible while nothing has been booked in under it. Otherwise stop offering '
+                    + 'it instead — the jobs that used it keep their meaning.',
+                confirmLabel: 'Delete it',
+                tone: 'danger',
+            });
+
+            if (!ok) return;
+
+            try {
+                await auth.call(`/job-kinds/${kind.id}`, { method: 'DELETE' });
+
+                hideModal('#job-kind-drawer');
+                kinds.current = null;
+
+                await loadKinds();
+                await loadMeta();
+
+                toast('Kind removed.', 'success');
+            } catch (error) {
+                toast(error.message ?? 'That kind could not be removed.', 'error');
+            }
+        }
+    });
+
+    /*
+    | Beside `ui.js`'s own close handler rather than instead of it: that hides
+    | the drawer, and this takes the form back out of it first. Without it the
+    | level-1 create surface comes back empty, with nothing on screen saying
+    | where its fields went.
+    */
+    drawer.addEventListener('click', (event) => {
+        if (event.target.closest('[data-modal-close]') || event.target.matches('[data-modal]')) {
+            closeKindEdit();
+        }
+    });
+
+    // Escape closes the drawer through `ui.js`, which knows nothing about the
+    // form standing inside it.
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape' && kinds.editing) closeKindEdit();
+    });
+}
+
+function bindFieldModal() {
+    const form = $('#job-kind-field-form');
+
+    form.elements.data_type.addEventListener('change', () => paintFieldShape(form));
+
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        clearFormErrors(form);
+
+        const kind = kinds.current;
+
+        if (!kind) return;
+
+        const field = kinds.editingField;
+        const path = field
+            ? `/job-kinds/${kind.id}/fields/${field.id}`
+            : `/job-kinds/${kind.id}/fields`;
+
+        setSubmitting(form, true, 'Saving…');
+
+        try {
+            await auth.call(path, {
+                method: field ? 'PATCH' : 'POST',
+                body: fieldPayload(form),
+            });
+
+            hideModal('#job-kind-field-modal');
+
+            await refreshOpenKind();
+            await loadKinds();
+
+            // The intake form draws from this, and it is on screen behind the
+            // drawer — so it is brought up to date now rather than on the next
+            // mount, which would be after the next job was booked in wrong.
+            await loadMeta();
+
+            toast('Question saved.', 'success');
+        } catch (error) {
+            showFormErrors(form, error);
+        } finally {
+            setSubmitting(form, false);
+        }
+    });
+}
+
+/** The open drawer, refetched — it holds the fields the editor just changed. */
+async function refreshOpenKind() {
+    if (!kinds.current) return;
+
+    try {
+        const { data } = await auth.call(`/job-kinds/${kinds.current.id}`);
+
+        kinds.current = data;
+        paintKindDrawer();
+    } catch {
+        // A drawer that cannot refresh is closed rather than left showing what
+        // is no longer true.
+        hideModal('#job-kind-drawer');
+        kinds.current = null;
+    }
+}
+
+/**
+ * Mount the master. Called on the first click of its tab and never again.
+ */
+async function mountKinds() {
+    // Held before the workspace mounts, while both are still attached — see the
+    // note on `kinds.formRoot`.
+    kinds.formRoot = $('[data-ws-form]', kinds.root);
+    kinds.listRoot = $('[data-ws-list]', kinds.root);
+    kinds.form = $('#job-kind-form', kinds.formRoot);
+
+    kinds.workspace = mountWorkspace(kinds.root, {
+        key: 'job-kinds',
+        title: 'Kinds',
+        formSubtitle: 'What customers bring in. The intake form offers these, and asks what each one is described by.',
+        listSubtitle: (count) => (count === null
+            ? 'Everything this workshop takes in.'
+            : `${count} kind${count === 1 ? '' : 's'}.`),
+        createLabel: 'Add a kind',
+        count: () => (kinds.loaded ? kinds.rows.filter((kind) => kind.is_active).length : null),
+        canCreate: can('UPDATE', 'WORKSHOP_JOBS'),
+        onShowList: loadKinds,
+        onShowForm: () => kinds.form?.elements.name.focus(),
+    });
+
+    bindKinds();
+}
+
+/**
+ * Show a section, mounting it the first time it is asked for (§2.5).
+ */
+async function openJobSection(key) {
+    $$('[data-jobs-section]', root).forEach((section) => {
+        section.hidden = section.dataset.jobsSection !== key;
+    });
+
+    $$('[data-jobs-tab]', root).forEach((tab) => {
+        tab.setAttribute('aria-selected', String(tab.dataset.jobsTab === key));
+    });
+
+    if (key !== 'kinds' || kinds.workspace) return;
+
+    try {
+        await mountKinds();
+    } catch (error) {
+        toast(error.message ?? 'That section could not be opened.', 'error');
+    }
 }
 
 /**

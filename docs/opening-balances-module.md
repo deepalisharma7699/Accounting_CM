@@ -270,6 +270,47 @@ is true.
       declarations in two workshops are not a duplicate
 - [x] An opening balance is dated at go-live, and one dated earlier is refused
 
+## A second way in: one variant, from the Items drawer
+
+The paste box is not the only caller any more. A product written without its
+opening stock had no way to acquire one — `opening_stock` is on the create form
+and deliberately withheld from the edit — and the substitute people reached for,
+Stock's **Record a count**, posts the wrong document:
+
+| | Posting | Dated |
+| --- | --- | --- |
+| Record a count (template G) | `Dr Inventory / **Cr COGS**` | today |
+| Opening declaration (template H) | `Dr Inventory / **Cr Opening Balance Equity**` | go-live |
+
+Crediting COGS puts the whole value of the shelf into the current period's gross
+profit as though the workshop had earned it. That is right for shrinkage found at
+a stock-take and wrong for stock the workshop already owned.
+
+So the Items drawer offers **Declare opening stock** on a variant, and it is not
+a second implementation of anything: it builds one structured `rows[]` entry and
+posts it to `POST /opening-balances`, through the same service, the same
+resolution and the same guards as a pasted file. It is offered only while the
+variant's shelf is empty, needs `UPDATE:WORKSPACE` like every other declaration,
+and previews before it posts — because `OPENING_PLAN_HAS_ERRORS` carries a count
+and a sentence about fixing the file, and there is no file.
+
+**A row may name `variant_id`, and then nothing is matched.** The screen knows
+which variant it is looking at, and putting a known id through the name matcher
+would be discarding the one certain thing it has: two variants of one product
+share a name, so a shop with "Bearing 6204" and "Bearing 6204 ZZ" would have a
+near-miss decide which shelf a declaration landed on. An id that does not resolve
+is an error on that row and never a quiet fall back to the name beside it — a
+fall-back is what would turn a stale id in a held page into a declaration against
+the wrong variant. A pasted file never sets it and its behaviour is unchanged.
+
+The id is **appended to the fingerprint only when present**, and both halves of
+that matter. Without it, two variants of one product declared at the same
+quantity and cost hashed identically and the second was refused outright as a
+file already imported — a correct figure the product would not accept. Adding an
+empty segment unconditionally would instead rehash every fingerprint already
+stored, and a workshop re-pasting last month's file would stop being told it had
+already been imported. `tests/Unit/OpeningRowTest.php` holds both shut.
+
 ## Decisions worth carrying forward
 
 | Decision | Why |
@@ -285,3 +326,5 @@ is true.
 | Everything invented is flagged draft | A name and nothing else is not a billable record, and one that looks complete gets billed at 0% GST for a year |
 | CSV only | The one place this product parses user-supplied data deserves the smallest parser that does the job |
 | `UPDATE:WORKSPACE` as well as `WRITE:TRANSACTIONS` | Declaring the workshop's net worth is setup, not the day job |
+| A row may name `variant_id`, and then nothing is matched | The screen knows which variant it is looking at; a fuzzy match on a name two variants share is the one way this path lands on the wrong shelf |
+| The variant id joins the fingerprint only when it is set | Two variants of one product otherwise hash alike and the second is refused; adding it always would rehash every file already imported |

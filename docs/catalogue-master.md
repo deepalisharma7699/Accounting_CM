@@ -142,15 +142,40 @@ column cannot disagree with itself.
 
 ---
 
-## The bench reads the same vocabulary
+## The bench runs on the same machinery, over its own list
 
-Categories and attributes are not only the catalogue's. A workshop job records
-**what came in** as a `category_id` and a bag of answers keyed by the same
-attributes — so a shop that starts repairing coolers adds a Cooler category here
-and the Jobs intake form asks what a cooler is described by, with no column, no
-migration and no deployment. `GET /workshop-jobs/meta` publishes the same
-`attributes` shape `GET /items/meta` does, and
-`components/attribute-fields.js` draws both.
+This section used to say the bench read the same *vocabulary* — that a workshop
+job recorded what came in as a `category_id`, so a shop repairing coolers added
+a Cooler category here. That was true and it was wrong, and the way it was wrong
+is worth keeping.
+
+The bench's list was these categories filtered on `holds_stock`, which separates
+*kept on a shelf* from *made when it is sold* and says nothing about whether
+somebody wheels one through a door. So the intake form offered Part, Bulk
+material, Bearing, Capacitor and Wire, and offered no cooler, fan, mixer or
+submersible at all — a repair shop does not stock the things it repairs. The
+intersection of the two lists is Motor and pumps, and even there the questions
+differ: a motor on a price list is identified by frame and mounting, a motor on a
+bench by its serial number and what is wrong with it.
+
+So the bench has `job_kinds` and `job_kind_attributes`, maintained under **Kinds**
+on the Jobs card. What it does **not** have is a second implementation, and that
+is the part this module has to go on protecting:
+
+| Shared | What it decides |
+| --- | --- |
+| `App\Models\AttributeDefinition` | What a field means once stored — its type, unit, options, bounds, and `toSchemaField()` |
+| `App\Models\Concerns\DefinesAQuestionSet` | `attributeSchema()` — the shape a form reads |
+| `App\Support\Catalogue\AttributeFieldShape` | What may be stored — the key rule, the option list, the bounds |
+| `Catalogue\StoreAttributeRequest` | What is accepted on the way in, for both masters |
+| `components/attribute-fields.js` | What is drawn, on both forms |
+
+`ItemCategory` and `JobKind` are two *lists* over that. A third is cheap and may
+be right; a second copy of any of the five above is the drift the old rule was
+right to fear. `JobKind` is thinner by everything that describes a thing for
+sale — no HSN or SAC, no GST rate, no unit, no `holds_stock` — and by having no
+parent, which is the one place the resolvers genuinely differ and why the shared
+piece is a trait rather than a base class.
 
 Two things differ on that side, and both follow from what a job *is*. A job is a
 physical object already on the bench, so **nothing is required** there whatever
@@ -159,11 +184,6 @@ rating, not about a pump a driver could not identify. And **nothing is coerced o
 held to a dropdown's options**: the catalogue describes what the shop deals in
 and may hold its own values to it, while a job describes a competitor's
 forty-year-old unit. See [workshop-module.md](workshop-module.md).
-
-The one thing that must not follow is a second vocabulary. There is no
-`job_categories` table and no `job_attributes` table, and adding either would be
-two masters, two schema resolvers and two admin screens answering one question
-(§4.4, §5.1).
 
 ## Why `data_type` stayed an enum
 
@@ -248,6 +268,27 @@ brand has that one option put back, labelled, for the length of the edit. Droppi
 it silently would turn "save this description" into "and also clear the brand".
 
 ---
+
+## Archiving is the answer to a delete that is refused
+
+`DELETE` only ever reaches a definition nothing depends on. A category with
+products under it, a field products have answered and a unit something is
+counted in are each **refused outright** — the services do not quietly archive
+instead — and the screen says so before the request is sent: *"archive it
+instead to take it off the create form."*
+
+For a long time it then offered no way to do that. `is_active` was accepted by
+`StoreCategoryRequest`, `StoreAttributeRequest` and `StoreUnitRequest`, rendered
+as an "Archived"/"Off" badge on every row, and settable from nowhere — only the
+Brand Master had the control. A category a workshop had stopped dealing in could
+be neither removed nor retired, and the unit footer promised a switch
+("a unit in use can be switched off, never deleted") that did not exist.
+
+All four now carry the same row, on the **edit only**: a definition being created
+is by definition one the shop wants offered, and a checkbox saying so on a new
+record is a question with one sensible answer. The lists deliberately fetch
+archived rows too — a master that hid what it had just archived would look like a
+delete, and there would be no way back.
 
 ## Permissions
 

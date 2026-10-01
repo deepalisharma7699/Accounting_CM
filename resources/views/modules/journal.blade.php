@@ -132,7 +132,7 @@
                     <div class="mt-4 form-grid">
                         <div>
                             <label for="voucher-date" class="field-label">Date</label>
-                            <input id="voucher-date" name="date" type="date" class="field-input field-date" required>
+                            <input id="voucher-date" name="date" type="date" class="field-input" required>
                             <p class="field-error hidden" data-error-for="date"></p>
                         </div>
 

@@ -63,6 +63,28 @@ final class ManualSchema
 
         foreach (self::files() as $path) {
             foreach (self::statementsIn($path) as $statement) {
+                /*
+                | The operator's verification query is read by a person, and
+                | running it here breaks the next test.
+                |
+                | §4.6 has every manual file end with "the SELECT that shows it
+                | worked", which is right: somebody applying this at two in the
+                | morning needs to see one row reading `ok`. Nothing reads it
+                | here — and `unprepared()` is `PDO::exec()`, which never
+                | consumes a result set, so the rows sit on the connection and
+                | the *next* query in the process dies with "Cannot execute
+                | queries while other unbuffered queries are active".
+                |
+                | That is once per process, so it cost exactly one test every
+                | run — whichever happened to go first, which made it look like
+                | a flaky test rather than a fixture leaving the connection
+                | dirty. The DDL is what the suite is here for; the commentary
+                | and the proof are for the operator.
+                */
+                if (self::returnsRows($statement)) {
+                    continue;
+                }
+
                 $connection->unprepared($statement);
             }
         }
@@ -70,6 +92,18 @@ final class ManualSchema
         for ($level = 0; $level < $depth; $level++) {
             $connection->beginTransaction();
         }
+    }
+
+    /**
+     * Does this statement hand back rows rather than change the schema?
+     *
+     * Only the leading keyword, because that is all that decides it: an
+     * `INSERT ... SELECT` is a write and starts with INSERT, and a bare SELECT
+     * in one of these files is the operator's check.
+     */
+    private static function returnsRows(string $statement): bool
+    {
+        return (bool) preg_match('/^\s*(SELECT|SHOW|DESCRIBE|DESC|EXPLAIN)\b/i', $statement);
     }
 
     /**

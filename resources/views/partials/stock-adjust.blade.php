@@ -38,7 +38,7 @@
                 <div class="form-grid">
                     <label class="field">
                         <span class="field-label">Date</span>
-                        <input type="date" name="date" class="field-input field-date" required>
+                        <input type="date" name="date" class="field-input" required>
                         <span class="field-error hidden" data-error-for="date"></span>
                     </label>
 
@@ -76,7 +76,7 @@
                     <div class="form-grid">
                         <label class="field">
                             <span class="field-label">Count on the shelf</span>
-                            <input type="text" name="counted" class="field-input field-num font-mono" inputmode="decimal"
+                            <input type="text" name="counted" class="field-input font-mono" inputmode="decimal"
                                    placeholder="0" autocomplete="off">
                             <span class="field-error hidden" data-error-for="counted"></span>
                         </label>
@@ -88,7 +88,7 @@
                              box somebody fills in for a shortage. --}}
                         <label class="field hidden" data-adjust-cost>
                             <span class="field-label">What the found stock cost</span>
-                            <input type="text" name="unit_cost" class="field-input field-num font-mono" inputmode="decimal"
+                            <input type="text" name="unit_cost" class="field-input font-mono" inputmode="decimal"
                                    placeholder="Leave blank" autocomplete="off">
                             <span class="field-error hidden" data-error-for="adjustments.0.unit_cost"></span>
                         </label>

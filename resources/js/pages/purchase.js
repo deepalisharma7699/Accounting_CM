@@ -54,6 +54,15 @@ const state = {
     payment: '',
     status: '',
     outstanding: false,
+    /*
+    | Whether a cancelled document and the reversal that cancelled it are on the
+    | list. Off by default: this screen is the working list, and a mistake
+    | corrected an hour ago should not go on occupying two rows of it for ever.
+    |
+    | It hides nothing from the books. The pair is untouched in the ledger, on
+    | the Day Book and on the audit trail — this is the one list it comes off.
+    */
+    showCancelled: false,
     from: '',
     to: '',
     page: 1,
@@ -106,6 +115,15 @@ function query() {
     if (state.payment) params.set('payment_status', state.payment);
     if (state.status) params.set('status', state.status);
     if (state.outstanding) params.set('outstanding', '1');
+
+    /*
+    | Not sent while a state has been chosen explicitly, and that guard is the
+    | whole of why this is decided here rather than on the server. Picking
+    | "Reversed" from the state filter and being handed an empty table would be
+    | the screen doing the opposite of what it was asked, with nothing saying
+    | so — so an explicit question about state always wins over the default.
+    */
+    if (!state.showCancelled && !state.status) params.set('hide_cancelled', '1');
     if (state.from) params.set('from', state.from);
     if (state.to) params.set('to', state.to);
 
@@ -665,17 +683,46 @@ async function correctDocument() {
     if (await revision.begin(drawer.bill)) hideModal('#purchase-drawer');
 }
 
+/**
+ * What this document is called, for the one control that has to name it.
+ *
+ * "Cancel" on its own sits next to "Close" in a drawer footer and reads as
+ * "cancel what I am doing", which is the opposite of what it does. Naming the
+ * document is what makes the button unambiguous, and the same noun then carries
+ * into the confirmation so the two read as one sentence.
+ */
+function docNoun(bill) {
+    return bill.type === 'purchase_return' ? 'debit note' : 'bill';
+}
+
 /* --- the acts that cannot be undone ----------------------------------- */
 
+/**
+ * Cancel a posted document — what somebody looking for "delete" has come for.
+ *
+ * It is still a reversal underneath, and it has to be: posting a purchase
+ * recomputes the weighted average cost of every variant on it, so once anything
+ * has been sold the shelf is valued off this document and deleting the row
+ * cannot un-blend that. The GST input credit claimed against it and the audit
+ * trail have to survive too. So the pair is posted and both halves come off the
+ * working list instead (see `hide_cancelled`), which is the part people actually
+ * wanted — the mistake stops being on the screen.
+ *
+ * The wording says "cancel" because that is the act; the confirmation is where
+ * it says what cancelling does, rather than making somebody infer it from the
+ * word "reverse".
+ */
 async function reverseDocument() {
     const bill = drawer.bill;
+    const noun = docNoun(bill);
 
     const ok = await confirmAction({
-        title: `Reverse ${bill.doc_no ?? `#${bill.id}`}?`,
-        body: 'A mirroring entry is posted and the stock comes back off the shelf. Both documents stay on '
-            + 'the record — nothing is erased. If only part of the delivery is going back, send a debit '
-            + 'note instead.',
-        confirmLabel: 'Reverse it',
+        title: `Cancel ${bill.doc_no ?? `#${bill.id}`}?`,
+        body: `This ${noun} is cancelled by posting a mirroring entry, and the stock comes back off the `
+            + 'shelf. It comes off this list, and both entries stay in the books, on the day book and on '
+            + 'the audit trail — nothing is erased, which is what keeps the figures explainable. If only '
+            + 'part of the delivery is going back, send a debit note instead.',
+        confirmLabel: `Cancel the ${noun}`,
     });
 
     if (!ok) return;
@@ -700,11 +747,11 @@ async function reverseDocument() {
 
             const accepted = await confirmAction({
                 title: 'This will take stock below zero',
-                body: `${describeShortfalls(error.details?.shortfalls ?? [])} Reversing anyway leaves the `
+                body: `${describeShortfalls(error.details?.shortfalls ?? [])} Cancelling anyway leaves the `
                     + 'shelf showing a negative, which stays wrong until a stock count corrects it. '
                     + 'Send a debit note for what is still here instead, unless you know this bill '
                     + 'should never have been entered at all.',
-                confirmLabel: 'Reverse anyway',
+                confirmLabel: 'Cancel it anyway',
             });
 
             if (!accepted) return;
@@ -720,12 +767,23 @@ async function reverseDocument() {
  * point of the refusal is that somebody has to have seen it.
  */
 async function postReversal(acknowledged) {
-    const response = await auth.call(`/transactions/${drawer.bill.id}/reverse`, {
+    // Named before the request, because `loadDocument()` below replaces
+    // `drawer.bill` with the document as it now stands.
+    const label = drawer.bill.doc_no ?? `The ${docNoun(drawer.bill)}`;
+
+    await auth.call(`/transactions/${drawer.bill.id}/reverse`, {
         method: 'POST',
         body: acknowledged ? { acknowledge_negative_stock: true } : {},
     });
 
-    toast(response.message ?? 'Reversing entry posted.');
+    /*
+    | The screen's own word, not the server's. `/reverse` answers "Reversing
+    | entry posted." — correct in the books, and shared with every other caller
+    | of that route — but somebody who just pressed "Cancel this bill" should be
+    | told the thing they asked for happened. The document is named, because a
+    | drawer can be closed before the alert is read.
+    */
+    toast(`${label} cancelled. Both entries stay in the books.`);
 
     await loadDocument();
     await refreshList();
@@ -826,7 +884,8 @@ function paintActions() {
             buttons.push('<button type="button" class="btn btn-secondary btn-sm" data-drawer-return>Return to vendor</button>');
         }
 
-        buttons.push('<button type="button" class="btn btn-ghost btn-sm" data-drawer-reverse>Reverse</button>');
+        buttons.push('<button type="button" class="btn btn-ghost btn-sm" data-drawer-reverse>'
+            + `Cancel this ${docNoun(bill)}</button>`);
     }
 
     host.innerHTML = buttons.join('')
@@ -885,7 +944,8 @@ function todayISO() {
 
 function clearFilters() {
     Object.assign(state, {
-        search: '', kind: '', payment: '', status: '', outstanding: false, from: '', to: '',
+        search: '', kind: '', payment: '', status: '', outstanding: false,
+        showCancelled: false, from: '', to: '',
     });
 
     listEl('[data-filter-search]').value = '';
@@ -895,6 +955,7 @@ function clearFilters() {
     listEl('[data-filter-from]').value = '';
     listEl('[data-filter-to]').value = '';
     listEl('[data-filter-outstanding]').setAttribute('aria-pressed', 'false');
+    listEl('[data-filter-cancelled]').setAttribute('aria-pressed', 'false');
 
     refetch();
 }
@@ -919,6 +980,12 @@ function bindFilters() {
     listEl('[data-filter-outstanding]').addEventListener('click', (event) => {
         state.outstanding = !state.outstanding;
         event.currentTarget.setAttribute('aria-pressed', String(state.outstanding));
+        refetch();
+    });
+
+    listEl('[data-filter-cancelled]').addEventListener('click', (event) => {
+        state.showCancelled = !state.showCancelled;
+        event.currentTarget.setAttribute('aria-pressed', String(state.showCancelled));
         refetch();
     });
 

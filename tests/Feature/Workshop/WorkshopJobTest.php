@@ -5,8 +5,8 @@ namespace Tests\Feature\Workshop;
 use App\Enums\PartyRole;
 use App\Enums\SystemAccount;
 use App\Enums\WorkshopJobStatus;
-use App\Models\ItemAttribute;
-use App\Models\ItemCategory;
+use App\Models\JobKind;
+use App\Models\JobKindAttribute;
 use App\Models\ItemVariant;
 use App\Models\Party;
 use App\Models\Tenant;
@@ -57,7 +57,7 @@ class WorkshopJobTest extends TestCase
 
     private Party $customer;
 
-    private ItemCategory $motorKind;
+    private JobKind $motorKind;
 
     protected function setUp(): void
     {
@@ -74,13 +74,15 @@ class WorkshopJobTest extends TestCase
         $this->labour = $this->serviceVariantFor($this->tenant, '1200.00');
         $this->customer = $this->party(PartyRole::Customer);
 
-        // Provisioned by the first variant above. The bench takes its vocabulary
-        // from the catalogue rather than owning a second list of kinds, so this
-        // is the same row the Items form draws a motor's fields from.
-        $this->motorKind = $this->actingForTenant(
-            $this->tenant,
-            fn () => ItemCategory::where('code', 'motor')->firstOrFail(),
-        );
+        // The bench's own list, not the catalogue's. A motor is the one kind
+        // that appears on both sides, and even here the questions differ: a
+        // motor on a price list is identified by its frame and mounting, a
+        // motor on a bench by what is wrong with it. See App\Models\JobKind.
+        $this->motorKind = $this->kind('Motor', [
+            ['key' => 'hp', 'label' => 'Rating', 'data_type' => 'decimal', 'unit_code' => 'hp', 'is_required' => true],
+            ['key' => 'phase', 'label' => 'Phase', 'data_type' => 'dropdown', 'unit_code' => 'phase', 'options' => ['1', '3'], 'is_required' => true],
+            ['key' => 'rpm', 'label' => 'Speed', 'data_type' => 'number', 'unit_code' => 'rpm', 'is_required' => true],
+        ]);
     }
 
     private function party(PartyRole ...$roles): Party
@@ -104,7 +106,7 @@ class WorkshopJobTest extends TestCase
         return $this->withHeaders($this->authHeader($this->owner))
             ->postJson('/api/v1/workshop-jobs', array_merge([
                 'party_id' => $this->customer->id,
-                'category_id' => $this->motorKind->id,
+                'job_kind_id' => $this->motorKind->id,
                 'specs' => ['hp' => '7.5', 'phase' => '3'],
                 'brand' => 'Crompton',
                 'complaint' => 'Winding burnt, not starting',
@@ -231,7 +233,7 @@ class WorkshopJobTest extends TestCase
         ]);
 
         $job = $this->bookIn([
-            'category_id' => $cooler->id,
+            'job_kind_id' => $cooler->id,
             'specs' => ['capacity' => '65', 'body' => 'Plastic'],
             'brand' => 'Symphony',
             'complaint' => 'Pump not lifting water',
@@ -270,7 +272,7 @@ class WorkshopJobTest extends TestCase
     public function something_nobody_can_identify_is_still_booked_in(): void
     {
         $job = $this->bookIn([
-            'category_id' => null,
+            'job_kind_id' => null,
             'specs' => null,
             'brand' => null,
             'complaint' => 'Sparking when switched on',
@@ -292,8 +294,8 @@ class WorkshopJobTest extends TestCase
     #[Test]
     public function a_kind_that_insists_on_a_field_does_not_insist_here(): void
     {
-        // `hp`, `phase` and `rpm` are all `is_required` on the seeded Motor
-        // category — an item variant cannot be saved without them.
+        // `hp`, `phase` and `rpm` are all `is_required` on this kind. On a
+        // *product* that would mean the record cannot be saved without them.
         $this->assertNotEmpty($this->actingForTenant(
             $this->tenant,
             fn () => $this->motorKind->requiredAttributeKeys(),
@@ -338,7 +340,7 @@ class WorkshopJobTest extends TestCase
 
         $corrected = $this->withHeaders($this->authHeader($this->owner))
             ->patchJson("/api/v1/workshop-jobs/{$job['id']}", [
-                'category_id' => $cooler->id,
+                'job_kind_id' => $cooler->id,
                 'specs' => ['capacity' => '65'],
             ])
             ->assertOk()
@@ -392,7 +394,7 @@ class WorkshopJobTest extends TestCase
     {
         $cooler = $this->kind('Cooler');
 
-        $this->bookIn(['category_id' => $cooler->id, 'specs' => null]);
+        $this->bookIn(['job_kind_id' => $cooler->id, 'specs' => null]);
         $this->bookIn();
 
         $found = $this->withHeaders($this->authHeader($this->owner))
@@ -418,27 +420,24 @@ class WorkshopJobTest extends TestCase
      *
      * @param  array<int, array<string, mixed>>  $attributes
      */
-    private function kind(string $name, array $attributes = []): ItemCategory
+    private function kind(string $name, array $attributes = []): JobKind
     {
         return $this->actingForTenant($this->tenant, function () use ($name, $attributes) {
-            $category = ItemCategory::create([
+            $kind = JobKind::create([
                 'name' => $name,
-                'holds_stock' => true,
-                'uses_sac_code' => false,
-                'default_unit_code' => 'piece',
                 'is_active' => true,
             ]);
 
             foreach ($attributes as $order => $attribute) {
-                ItemAttribute::create(array_merge([
-                    'category_id' => $category->id,
+                JobKindAttribute::create(array_merge([
+                    'job_kind_id' => $kind->id,
                     'is_required' => false,
                     'is_active' => true,
                     'display_order' => $order,
                 ], $attribute));
             }
 
-            return $category->refresh();
+            return $kind->refresh();
         });
     }
 

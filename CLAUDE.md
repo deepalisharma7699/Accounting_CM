@@ -300,6 +300,16 @@ authorization on the backend, on every endpoint.
 `data-requires-permission` is presentation only — the grant is checked server
 side too.
 
+6.2.1 **`applyPermissionGates()` runs on what is in the DOM, so markup written
+later is not gated.** It runs once at boot and once per module mount
+([shell.js](resources/js/shell.js)) — anything a page module then writes with
+`innerHTML` arrives after both, and a `data-requires-permission` on it does
+nothing at all. That is not a leak, because §6.2 holds server side; it is the
+screen offering an act and the server refusing it, which reads as a broken
+product rather than a locked one. A module that renders gated controls calls the
+gate again at the end of its own render — the catalogue master is the worked
+example, and it had nineteen such buttons doing nothing.
+
 6.3 Never expose SQL errors, stack traces, internal server detail or sensitive
 data in a response.
 
@@ -621,6 +631,22 @@ and the conversion between them is arithmetic on a quantity — done in integer
 thousandths, because `12.3 - 4.1` is not `8.2` in a float and `decimal:0,3`
 refuses what comes out. Two copies would be two places the sign, `post: true` and
 the `client_ref` are decided, and the sign is the whole meaning of the document.
+
+**A count is not an opening balance, and offering the wrong one costs a
+period's profit.** A product written without its `opening_stock` could not
+acquire one afterwards — the field is on the create form and deliberately off the
+edit — so people reached for "Record a count", which posts template G:
+`Dr Inventory / Cr COGS`, dated today. That credits cost of goods sold, so the
+entire value of the shelf lands in this period's gross profit as though the
+workshop had earned it. Right for shrinkage found at a stock-take; wrong for
+stock the workshop already owned, which is template H —
+`Dr Inventory / Cr Opening Balance Equity`, dated at go-live. The Items drawer
+now offers **Declare opening stock** on a variant whose shelf is empty, and it
+posts one structured row to `POST /opening-balances` rather than reimplementing
+anything (§4.3, §4.4). A row may carry `variant_id`, and then the service matches
+no names at all: two variants of one product share a name, so a fuzzy match is
+the one way that path lands a declaration on the wrong shelf. See
+[opening-balances-module.md](docs/opening-balances-module.md).
 
 **A bill line may take several things off the shelf, and that used to be
 impossible.** A rewinding shop sells *winding* — one line, one price per rating —
@@ -1206,19 +1232,62 @@ Blade template, which is the failure the catalogue's vocabulary rule already
 records against `ItemType` and against a typed brand. It cost a real workshop
 something every week: a cooler, a table fan or a mixer came in and the only
 fields on offer were two that mean nothing about any of them. Those columns are
-**gone**; a job now carries `category_id`, a **copied** `kind_label` and a
+**gone**; a job now carries `job_kind_id`, a **copied** `kind_label` and a
 `specs` bag keyed by attribute, and the intake form asks what the chosen kind is
 described by. Never put a product type back into this schema, this template or
 `pages/jobs.js`.
 
-The kinds are the **catalogue's own** `item_categories` and `item_attributes` —
-never a `job_categories` table, which would be a second master, a second schema
-resolver and a second admin screen answering one question (§4.4, §5.1). So a
-workshop that starts repairing coolers adds a category from the Items card and
-the bench asks the right questions with no deployment, which is the catalogue
-module's acceptance criterion one module along.
-[components/attribute-fields.js](resources/js/components/attribute-fields.js) is
-the one renderer for both forms; add a third reader, not a third copy.
+**The bench's list is its own, and this paragraph used to say the opposite.** It
+read: the kinds are the catalogue's own `item_categories`, *never* a
+`job_categories` table, which would be a second master, a second schema resolver
+and a second admin screen answering one question. That was wrong, and the way it
+was wrong is worth keeping, because the reasoning is the kind that sounds
+complete.
+
+It treated "one list" and "one implementation" as the same requirement. They are
+not, and the product showed it. A category is filtered for the bench on
+`holds_stock`, on the argument that a category holding no stock is *produced at
+the moment it is sold* and nobody wheels one of those through a door — true, and
+beside the point. `holds_stock` separates **kept on a shelf** from **made when
+sold**, which says nothing about whether a customer brings one in. So the intake
+form offered Part, Bulk material, Bearing, Capacitor and Wire, none of which
+anybody brings in, and offered no cooler, fan, mixer or submersible at all —
+because a repair shop does not stock the things it repairs. The intersection of
+the two lists is Motor and pumps, and even there the questions differ: a motor on
+a price list is identified by its frame and mounting, a motor on a bench by its
+serial number and what is wrong with it. Two lists that only looked alike.
+
+So `job_kinds` and `job_kind_attributes` exist, and the rule that replaces the
+old one is narrower and holds: **separate the list, never the machinery.** What
+is emphatically not duplicated is
+[AttributeDefinition](app/Models/AttributeDefinition.php) — what a field means
+once stored — [DefinesAQuestionSet](app/Models/Concerns/DefinesAQuestionSet.php)
+— the shape a form reads it in —
+[AttributeFieldShape](app/Support/Catalogue/AttributeFieldShape.php) — what may
+be stored — `Catalogue\StoreAttributeRequest`, which validates both masters, and
+[components/attribute-fields.js](resources/js/components/attribute-fields.js),
+which draws both forms. A third *list* over that machinery is cheap and may be
+right; a second copy of any of those five is not (§4.4, §5.1).
+
+`JobKind` is deliberately thinner than `ItemCategory` by everything that
+describes a thing for **sale** — no HSN or SAC, no GST rate, no default unit, no
+`holds_stock` — and by one thing besides: **no parent**. A category tree earns
+its complexity on a catalogue of hundreds of products, where "Submersible Motor"
+inherits a motor's question set and adds Head and Flow Rate. A bench takes in
+eight or ten kinds of thing and a cooler inherits nothing from a fan. That one
+difference is why the shared piece is a trait and not a base class.
+
+The master is a second §2A workspace on the **Jobs** card, on the Staff shape —
+one tab, mounted lazily on first click — and not on the Items card, because the
+vocabulary is the bench's. A workshop that starts repairing sewing machines adds
+the kind and the intake form asks the right questions with no deployment, which
+is the catalogue module's acceptance criterion reached from the other side.
+`JobKindDefaults` seeds eight to start with; they are deliberately **not**
+`is_system`, because a shop that never touches a washing machine should be able
+to delete the row rather than carry it about switched off. The refusal that
+matters is the one on use: a kind a job is filed under, a field a job has
+answered and a dropdown choice a job is filed under are each refused and
+archived instead.
 
 Four parts of it are load-bearing. The list is published by
 **`GET /workshop-jobs/meta`** and not fetched from `/items/meta`: that route is
@@ -1229,9 +1298,9 @@ first — the trap M22's attribution pickers avoid by riding on
 `is_required` says a *product* cannot exist without a rating, and this is a pump
 a driver could not identify that is already on the bench. **The label is copied**
 onto the row like the brand and the model beside it, so a renamed or archived
-category leaves the card still saying what came through the door and
+kind leaves the card still saying what came through the door and
 `search=cooler` finds the coolers without a join. And **the bag reaches no screen
-unresolved** — `{"hp": "7.5"}` needs the category that asked to become "7.5 HP",
+unresolved** — `{"hp": "7.5"}` needs the kind that asked to become "7.5 HP",
 so `JobService` attaches the schema once per page rather than a lookup per row,
 and `equipmentLabel()` prints nothing from it where nobody resolved it. See
 [workshop-module.md](docs/workshop-module.md).

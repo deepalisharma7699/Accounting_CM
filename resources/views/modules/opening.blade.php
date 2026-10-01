@@ -60,7 +60,12 @@
          them. --}}
     <div id="reconciliation" class="mb-4 hidden"></div>
 
-    <div class="surface mb-4 p-4" id="declare-panel" data-requires-permission="UPDATE:WORKSPACE">
+    {{-- `form-card` rather than `p-4`, because the padding was never the point:
+         it is the two lines that make this a `form-surface`, so the grid inside
+         counts its columns against this panel's 1246px instead of falling back
+         to the two the media query gives a surface it cannot measure. The
+         padding is the same figure either way (`--pad-surface`). --}}
+    <div class="surface form-card mb-4" id="declare-panel" data-requires-permission="UPDATE:WORKSPACE">
         <h3 class="text-[0.9375rem] font-semibold text-foreground">Declare what you had</h3>
 
         <p class="mt-1 text-[0.8125rem] text-muted-foreground">
@@ -72,7 +77,7 @@
             <div class="form-grid">
                 <label class="block">
                     <span class="field-label">As at</span>
-                    <input type="date" name="date" id="opening-date" class="field-input field-date">
+                    <input type="date" name="date" id="opening-date" class="field-input">
                     <span class="mt-1 block text-xs text-muted-foreground">
                         Defaults to the day the books open. Nothing can be dated before it.
                     </span>

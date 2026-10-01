@@ -12,7 +12,7 @@ import { initStockAdjust, openStockAdjust } from '../components/stock-adjust';
 import { clearModuleParams, moduleParams } from '../shell';
 import {
     $, $$, clearFormErrors, confirmAction, debounce, esc, formatDate, formatMoney,
-    hideModal, setSubmitting, showFormErrors, showModal, tableMessage, toast,
+    hideModal, setSubmitting, showFormErrors, showFormMessage, showModal, tableMessage, toast,
 } from '../ui';
 import { adoptForm, mountWorkspace } from '../workspace';
 import { initCatalogueMaster, openCatalogueMaster } from './catalogue-master.js';
@@ -801,6 +801,7 @@ const iconLayers = svg('<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0
 const iconPlus = svg('<path d="M12 5v14"/><path d="M5 12h14"/>', 15);
 const iconArchive = svg('<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>', 13);
 const iconRestore = svg('<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M12 8v4l3 2"/>', 13);
+const iconOpening = svg('<path d="M3 21h18"/><path d="M5 21V8l7-5 7 5v13"/><path d="M9 21v-6h6v6"/>', 13);
 const iconCount = svg('<rect width="8" height="4" x="8" y="2" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/>', 13);
 const iconChecked = svg('<path d="M21.8 10A10 10 0 1 1 17 3.34"/><path d="m9 11 3 3L22 4"/>', 13);
 const iconTrash = svg('<path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>', 13);
@@ -1232,6 +1233,15 @@ function drawerVariants(item) {
     const mayUpdate = can('UPDATE', 'ITEMS');
     const mayDelete = can('DELETE', 'ITEMS');
     const mayCount = state.canStock && can('WRITE', 'TRANSACTIONS') && item.can_hold_stock !== false;
+    /*
+    | Declaring opening stock needs UPDATE:WORKSPACE as well as
+    | WRITE:TRANSACTIONS, which is what the endpoint asks for and in practice
+    | means the owner. Deliberately not widened here: saying what the workshop
+    | already owned is a setup act, dated at go-live and posted against the
+    | owner's stake, and it sits beside books_start_date rather than beside the
+    | day's takings (§6.2 — the grant is checked server-side either way).
+    */
+    const mayOpen = mayCount && can('UPDATE', 'WORKSPACE');
 
 
     if (!variants.length) {
@@ -1264,6 +1274,21 @@ function drawerVariants(item) {
                 mayUpdate && variant.is_draft ? `<button type="button" class="btn btn-ghost btn-icon text-amber-600"
                                      data-clear-variant-draft="${variant.id}"
                                      title="Mark as checked" aria-label="Mark as checked">${iconChecked}</button>` : '',
+                /*
+                | Only while the shelf is empty, and that is the whole of when
+                | it is the right answer.
+                |
+                | A variant with a position has had something move through it,
+                | and what it needs then is a count — this would be declaring an
+                | opening figure on top of a shelf that already has a history.
+                | Once anything has been declared the server skips it anyway
+                | (`hasOpeningStock`), so the button going quiet at nought is the
+                | client agreeing with the rule rather than inventing one.
+                */
+                mayOpen && variant.is_active && !hasPosition(item, variant)
+                    ? `<button type="button" class="btn btn-ghost btn-icon" data-opening-stock="${variant.id}"
+                               title="Declare opening stock" aria-label="Declare opening stock">${iconOpening}</button>`
+                    : '',
                 mayCount && variant.is_active ? `<button type="button" class="btn btn-ghost btn-icon" data-set-stock="${variant.id}"
                                      title="Set what is on the shelf" aria-label="Set what is on the shelf">${iconCount}</button>` : '',
                 mayUpdate ? `<button type="button" class="btn btn-ghost btn-icon" data-edit-variant="${variant.id}"
@@ -1537,7 +1562,18 @@ function applyTypeToForm({ editing }) {
     const keys = Object.keys(category.attributes ?? {});
     const forLabel = $('#item-variants-for', form);
 
-    if (forLabel) forLabel.textContent = keys.length ? `— what a ${category.label.toLowerCase()} is described by` : '';
+    /*
+    | "a" or "an", because the noun is the workshop's own and a hard-coded "a"
+    | printed "what a air fan is described by" on the category a real workshop
+    | added. Initial-vowel is the wrong rule for a handful of English words and
+    | the right one for every category name anybody has typed here.
+    */
+    if (forLabel) {
+        const noun = (category.label ?? '').toLowerCase();
+        const article = /^[aeiou]/.test(noun) ? 'an' : 'a';
+
+        forLabel.textContent = keys.length ? `— what ${article} ${noun} is described by` : '';
+    }
 
     // Every block repainted: the fields this category asks for, the unit its
     // quantity is counted in, and whether its stock boxes apply at all. On an
@@ -2632,6 +2668,155 @@ function openStockCount(variantId) {
     });
 }
 
+/* -------------------------------------------------------------------------
+ | Opening stock, declared after the fact
+ | ---------------------------------------------------------------------- */
+
+/**
+ * Has anything ever been on this variant's shelf?
+ *
+ * Absent and nought are the same answer here — the ledger has no other way to
+ * say "none" — and either means the product was written without its opening
+ * figure and nothing has moved since. That is the one state in which declaring
+ * an opening balance is the right act rather than a count.
+ */
+function hasPosition(item, variant) {
+    const position = positionFor(item.id, variant.id);
+
+    return position !== null && Number(position.quantity) !== 0;
+}
+
+/**
+ * Declare what was on the shelf at go-live for a variant that missed it.
+ *
+ * The gap this closes: `opening_stock` is on the create form and deliberately
+ * withheld from the edit, so a product written without it had no way to acquire
+ * one — and the obvious substitute, "Record a count", is the wrong document.
+ * A count posts `Dr Inventory / Cr COGS` dated today, which credits cost of
+ * goods sold and puts the whole value of the shelf into this period's gross
+ * profit as though the workshop had earned it. An opening declaration posts
+ * `Dr Inventory / Cr Opening Balance Equity` dated at go-live, which is what
+ * stock the workshop already owned actually is.
+ *
+ * Nothing here is a second implementation of that. It builds one structured
+ * `rows[]` entry and hands it to `POST /opening-balances` — the same endpoint,
+ * the same service, the same resolution and the same duplicate guards as the
+ * paste box on the Opening balances card (§4.3, §4.4). The row carries
+ * `variant_id`, so the service skips its name matcher entirely: this screen
+ * knows exactly which variant it is looking at, and a fuzzy match on "Bearing
+ * 6204" against "Bearing 6204 ZZ" is the one way this path could land a
+ * declaration on the wrong shelf.
+ */
+function openOpeningStock(variantId) {
+    const item = state.openItem;
+    if (!item) return;
+
+    const variant = (item.variants ?? []).find((row) => String(row.id) === String(variantId));
+    if (!variant) return;
+
+    const form = $('#opening-stock-form');
+
+    clearFormErrors(form);
+    form.reset();
+
+    form.elements.variant_id.value = variant.id;
+    $('#opening-stock-subtitle', form).textContent = `${item.name} · ${variant.display_label}`;
+    $('#opening-stock-unit', form).textContent = item.base_uom_symbol ?? '';
+    $('#opening-stock-total', form).textContent = '';
+
+    showModal('#opening-stock-modal');
+    $('#opening-stock-quantity', form).focus();
+}
+
+/** The value of what is being declared, so the figure is read before it is posted. */
+function paintOpeningTotal() {
+    const form = $('#opening-stock-form');
+    const quantity = Number($('#opening-stock-quantity', form).value);
+    const cost = Number($('#opening-stock-cost', form).value);
+    const host = $('#opening-stock-total', form);
+
+    /*
+    | `toFixed(2)` rather than the product itself: 12.3 * 4.1 is 50.42999...
+    | in a float, and formatMoney truncates the fraction to two places rather
+    | than rounding it — so the figure on screen would read a paisa under the
+    | one the server posts. Indicative either way; the value that lands is
+    | computed from the quantity and the rate server-side.
+    */
+    host.textContent = Number.isFinite(quantity) && Number.isFinite(cost) && quantity > 0 && cost > 0
+        ? `Declares ${formatMoney((quantity * cost).toFixed(2))} of stock against the owner's stake.`
+        : '';
+}
+
+/**
+ * Check it, then post it — the module's own two verbs, in the order it uses them.
+ *
+ * The preview is not ceremony. A refusal here is a *row* refusal — a quantity
+ * with more decimals than the unit allows, a category that holds no stock, an
+ * opening figure already declared — and `POST /opening-balances` answers all of
+ * those with `OPENING_PLAN_HAS_ERRORS`, which carries a count and a sentence
+ * about fixing the file. There is no file. The preview resolves the identical
+ * row through the identical code and hands back that row's own reason, which is
+ * the only thing worth showing somebody with two boxes in front of them.
+ */
+async function submitOpeningStock(event) {
+    event.preventDefault();
+
+    const form = event.target;
+
+    clearFormErrors(form);
+
+    const body = {
+        rows: [{
+            kind: 'stock',
+            // The id is what resolves the row; the name is what every message
+            // about it quotes, so both go.
+            variant_id: Number(form.elements.variant_id.value),
+            name: state.openItem?.name ?? '',
+            quantity: $('#opening-stock-quantity', form).value.trim(),
+            unit_cost: $('#opening-stock-cost', form).value.trim(),
+        }],
+    };
+
+    setSubmitting(form, true, 'Checking…');
+
+    try {
+        const { data } = await auth.call('/opening-balances/preview', { method: 'POST', body });
+        const row = data?.[0];
+
+        /*
+        | Anything the resolution would not post is reported here and the dialog
+        | stays open. `skipped` is its own outcome and not an error: it is what
+        | an opening figure that has already been declared looks like, and the
+        | server's own sentence says so better than a guess would.
+        */
+        if (!row || row.outcome !== 'ready') {
+            showFormMessage(form, row?.reason
+                ?? 'That cannot be declared as it stands, and nothing has been posted.');
+
+            return;
+        }
+
+        await auth.call('/opening-balances', {
+            method: 'POST',
+            body: { ...body, filename: `Opening stock — ${row.resolved}` },
+        });
+
+        hideModal('#opening-stock-modal');
+        toast('Opening stock declared.');
+
+        // The catalogue and the stock map together: the family's roll-up, the
+        // tiles above the table and this row's own status are all a declaration
+        // out of date until both come back.
+        await refresh({ keepPage: true });
+
+        if (state.openItem) renderDrawerBody();
+    } catch (error) {
+        showFormErrors(form, error);
+    } finally {
+        setSubmitting(form, false);
+    }
+}
+
 /**
  * Take a variant off the shelf, or put it back.
  *
@@ -2961,6 +3146,16 @@ export default async function initItems() {
     initCatalogueMaster();
     initStockAdjust();
 
+    /*
+    | Declaring opening stock for a variant that missed it — bound once here
+    | rather than per open, because the dialog lives in the module's fragment and
+    | the fragment is mounted once (`shell.js` caches its root detached).
+    */
+    const openingForm = $('#opening-stock-form');
+
+    openingForm.addEventListener('submit', submitOpeningStock);
+    openingForm.addEventListener('input', paintOpeningTotal);
+
     const openMaster = (options = {}) => openCatalogueMaster({
         ...options,
         onChange: async (change = null) => {
@@ -3172,6 +3367,7 @@ export default async function initItems() {
     $('#drawer-body').addEventListener('click', (event) => {
         const edit = event.target.closest('[data-edit-variant]');
         const count = event.target.closest('[data-set-stock]');
+        const opening = event.target.closest('[data-opening-stock]');
         const checked = event.target.closest('[data-clear-variant-draft]');
         const archive = event.target.closest('[data-toggle-variant]');
         const remove = event.target.closest('[data-delete-variant]');
@@ -3197,6 +3393,8 @@ export default async function initItems() {
         }
 
         if (count) openStockCount(count.dataset.setStock);
+
+        if (opening) openOpeningStock(opening.dataset.openingStock);
 
         if (checked) setVariantDraft(checked.dataset.clearVariantDraft);
 

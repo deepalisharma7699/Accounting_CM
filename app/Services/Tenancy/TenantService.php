@@ -13,6 +13,7 @@ use App\Repositories\Contracts\TenantRepositoryInterface;
 use App\Repositories\Contracts\UserRepositoryInterface;
 use App\Services\Accounting\ChartOfAccountProvisioner;
 use App\Services\Inventory\CatalogueProvisioner;
+use App\Services\Workshop\JobKindProvisioner;
 use App\Services\Rbac\RoleProvisioner;
 use App\Services\Auth\TokenService;
 use App\Support\Tenancy\TenantContext;
@@ -38,6 +39,7 @@ class TenantService
         private readonly TenantContext $context,
         private readonly ChartOfAccountProvisioner $chartOfAccounts,
         private readonly CatalogueProvisioner $catalogue,
+        private readonly JobKindProvisioner $jobKinds,
         private readonly RoleProvisioner $roles,
     ) {}
 
@@ -344,6 +346,11 @@ class TenantService
         // breath: a workshop with no units and no categories cannot record a
         // product at all, and the create form would open on an empty dropdown.
         $this->catalogue->seedFor($tenant);
+
+        // And the kinds of thing it takes in. After the catalogue rather than
+        // before it, because a kind's fields carry units — 'hp', 'mm', 'µF' —
+        // and a unit the workshop does not have yet is dropped on the way in.
+        $this->jobKinds->seedFor($tenant);
 
         // And its roles — OWNER, MANAGER, ACCOUNTANT, DATA_ENTRY — which are
         // this workshop's own rows and nobody else's. Same breath again, and
