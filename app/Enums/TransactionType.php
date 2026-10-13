@@ -511,13 +511,35 @@ enum TransactionType: string
      *
      * A settlement always has one: money moved to or from somebody, and a
      * payment attributed to nobody would sit in a control account that no
-     * statement could ever account for. A bill always has one for the same
-     * reason — an invoice made out to nobody cannot be collected. A journal
-     * legitimately has none: a depreciation entry has no other side to it.
+     * statement could ever account for. A purchase always has one for the same
+     * reason. A journal legitimately has none: a depreciation entry has no other
+     * side to it.
+     *
+     * A sale is the exception, and only in the shape {@see admitsWalkIn()}
+     * describes. The role still binds whenever a party *is* named.
      */
     public function requiresParty(): bool
     {
-        return $this->requiredPartyRole() !== null;
+        return $this->requiredPartyRole() !== null && ! $this->admitsWalkIn();
+    }
+
+    /**
+     * Whether this document may be raised for somebody who gave no name.
+     *
+     * A sale only. A customer at the counter who will not give a name or a
+     * number is still a sale the workshop has to record — the stock left, the
+     * cash came in, the GST is owed — and refusing to post it pushes it off the
+     * books entirely.
+     *
+     * What makes that safe is a condition, not this flag: the invoice must be
+     * **paid in full at the counter**. An invoice owed by nobody can never be
+     * collected or chased, so a balance left on one would sit in Sundry Debtors
+     * for ever. The engine enforces that when it posts — see
+     * `PostingEngine::assertWalkInSettled()`.
+     */
+    public function admitsWalkIn(): bool
+    {
+        return $this === self::Sale;
     }
 
     /**

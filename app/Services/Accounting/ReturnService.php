@@ -364,6 +364,15 @@ class ReturnService
         if (! $bill->isPosted()) {
             throw InvalidReturnException::notInTheBooks((int) $bill->id, $bill->status->label());
         }
+
+        // A walk-in sale names nobody, and a credit note is a claim against a
+        // customer's account — there is no account to credit, and the refund
+        // would leave Sundry Debtors negative against nobody. The sale was paid
+        // in full at the counter, so cancelling it is exact: the stock comes
+        // back and the cash goes out the way it came in.
+        if ($bill->party_id === null) {
+            throw InvalidReturnException::walkIn($this->describe($bill));
+        }
     }
 
     /**

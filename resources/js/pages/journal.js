@@ -350,11 +350,27 @@ function renderSplit(txn) {
             </td>
         </tr>`).join('');
 
+    // Not a way the money moved — what the party was let off on top of it, so
+    // it sits under the split rather than among the modes.
+    const discount = Number(txn.discount) > 0
+        ? `<tr class="border-t border-border bg-secondary/40">
+               <td class="px-2 py-2 text-[0.8125rem]">
+                   <span class="font-medium">Discount</span>
+                   <span class="mt-0.5 block text-[0.6875rem] text-muted-foreground">
+                       ${txn.type === 'payment' ? 'The supplier let the workshop off' : 'Let off, after tax'}
+                   </span>
+               </td>
+               <td class="px-2 py-2 text-right font-mono text-[0.8125rem] font-medium">
+                   ${esc(formatMoney(txn.discount))}
+               </td>
+           </tr>`
+        : '';
+
     return `
         <div class="mb-5">
             <h4 class="section-label mb-2">How the money moved</h4>
             <div class="overflow-hidden rounded-[10px] border border-border">
-                <table class="w-full border-collapse"><tbody>${rows}</tbody></table>
+                <table class="w-full border-collapse"><tbody>${rows}${discount}</tbody></table>
             </div>
         </div>`;
 }
@@ -921,6 +937,12 @@ function settlementSection(direction) {
             errors.date = ['Give the date the money moved.'];
         }
 
+        const discount = form.elements.discount.value.trim();
+
+        if (discount !== '' && !(Number(discount) > 0 && /^\d+(\.\d{1,2})?$/.test(discount))) {
+            errors.discount = ['Give the discount in rupees and paise, or leave it blank.'];
+        }
+
         if (!split.length) {
             errors.payments = ['Say how the money moved — enter at least one amount.'];
 
@@ -949,6 +971,7 @@ function settlementSection(direction) {
 
         picker.set(null);
         inForm(`#${direction}-notes`).value = '';
+        form.elements.discount.value = '';
         payments.reset();
 
         /*
@@ -1027,6 +1050,7 @@ function settlementSection(direction) {
                     client_ref: state.clientRef,
                     party_id: picker.id(),
                     payments: split,
+                    discount: form.elements.discount.value.trim() || null,
                 },
             });
 

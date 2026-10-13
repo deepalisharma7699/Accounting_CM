@@ -775,6 +775,18 @@ There is deliberately no document-level switch and no category default: one bill
 routinely carries a printed-price part and labour quoted before tax. See
 [inclusive-pricing.md](docs/inclusive-pricing.md).
 
+**Paid in full for less is a discount, and when it was agreed decides the tax.**
+At the counter, a smaller figure typed under "Paid in full" is sent as
+`settle_total`, and `BillTemplate::withBillDiscount()` **searches** for the bill
+discount that lands on it — before tax, so the GST falls with it, and on a
+purchase the stock arrives at the reduced cost. Never invert that arithmetic in
+the browser or in a formula: it is a second copy of the GST rounding. On an
+invoice already posted the GST is declared, so a receipt or payment carries a
+`discount` written off **after** tax to Discount Allowed / Discount Received;
+the settlement's total is what it cleared, and the money lines stay the money.
+Rounding is always **down** and stays its own Round Off line, never a discount.
+See [billing-module.md](docs/billing-module.md).
+
 **A sale is corrected on stricter terms than a purchase**, and the posting engine
 is where that is enforced, never the form. A purchase arrives at its own stated
 cost; a sale issues at whatever the weighted average was on the day, and that
@@ -819,6 +831,21 @@ preview additionally because the shell caches a module's root detached: declared
 inside a module it would take the document off the page when that module closed.
 The next module to hand a customer a document borrows this drawer; it does not
 build a second one.
+
+**A sale is handed over as an estimate, and the GST invoice is on request.** The
+estimate — the counter's plain receipt — is the `estimate` block of the same
+`InvoiceDocumentService` payload, every figure with the GST in, painted onto the
+**same one sheet** (`renderInvoice(…, { as })`). It is a way of *showing* a posted
+sale, never of recording one: the tax is in the books on every sale, so never add
+a mode that posts a sale without its GST. Share goes with the GST invoice only.
+**Every Print goes through `printInvoice()`**, which reads this device's paper and
+method from [print-settings.js](resources/js/print-settings.js) — per browser, never
+a workshop setting — and sends thermal paper to the print agent
+([tools/print-agent](tools/print-agent/README.md)) as ESC/POS when set to, falling
+back to the dialog. A sale may also **name nobody** if it is paid in full at the
+counter (`TransactionType::admitsWalkIn()`, enforced in the engine); it is
+cancelled rather than returned, and given a customer later by reissuing it. See
+[billing-module.md](docs/billing-module.md) and [sales-module.md](docs/sales-module.md).
 
 Its payload comes from `InvoiceDocumentService`, which builds the customer's
 document from **its own list of fields**. `TransactionResource` carries the cost

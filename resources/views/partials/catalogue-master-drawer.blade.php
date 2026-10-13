@@ -49,13 +49,13 @@
              switch to, and leaving the strip up would offer a jump that silently
              abandoned what was being edited. --}}
         <div class="tab-strip shrink-0 px-6 pt-3" role="tablist" id="catalogue-tabs">
-            <button type="button" class="tab-trigger" role="tab" data-catalogue-tab="categories">Categories</button>
+            <button type="button" class="tab" role="tab" data-catalogue-tab="categories" aria-selected="true">Categories</button>
             {{-- Beside Categories rather than on a screen of its own: brand and
                  category are picked from the same form one field apart, and a
                  shop that learned to add a category one way should not have to
                  learn a second way to add a brand. --}}
-            <button type="button" class="tab-trigger" role="tab" data-catalogue-tab="brands">Brands</button>
-            <button type="button" class="tab-trigger" role="tab" data-catalogue-tab="units">Units</button>
+            <button type="button" class="tab" role="tab" data-catalogue-tab="brands" aria-selected="false">Brands</button>
+            <button type="button" class="tab" role="tab" data-catalogue-tab="units" aria-selected="false">Units</button>
         </div>
 
         <div class="flex-1 overflow-y-auto px-6 py-5" id="catalogue-body"></div>

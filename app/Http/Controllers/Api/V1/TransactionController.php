@@ -9,6 +9,7 @@ use App\Enums\TransactionType;
 use App\Http\Controllers\Controller;
 use App\Enums\PaymentStatus;
 use App\Http\Requests\Transaction\AllocateSettlementRequest;
+use App\Http\Requests\Transaction\AssignCustomerRequest;
 use App\Http\Requests\Transaction\IndexTransactionRequest;
 use App\Http\Requests\Transaction\PreviewBillRequest;
 use App\Http\Requests\Transaction\ReverseTransactionRequest;
@@ -30,6 +31,7 @@ use App\Services\Accounting\SettlementService;
 use App\Services\Accounting\TransactionService;
 use App\Services\Staff\WorkAttributionService;
 use App\Support\ApiResponse;
+use App\Support\Money;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -267,7 +269,22 @@ class TransactionController extends Controller
 
     private function createSettlement(TransactionType $type, StoreSettlementRequest $request): JsonResponse
     {
-        $transaction = $this->transactions->create($type, $request->payload(), $request->user());
+        $payload = $request->payload();
+
+        // A discount closes what is owed and nothing more — checked before the
+        // money is in the books, where it can still be refused rather than
+        // reversed.
+        if ($payload['discount'] !== null) {
+            $this->settlements->assertDiscountWithinOpenBills(
+                $type,
+                $payload['party_id'],
+                Money::sum(array_map(fn (array $split) => Money::of($split['amount']), $payload['payments']))
+                    ->plus(Money::of($payload['discount'])),
+                $request->allocations(),
+            );
+        }
+
+        $transaction = $this->transactions->create($type, $payload, $request->user());
 
         // Which invoices the money settled — M16. Only once it is actually in
         // the books: a draft has moved nothing, so there is nothing yet to point
@@ -437,6 +454,48 @@ class TransactionController extends Controller
      *
      * @param  array<string, mixed>  $meta
      */
+    /**
+     * POST /api/v1/transactions/{transaction}/assign-customer
+     *
+     * A walk-in sale reissued under the customer who turned out to want a GST
+     * invoice in their name. The service builds the replacement from the sale
+     * itself; this carries the names of who did the work across with it, inside
+     * the same database transaction, as {@see revise()} does.
+     */
+    public function assignCustomer(AssignCustomerRequest $request, int $transaction): JsonResponse
+    {
+        $original = $this->transactions->find($transaction);
+
+        $this->attribution->attachTo([$original]);
+
+        $staff = ($original->staffAttribution ?? collect())->map(fn ($row) => [
+            'designation_id' => (int) $row->designation_id,
+            'employee_id' => (int) $row->employee_id,
+        ])->values()->all();
+
+        $revision = DB::transaction(function () use ($transaction, $request, $staff) {
+            $revision = $this->transactions->assignCustomer(
+                $transaction,
+                (int) $request->input('party_id'),
+                $request->clientRef(),
+                $request->user(),
+            );
+
+            if ($revision->wasRecentlyCreated && $staff !== []) {
+                $this->attribution->sync($revision, $staff);
+            }
+
+            return $revision;
+        });
+
+        $this->attribution->attachTo([$revision]);
+
+        return $this->respondToCreate(
+            $revision,
+            'Reissued in the customer’s name. The walk-in sale was cancelled and this replaces it.',
+        );
+    }
+
     private function respondToCreate(Transaction $transaction, string $message, array $meta = []): JsonResponse
     {
         if ($transaction->wasRecentlyCreated) {

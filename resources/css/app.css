@@ -293,7 +293,12 @@
     display: flex;
     align-items: center;
     gap: 0.25rem;
-    border-bottom: 1px solid var(--color-border);
+    /* The rule is an inset shadow rather than a border so the open tab's
+       underline can sit on it from *inside* the strip. A border is outside the
+       content box, so reaching it took a -1px margin on every tab — and
+       `overflow-x: auto` makes the y axis scroll as well, so that one pixel
+       painted a vertical scrollbar beside every strip in the product. */
+    box-shadow: inset 0 -1px 0 var(--color-border);
     overflow-x: auto;
 }
 
@@ -302,7 +307,6 @@
     align-items: center;
     gap: 0.5rem;
     padding: 0.625rem 1rem;
-    margin-bottom: -1px;
     border: 0;
     border-bottom: 2px solid transparent;
     background: none;
@@ -447,6 +451,14 @@
         background-color: var(--color-primary);
         border-color: var(--color-primary);
         color: var(--color-primary-foreground);
+    }
+
+    /* Offered but not available right now — the reason is said beside it. */
+    &:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+        border-color: var(--color-border);
+        color: var(--color-secondary-foreground);
     }
 }
 
@@ -2011,6 +2023,15 @@
     color: var(--color-muted-foreground);
 }
 
+/*
+ | The estimate — the same sheet with the workshop band and the tax columns
+ | gone. Four or five columns fit a phone, so the table no longer needs the
+ | invoice's minimum width to stay readable.
+ */
+.invoice-title-left { text-align: left; }
+.invoice-sheet[data-as='estimate'] .invoice-lines { min-width: 0; }
+.invoice-sheet[data-as='estimate'] .invoice-parties:empty { display: none; }
+
 /* -------------------------------------------------------------------------
  | Printing
  |
@@ -2281,4 +2302,68 @@
     .invoice-lines th, .invoice-words { background-color: transparent; }
     .invoice-lines th { border-bottom: 1px solid var(--color-foreground); }
     .invoice-words { border: 1px solid var(--color-border); }
+
+    /*
+    | Thermal paper, through the print dialog.
+    |
+    | `data-paper` is set on the sheet per print by `printInvoice()`, from this
+    | device's settings. Print-only, so the preview on screen keeps the A4 sheet
+    | whatever was last printed. The width is the roll's printable width rather
+    | than the roll itself — an 80 mm head prints 72 mm, a 58 mm one 48 mm.
+    |
+    | One column, everything stacked, and pure black: a thermal head has no grey,
+    | so a muted label either prints black or not at all. The per-line tax
+    | columns are dropped because six figures do not fit across 72 mm; the tax is
+    | still stated, line by line in the rate and in full in the totals, and the
+    | A4 copy carries every column. A 58 mm roll also drops the line number and
+    | the HSN; a GST invoice that needs HSN on it belongs on 80 mm or A4. The direct path (receipt-escpos.js) lays the
+    | roll out on its own and does not come through here.
+    */
+    .invoice-sheet:is([data-paper='80'], [data-paper='58']) {
+        --color-border: #000;
+        --color-muted-foreground: #000;
+        --color-secondary-foreground: #000;
+
+        width: 72mm;
+        font-size: 9pt;
+        line-height: 1.3;
+    }
+
+    .invoice-sheet[data-paper='58'] { width: 48mm; font-size: 8pt; }
+
+    .invoice-sheet:is([data-paper='80'], [data-paper='58']) :is(.invoice-band, .invoice-parties, .invoice-close) {
+        display: block;
+        padding-block: 1.5mm;
+    }
+
+    .invoice-sheet:is([data-paper='80'], [data-paper='58']) :is(.invoice-title, .invoice-party-right) {
+        text-align: left;
+    }
+
+    .invoice-sheet:is([data-paper='80'], [data-paper='58']) .invoice-issuer-name { font-size: 11pt; }
+    .invoice-sheet:is([data-paper='80'], [data-paper='58']) .invoice-docno { font-size: 10pt; }
+    .invoice-sheet:is([data-paper='80'], [data-paper='58']) .invoice-field > span { min-width: 0; margin-right: 1mm; }
+
+    .invoice-sheet:is([data-paper='80'], [data-paper='58']) .invoice-lines-scroll { border: 0; }
+
+    .invoice-sheet:is([data-paper='80'], [data-paper='58']) .invoice-lines :is(th, td) {
+        padding: 0.5mm 0.75mm;
+        white-space: normal;
+    }
+
+    .invoice-sheet:is([data-paper='80'], [data-paper='58'])
+        .invoice-lines [data-col]:is([data-col='taxable'], [data-col='cgst'], [data-col='sgst'], [data-col='igst']) {
+        display: none;
+    }
+
+    .invoice-sheet[data-paper='58'] .invoice-lines [data-col]:is([data-col='no'], [data-col='hsn']) { display: none; }
+
+    .invoice-sheet:is([data-paper='80'], [data-paper='58']) .invoice-totals { min-width: 0; width: 100%; }
+    .invoice-sheet:is([data-paper='80'], [data-paper='58']) .invoice-settlement { display: block; }
+    .invoice-sheet:is([data-paper='80'], [data-paper='58']) .invoice-settlement > div {
+        display: flex;
+        justify-content: space-between;
+    }
+
+    .invoice-sheet:is([data-paper='80'], [data-paper='58']) .invoice-words { padding: 1mm 0; border: 0; }
 }

@@ -71,6 +71,10 @@ class BillJobRequest extends FormRequest
                 'nullable', 'numeric', 'min:0', 'max:100', 'prohibits:bill_discount',
             ],
 
+            // Paid less than the repair came to and called square — the
+            // difference comes off before tax. See StoreBillRequest.
+            'settle_total' => ['nullable', 'numeric', 'decimal:0,2', 'gt:0', 'max:'.self::MAX_AMOUNT],
+
             // What was collected as the motor went out. Optional, like any bill's:
             // a regular customer's repair goes out on account.
             'payments' => ['nullable', 'array', 'max:20'],
@@ -155,7 +159,7 @@ class BillJobRequest extends FormRequest
             ], array_values((array) $this->input('items', [])));
         }
 
-        foreach (['bill_discount', 'bill_discount_percent'] as $field) {
+        foreach (['bill_discount', 'bill_discount_percent', 'settle_total'] as $field) {
             if ($this->filled($field)) {
                 $overrides[$field] = $this->input($field);
             }

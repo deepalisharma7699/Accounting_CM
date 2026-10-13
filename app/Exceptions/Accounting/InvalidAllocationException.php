@@ -38,6 +38,28 @@ class InvalidAllocationException extends ApiException
     }
 
     /**
+     * A settlement that lets the party off more than they owe.
+     *
+     * A discount only means anything against an open invoice: forgiving a
+     * balance nobody has would leave the party in credit by money they never
+     * paid, which the next invoice would then quietly absorb.
+     */
+    public static function discountBeyondWhatIsOwed(string $cleared, string $owed): self
+    {
+        return new self(
+            message: sprintf(
+                'The money and the discount come to %s, but only %s is owing on the bills it settles. '
+                    .'A discount can close what is owed, never more.',
+                $cleared,
+                $owed,
+            ),
+            status: 422,
+            errorCode: 'DISCOUNT_EXCEEDS_DUE',
+            details: ['field' => 'discount', 'cleared' => $cleared, 'owed' => $owed],
+        );
+    }
+
+    /**
      * The splits add up to more than the receipt itself.
      */
     public static function exceedsSettlement(string $allocated, string $available): self

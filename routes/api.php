@@ -734,6 +734,16 @@ Route::prefix('v1')->group(function () {
                 ->middleware('permission:WRITE:TRANSACTIONS,UPDATE:TRANSACTIONS');
 
             /*
+            | Putting a customer on a walk-in sale, so its GST invoice can name
+            | them. A correction in all but the form — the sale is reversed and
+            | reissued under the customer — so it asks for the same two grants.
+            | See `TransactionService::assignCustomer()`.
+            */
+            Route::post('{transaction}/assign-customer', [TransactionController::class, 'assignCustomer'])
+                ->whereNumber('transaction')
+                ->middleware('permission:WRITE:TRANSACTIONS,UPDATE:TRANSACTIONS');
+
+            /*
             | Taking part of a bill back — M18, and the brief's scenarios 5 and 6.
             |
             | Beside `reverse`, not instead of it, because the two are different

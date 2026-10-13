@@ -746,7 +746,7 @@ class JobService
         */
         $payload = array_merge($payload, array_intersect_key($overrides, array_flip([
             'date', 'notes', 'items', 'payments', 'client_ref',
-            'bill_discount', 'bill_discount_percent', 'staff',
+            'bill_discount', 'bill_discount_percent', 'settle_total', 'staff',
         ])));
 
         // Where the lines were replaced wholesale the pairing no longer holds —

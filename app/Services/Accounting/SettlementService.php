@@ -2,6 +2,7 @@
 
 namespace App\Services\Accounting;
 
+use App\Enums\TransactionType;
 use App\Exceptions\Accounting\InvalidAllocationException;
 use App\Exceptions\ResourceNotFoundException;
 use App\Models\Transaction;
@@ -141,13 +142,58 @@ class SettlementService
      */
     public function openBillsFor(Transaction $settlement): array
     {
-        $billType = $settlement->type->settlesBillType();
+        return $settlement->party_id === null
+            ? []
+            : $this->openBillsOf($settlement->type, (int) $settlement->party_id);
+    }
 
-        if ($billType === null || $settlement->party_id === null) {
+    /**
+     * Refuse a settlement that would let the party off more than is owing.
+     *
+     * Asked *before* the settlement is posted, because afterwards there is
+     * nothing to undo it with short of a reversal: a discount is only ever the
+     * gap between what was paid and what was owed, and where nothing is owed
+     * there is no gap to close. Measured against the bills the operator named,
+     * or against everything the party has open where they named none — which is
+     * what oldest-first will then spend it on.
+     *
+     * @param  array<int, array{bill_transaction_id: int, amount: string|null}>  $allocations
+     *
+     * @throws InvalidAllocationException
+     */
+    public function assertDiscountWithinOpenBills(
+        TransactionType $type,
+        int $partyId,
+        Money $cleared,
+        array $allocations,
+    ): void {
+        $named = array_map(fn (array $line) => (int) $line['bill_transaction_id'], $allocations);
+
+        $owed = Money::sum(array_map(
+            fn (array $open) => $open['due'],
+            array_filter(
+                $this->openBillsOf($type, $partyId),
+                fn (array $open) => $named === [] || in_array((int) $open['transaction']->id, $named, true),
+            ),
+        ));
+
+        if ($cleared->compareTo($owed) > 0) {
+            throw InvalidAllocationException::discountBeyondWhatIsOwed($cleared->amount(), $owed->amount());
+        }
+    }
+
+    /**
+     * @return array<int, array{transaction: Transaction, due: Money}>
+     */
+    private function openBillsOf(TransactionType $settlementType, int $partyId): array
+    {
+        $billType = $settlementType->settlesBillType();
+
+        if ($billType === null) {
             return [];
         }
 
-        $bills = $this->transactions->postedForParty((int) $settlement->party_id, $billType);
+        $bills = $this->transactions->postedForParty($partyId, $billType);
         $allocated = $this->allocations->allocatedAgainstBills(
             $bills->pluck('id')->map(fn ($id) => (int) $id)->all()
         );

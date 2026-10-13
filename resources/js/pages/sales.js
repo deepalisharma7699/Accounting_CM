@@ -5,7 +5,8 @@ import { mountBillRevision } from '../components/bill-revision';
 import {
     bindDelivery, deliver, openInvoicePreview, openShare, printInvoice,
 } from '../components/invoice-delivery';
-import { mountPaymentRows } from '../components/payment-rows';
+import { mountPartyPicker } from '../components/party-picker';
+import { mountPaymentRows, settleAgainst } from '../components/payment-rows';
 import { describeAttribution, mountStaffAttribution } from '../components/staff-attribution';
 import { describeShortfalls } from '../components/stock-position';
 import { can } from '../permissions';
@@ -251,7 +252,7 @@ function renderRow(row) {
             </td>
 
             <td class="table-cell text-[0.8125rem]">
-                ${esc(row.party?.name ?? '—')}
+                ${esc(customerName(row))}
                 ${row.notes ? `<span class="block text-xs text-muted-foreground">${esc(row.notes)}</span>` : ''}
             </td>
 
@@ -295,6 +296,8 @@ const drawer = {
     bill: null,
     meta: null,
     payments: null,
+    // "Paid in full, for less" on the pay form — see `settleAgainst`.
+    settle: null,
     /*
     | Minted per credit note being written and reused on every retry of it.
     |
@@ -313,8 +316,25 @@ const drawer = {
     */
     /** The correction dialog's pickers while it is open — M22. */
     staffEditor: null,
+    /** The customer picker while a walk-in sale is being given a customer. */
+    customerPicker: null,
+    /** The reissue's client reference — per document, kept across a retry. */
+    customerRef: null,
     busy: false,
 };
+
+/**
+ * A sale raised for somebody who gave no name — paid in full at the counter,
+ * and the one kind of invoice with no customer on it.
+ */
+const isWalkIn = (bill) => bill.type === 'sale' && (bill.party_id ?? null) === null;
+
+/** Who a document is for, as a list or a drawer says it. */
+function customerName(bill) {
+    if (bill.party?.name) return bill.party.name;
+
+    return isWalkIn(bill) ? 'Walk-in' : '—';
+}
 
 async function openDrawer(id) {
     drawer.id = id;
@@ -325,6 +345,7 @@ async function openDrawer(id) {
     // next would make a return on B come back as the credit note already raised
     // on A.
     drawer.returnRef = null;
+    drawer.customerRef = null;
 
     el('[data-drawer-subtitle]').textContent = '';
     el('[data-drawer-status]').innerHTML = '';
@@ -366,7 +387,7 @@ function paint() {
         `${bill.type_label} ${bill.doc_no ?? `#${bill.id}`}`;
 
     el('[data-drawer-subtitle]').textContent = [
-        bill.party?.name,
+        customerName(bill),
         formatDate(bill.date),
         bill.notes,
     ].filter(Boolean).join(' · ');
@@ -380,6 +401,7 @@ function paint() {
 
     if (drawer.mode === 'pay') return paintPay();
     if (drawer.mode === 'return') return paintReturn();
+    if (drawer.mode === 'customer') return paintCustomer();
 
     paintView();
 }
@@ -599,6 +621,11 @@ function paintPay() {
             <em>it</em> moves rather than only the customer's overall balance.
         </p>
 
+        <p class="mb-4 text-[0.8125rem] text-muted-foreground">
+            Paid less to close it? Type what they paid under <strong>Paid in full</strong> — the rest is written
+            off as a discount. The invoice and its GST stay as issued.
+        </p>
+
         <label class="field mb-4">
             <span class="field-label">Date</span>
             <input type="date" class="field-input" data-pay-date value="${esc(todayISO())}">
@@ -610,12 +637,16 @@ function paintPay() {
         <p class="field-error hidden" data-error-for="payments"></p>
         <p class="field-error hidden" data-error-for="party_id"></p>`;
 
+    // Paid in full at less than is owing — the rest written off after tax.
+    drawer.settle = settleAgainst(bill.due ?? '0.00');
+
     drawer.payments = mountPaymentRows(el('[data-pay-host]'), {
         modes: doc.paymentModes(),
         // Pre-fills "Paid in full" with what is actually left on this invoice
         // rather than its total — a part-paid invoice being topped up is the
         // common case at a counter.
-        outstanding: () => bill.due ?? '0.00',
+        outstanding: drawer.settle.outstanding,
+        settleShort: drawer.settle.settleShort,
         heading: 'Collected now',
         noun: 'customer',
         verb: 'collected',
@@ -629,12 +660,111 @@ function paintPay() {
     paintActions();
 }
 
+/* --- putting a customer on a walk-in sale ------------------------------ */
+
+/**
+ * Who a walk-in sale turns out to have been for — so the GST invoice can carry
+ * their name, and their GSTIN where they are registered.
+ *
+ * A drawer state rather than a dialog over it, because it is one more thing done
+ * to this one record (§2). The sale is reversed and reissued under the customer
+ * by the server, from the sale itself: nothing on it can be changed here, which
+ * is the point — the only question asked is who.
+ *
+ * Existing customers only. Writing a new one is `quick-party.js`, whose form
+ * lives on this module's create surface and is detached while a drawer is open
+ * over the list; a second copy of those fields here is exactly what §5.2 rules
+ * out. So the picker's "+ Add" is taken off and the screen says where it is.
+ */
+function paintCustomer() {
+    const bill = drawer.bill;
+
+    el('[data-drawer-body]').innerHTML = `
+        <p class="mb-4 text-[0.8125rem] text-muted-foreground">
+            Choose who ${esc(bill.doc_no ?? `#${bill.id}`)} was for. It is reissued in their name as a new
+            invoice with a new number — same items, same prices, same payment — and this walk-in sale is
+            cancelled. Nothing comes off the shelf twice and no money moves.
+        </p>
+
+        <div data-customer-host></div>
+        <p class="field-error hidden" data-error-for="party_id"></p>
+
+        <p class="mt-3 text-xs text-muted-foreground">
+            Not a customer yet? Add them on the Customers card first, then come back to this sale.
+        </p>`;
+
+    drawer.customerPicker = mountPartyPicker(el('[data-customer-host]'), {
+        role: 'customer',
+        label: 'Customer',
+    });
+
+    el('[data-customer-host] [data-party-add]')?.remove();
+
+    paintActions();
+    drawer.customerPicker.focus();
+}
+
+/**
+ * From the GST invoice a walk-in sale was just handed over as, straight to
+ * putting a customer on it — the preview is closed rather than stacked under the
+ * drawer, so there is one level-2 surface at a time.
+ */
+async function addCustomerTo(id) {
+    hideModal('#invoice-preview');
+
+    await openDrawer(id);
+
+    if (drawer.bill && isWalkIn(drawer.bill)) {
+        drawer.mode = 'customer';
+        paint();
+    }
+}
+
+async function submitCustomer() {
+    const partyId = drawer.customerPicker?.id();
+
+    if (!partyId) {
+        showActionError(el('[data-drawer-submit]'), 'Choose the customer this invoice is for.');
+
+        return;
+    }
+
+    await run('[data-drawer-submit]', 'Reissuing…', async () => {
+        const response = await auth.call(`/transactions/${drawer.bill.id}/assign-customer`, {
+            method: 'POST',
+            body: {
+                party_id: partyId,
+                // Per document, kept across a retry: a second press after a
+                // timeout must find the invoice the first one wrote.
+                client_ref: drawer.customerRef ??= crypto.randomUUID(),
+            },
+        });
+
+        drawer.customerRef = null;
+        toast(response.message ?? 'Reissued in the customer’s name.');
+
+        hideModal('#sales-drawer');
+        await refreshList();
+
+        // What they came back for: the GST invoice, with their name on it.
+        openInvoicePreview(response.data, { title: 'GST invoice', as: 'invoice' });
+    });
+}
+
 async function submitReceipt() {
     const bill = drawer.bill;
     const split = drawer.payments.value();
 
     if (split.length === 0) {
         showActionError(el('[data-drawer-submit]'), 'Say how the money arrived — cash, bank, UPI or cheque.');
+
+        return;
+    }
+
+    const splitProblem = drawer.payments.problem();
+
+    if (splitProblem) {
+        showActionError(el('[data-drawer-submit]'), splitProblem);
 
         return;
     }
@@ -647,6 +777,8 @@ async function submitReceipt() {
                 post: true,
                 party_id: bill.party?.id,
                 payments: split,
+                // What the customer was let off, where they paid less to close it.
+                discount: drawer.settle?.discount() ?? null,
                 // Named explicitly rather than left to the oldest-first default:
                 // somebody collecting from this invoice's own screen means this
                 // invoice, even where an older one is still open.
@@ -950,7 +1082,7 @@ function paintActions() {
         host.innerHTML = `
             <button type="button" class="btn btn-secondary btn-sm" data-drawer-back>← Back to the invoice</button>
             <button type="button" class="btn btn-primary btn-sm ml-auto" data-drawer-submit>
-                ${drawer.mode === 'pay' ? 'Record the receipt' : 'Raise the credit note'}
+                ${{ pay: 'Record the receipt', customer: 'Issue GST invoice' }[drawer.mode] ?? 'Raise the credit note'}
             </button>`;
 
         return;
@@ -989,7 +1121,17 @@ function paintActions() {
                 buttons.push('<button type="button" class="btn btn-primary btn-sm" data-drawer-pay>Collect payment</button>');
             }
 
-            buttons.push('<button type="button" class="btn btn-secondary btn-sm" data-drawer-return>Accept return</button>');
+            // Not on a walk-in sale: a credit note credits a customer's account
+            // and this one names nobody, so the server refuses it. Cancelling the
+            // invoice is the exact way back, and that button is below.
+            if (!isWalkIn(bill)) {
+                buttons.push('<button type="button" class="btn btn-secondary btn-sm" data-drawer-return>Accept return</button>');
+            } else if (can('UPDATE', 'TRANSACTIONS') && Number(bill.credited ?? 0) === 0) {
+                // Somebody who came back wanting a GST invoice in their name.
+                // The same two grants a correction takes, which the route asserts.
+                buttons.push('<button type="button" class="btn btn-secondary btn-sm" data-drawer-customer>'
+                    + 'Add customer</button>');
+            }
 
             /*
             | Correcting an invoice is UPDATE as well as WRITE — it changes the
@@ -1031,7 +1173,21 @@ function paintActions() {
         | Both only on a posted document, because that is the only kind there is
         | a document *of*: a draft has no number, no priced lines and no tax.
         */
-        buttons.push('<button type="button" class="btn btn-secondary btn-sm" data-drawer-print>Print</button>');
+        /*
+        | An invoice prints either way: the estimate the customer is handed by
+        | default, or the GST invoice when they ask for one. A credit note has no
+        | estimate and prints as itself. Which paper each goes on is this
+        | device's setting, decided inside `printInvoice()`.
+        */
+        if (bill.type === 'sale') {
+            buttons.push('<button type="button" class="btn btn-secondary btn-sm" data-drawer-print="estimate">'
+                + 'Print estimate</button>');
+            buttons.push('<button type="button" class="btn btn-secondary btn-sm" data-drawer-print="invoice">'
+                + 'Print GST invoice</button>');
+        } else {
+            buttons.push('<button type="button" class="btn btn-secondary btn-sm" data-drawer-print="invoice">'
+                + 'Print</button>');
+        }
 
         if (canWrite) {
             buttons.push('<button type="button" class="btn btn-secondary btn-sm" data-drawer-share>Share</button>');
@@ -1238,6 +1394,9 @@ function bindDrawer() {
         if (hit('data-drawer-pay')) {
             drawer.mode = 'pay';
             paint();
+        } else if (hit('data-drawer-customer')) {
+            drawer.mode = 'customer';
+            paint();
         } else if (hit('data-drawer-return')) {
             drawer.mode = 'return';
             paint();
@@ -1246,6 +1405,7 @@ function bindDrawer() {
             paint();
         } else if (hit('data-drawer-submit')) {
             if (drawer.mode === 'pay') submitReceipt();
+            else if (drawer.mode === 'customer') submitCustomer();
             else submitReturn();
         } else if (hit('data-drawer-post')) {
             postDraft();
@@ -1254,7 +1414,7 @@ function bindDrawer() {
         } else if (hit('data-drawer-reverse')) {
             reverseDocument();
         } else if (hit('data-drawer-print')) {
-            printInvoice(hit('data-drawer-print'));
+            printInvoice(hit('data-drawer-print'), { as: hit('data-drawer-print').dataset.drawerPrint });
         } else if (hit('data-drawer-share')) {
             openShare();
         } else if (hit('data-drawer-correct')) {
@@ -1432,7 +1592,7 @@ export default async function initSales() {
             | here at all.
             */
             if (created?.status === 'posted' && created?.type === 'sale') {
-                openInvoicePreview(created, { onClosed: backToTheForm });
+                openInvoicePreview(created, { onClosed: backToTheForm, onAddCustomer: addCustomerTo });
             }
         },
     });

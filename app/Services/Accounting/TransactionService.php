@@ -440,6 +440,88 @@ class TransactionService
     }
 
     /**
+     * Put a customer on a walk-in sale — so its GST invoice can be made out to
+     * them.
+     *
+     * A posted sale cannot be edited, and the customer is not a label on it: it
+     * decides the place of supply and so whether CGST + SGST or IGST was charged,
+     * and the recipient's GSTIN is what makes the invoice evidence for their
+     * input tax credit. So this is a **correction**: the original is reversed and
+     * the same sale is reissued under the customer, with a new number, through
+     * the one path every correction takes — {@see PostingEngine::revise()} — and
+     * its refusals. A sale whose cost basis has moved since is refused
+     * (`REVISION_WOULD_RESTATE_COST`), and the GST invoice can still be printed
+     * without a name.
+     *
+     * Built here rather than sent by the client, because nothing about the sale
+     * is meant to change except who it is for: the same lines, rates, discounts
+     * and tax treatment, the same date, and the **same counter payment**. That
+     * last part is why this does not share {@see revise()}'s refusal of a paid
+     * bill. That refusal protects a *receipt* allocated against the invoice,
+     * which would be left pointing at a cancelled document; a walk-in sale can
+     * carry none — a receipt needs a party — and its counter split is reversed
+     * with it and posted again on the replacement, so the cash never moves.
+     */
+    public function assignCustomer(int $id, int $partyId, ?string $clientRef = null, ?User $actor = null): Transaction
+    {
+        if ($clientRef !== null && ($existing = $this->transactions->findByClientRef($clientRef)) !== null) {
+            return $this->withSettlement($existing);
+        }
+
+        $original = $this->find($id);
+
+        if ($original->type !== TransactionType::Sale) {
+            throw TransactionPayloadMismatchException::notRevisable($original->type);
+        }
+
+        if ($original->isDraft()) {
+            throw TransactionImmutableException::draftNotReversible($original->id);
+        }
+
+        if ($original->isReversed()) {
+            throw TransactionImmutableException::reversed($original->id);
+        }
+
+        if ($original->party_id !== null) {
+            throw TransactionImmutableException::alreadyHasCustomer($original->id);
+        }
+
+        $credited = $original->settlement['credited'] ?? null;
+
+        if ($credited !== null && (float) $credited > 0) {
+            throw TransactionImmutableException::returnedAgainst($original->id, (string) $credited);
+        }
+
+        $original->loadMissing(['lines', 'payments']);
+
+        return $this->engine->revise($original, $this->inputFrom([
+            'date' => $original->date->toDateString(),
+            'notes' => $original->notes,
+            'client_ref' => $clientRef,
+            'party_id' => $partyId,
+            // Each line as it was priced. The discount is the line's own share,
+            // a bill-level discount included, so no bill discount is sent; and
+            // the inclusive flag is pinned, so a rate quoted with the GST in it
+            // is not charged GST on top the second time.
+            'items' => $original->lines->map(fn ($line) => [
+                'item_id' => $line->item_id,
+                'variant_id' => $line->variant_id,
+                'quantity' => $line->quantityValue()->amount(),
+                'unit_price' => $line->unitPriceMoney()->amount(),
+                'discount' => $line->discountMoney()->amount(),
+                'discount_percent' => null,
+                'price_includes_tax' => (bool) $line->price_includes_tax,
+                'memo' => $line->memo,
+            ])->all(),
+            'payments' => $original->payments->map(fn ($payment) => [
+                'mode' => $payment->mode->value,
+                'amount' => $payment->amountMoney()->amount(),
+                'reference' => $payment->reference,
+            ])->all(),
+        ]), $actor);
+    }
+
+    /**
      * Throw a draft away. Nothing was ever in the ledger, so there is nothing
      * to reverse and nothing to keep — and an accumulating pile of abandoned
      * drafts is its own kind of unreliable record.

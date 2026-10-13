@@ -218,6 +218,16 @@ class TransactionResource extends JsonResource
                 fn () => $this->settlementSplit(),
             ),
 
+            // What a receipt or payment let the party off on top of the money —
+            // its total less its split, because the total is what it cleared.
+            // Posted only: a draft settlement carries no discount.
+            'discount' => $this->when(
+                $this->type->isSettlement() && $this->relationLoaded('payments') && ! $this->isDraft(),
+                fn () => Money::of($this->total)->minus(Money::sum(
+                    $this->payments->map(fn ($payment) => $payment->amountMoney())->all(),
+                ))->amount(),
+            ),
+
             // The document itself — M9. What was billed, as distinct from what it
             // did to the books, and the only place the CGST/SGST/IGST split
             // exists: Phase 1 has one GST account, so the ledger carries the

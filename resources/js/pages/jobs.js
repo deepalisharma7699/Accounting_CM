@@ -1601,6 +1601,7 @@ export default async function initJobs() {
                     ...(payload.bill_discount_percent === undefined
                         ? {}
                         : { bill_discount_percent: payload.bill_discount_percent }),
+                    ...(payload.settle_total === undefined ? {} : { settle_total: payload.settle_total }),
                     payments: payload.payments,
                     staff: payload.staff ?? [],
                 },

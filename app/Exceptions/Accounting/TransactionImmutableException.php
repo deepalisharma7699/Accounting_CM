@@ -132,4 +132,20 @@ class TransactionImmutableException extends ApiException
             details: array_filter(['transaction_id' => $id, 'credited' => $credited]),
         );
     }
+
+    /**
+     * Adding a customer to a sale that already names one.
+     *
+     * Changing who an invoice is for is a correction like any other, and goes
+     * through Correct, where the whole document is in front of whoever does it.
+     */
+    public static function alreadyHasCustomer(?int $id): self
+    {
+        return new self(
+            message: 'This sale already names its customer. To change who it is for, correct the invoice instead.',
+            status: 409,
+            errorCode: 'TRANSACTION_HAS_CUSTOMER',
+            details: array_filter(['transaction_id' => $id]),
+        );
+    }
 }

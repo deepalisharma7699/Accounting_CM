@@ -19,7 +19,7 @@ use Tests\Concerns\InteractsWithTenancy;
 use Tests\TestCase;
 
 /**
- * Taking a bill to the nearest rupee — `tenants.round_off_invoices`.
+ * Dropping a bill's paise — `tenants.round_off_invoices`.
  *
  * An 18% invoice lands on ₹6,701.10 and a counter does not find ten paise, so a
  * workshop that has switched this on charges ₹6,701 and books the difference to
@@ -177,11 +177,11 @@ class RoundOffTest extends TestCase
     }
 
     /* ---------------------------------------------------------------------
-     | Rounding down, rounding up, and the fifty-paise edge
+     | Always down, never up
      |-------------------------------------------------------------------- */
 
     #[Test]
-    public function a_workshop_that_rounds_charges_the_nearest_rupee(): void
+    public function a_workshop_that_rounds_drops_the_paise(): void
     {
         $this->rounding();
 
@@ -215,7 +215,7 @@ class RoundOffTest extends TestCase
     }
 
     #[Test]
-    public function rounding_up_credits_round_off(): void
+    public function sixty_four_paise_is_dropped_rather_than_rounded_up(): void
     {
         $this->rounding();
 
@@ -229,30 +229,44 @@ class RoundOffTest extends TestCase
             'unit_price' => '1062.64',
         ]])->assertCreated()->json('data');
 
-        $this->assertSame('1063.00', $data['total']);
-
-        // Thirty-six paise the workshop was paid and did not earn. A credit,
-        // which on an expense account reads as a negative balance.
-        $this->assertSame('-0.36', $this->balanceOf($this->tenant, SystemAccount::RoundOff));
+        /*
+        | Twelve sixty-two, as the counter would say it. The nearest rupee would
+        | be ₹1,063, and that is a figure the customer argues back down at the
+        | till — so the paise are given away every time, and the workshop pays
+        | for them in Round Off.
+        */
+        $this->assertSame('1062.00', $data['total']);
+        $this->assertSame('0.64', $this->balanceOf($this->tenant, SystemAccount::RoundOff));
     }
 
     #[Test]
-    public function fifty_paise_goes_up(): void
+    public function ninety_nine_paise_is_dropped_too(): void
     {
         $this->rounding();
 
         $variant = $this->variantAt('0.00');
 
-        /*
-        | Half to even would be defensible arithmetic and indefensible on a
-        | counter: nobody can explain why ₹10.50 became ₹10 while ₹11.50 became
-        | ₹12. Away from zero at exactly fifty paise, always.
-        */
-        $this->assertSame('11.00', $this->sale([[
+        $this->assertSame('10.00', $this->sale([[
             'variant_id' => $variant->id,
             'quantity' => '1',
-            'unit_price' => '10.50',
+            'unit_price' => '10.99',
         ]])->assertCreated()->json('data.total'));
+    }
+
+    #[Test]
+    public function a_whole_rupee_is_left_alone(): void
+    {
+        $this->rounding();
+
+        $variant = $this->variantAt('0.00');
+
+        $this->assertSame('1063.00', $this->sale([[
+            'variant_id' => $variant->id,
+            'quantity' => '1',
+            'unit_price' => '1063.00',
+        ]])->assertCreated()->json('data.total'));
+
+        $this->assertSame('0.00', $this->balanceOf($this->tenant, SystemAccount::RoundOff));
     }
 
     #[Test]
@@ -268,7 +282,7 @@ class RoundOffTest extends TestCase
             'unit_price' => '1234.56',
         ]])->assertCreated();
 
-        $this->assertBooksBalance($this->tenant, 'after a bill rounded to the nearest rupee');
+        $this->assertBooksBalance($this->tenant, 'after a bill rounded down to the rupee');
     }
 
     /* ---------------------------------------------------------------------
@@ -428,11 +442,11 @@ class RoundOffTest extends TestCase
         $variant = $this->variantAt('0.00');
         $customer = $this->party(PartyRole::Customer);
 
-        // ₹1,000.50 charged as ₹1,001.
+        // ₹1,001.20 charged as ₹1,001.
         $bill = $this->sale([[
             'variant_id' => $variant->id,
             'quantity' => '2',
-            'unit_price' => '500.25',
+            'unit_price' => '500.60',
         ]], $customer)->assertCreated()->json('data');
 
         $this->assertSame('1001.00', $bill['total']);
@@ -443,7 +457,7 @@ class RoundOffTest extends TestCase
                 ['line_no' => 1, 'quantity' => '1'],
             ])->assertCreated()->json('data');
 
-            // ₹500.25 each, rounded down to ₹500.
+            // ₹500.60 each, rounded down to ₹500.
             $this->assertSame('500.00', $note['total']);
         }
 
@@ -452,16 +466,16 @@ class RoundOffTest extends TestCase
         |
         | ₹1,001 charged, ₹1,000 credited: the customer is left owing a rupee on
         | an invoice they returned in full. Every document rounded correctly and
-        | on its own, which is exactly the problem — the two halves each lost
-        | twenty-five paise, and nothing anywhere is tracking what the original
-        | rounding did.
+        | on its own, which is exactly the problem — the bill dropped twenty
+        | paise and each note dropped sixty, and nothing anywhere is tracking
+        | what the original rounding did.
         |
-        | It is bounded — under fifty paise per credit note — and it lands on the
+        | It is bounded — under a rupee per credit note — and it lands on the
         | party's balance where the workshop can see it and write it off, rather
         | than silently in an account nobody reads. It is not a defect in the
         | apportionment: it is what rounding a number twice means, and the only
         | alternatives are not rounding credit notes at all (a note reading
-        | ₹500.25 among documents that are all whole rupees) or making each note
+        | ₹500.60 among documents that are all whole rupees) or making each note
         | depend on what earlier ones did (a total that changes with the order
         | the goods came back in).
         |

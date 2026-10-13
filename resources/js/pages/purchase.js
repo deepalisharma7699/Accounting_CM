@@ -2,7 +2,7 @@ import auth from '../auth-client';
 import { badge, formatQuantity, kindBadge, lifecycleTone } from '../components/badge';
 import { mountBillDocument } from '../components/bill-document';
 import { mountBillRevision } from '../components/bill-revision';
-import { mountPaymentRows } from '../components/payment-rows';
+import { mountPaymentRows, settleAgainst } from '../components/payment-rows';
 import { describeShortfalls } from '../components/stock-position';
 import { can } from '../permissions';
 import { clearModuleParams, moduleParams } from '../shell';
@@ -277,6 +277,8 @@ const drawer = {
     meta: null,
     returnable: null,
     payments: null,
+    // "Paid in full, for less" on the pay form — see `settleAgainst`.
+    settle: null,
     // Minted per debit note being written and reused on every retry of it — a
     // duplicate return puts stock back on the shelf twice, which is the one
     // idempotency failure here that corrupts the ledger rather than the record.
@@ -486,6 +488,11 @@ function paintPay() {
             moves rather than only the supplier's overall balance.
         </p>
 
+        <p class="mb-4 text-[0.8125rem] text-muted-foreground">
+            Supplier took less to close it? Type what was paid under <strong>Paid in full</strong> — the rest
+            is booked as a discount received. The bill and its GST stay as entered.
+        </p>
+
         <label class="field mb-4">
             <span class="field-label">Date</span>
             <input type="date" class="field-input" data-pay-date value="${esc(todayISO())}">
@@ -497,11 +504,15 @@ function paintPay() {
         <p class="field-error hidden" data-error-for="payments"></p>
         <p class="field-error hidden" data-error-for="party_id"></p>`;
 
+    // Paid in full at less than is owing — the rest booked as discount received.
+    drawer.settle = settleAgainst(bill.due ?? '0.00');
+
     drawer.payments = mountPaymentRows(el('[data-pay-host]'), {
         modes: doc.paymentModes(),
         // Pre-fills "paid in full" with what is actually left on this bill,
         // rather than its total — a part-paid invoice is the common case.
-        outstanding: () => bill.due ?? '0.00',
+        outstanding: drawer.settle.outstanding,
+        settleShort: drawer.settle.settleShort,
         heading: 'Paid now',
         // A vendor bill. What is left sits on their account, not a customer's.
         noun: 'vendor',
@@ -521,6 +532,14 @@ async function submitPayment() {
         return;
     }
 
+    const splitProblem = drawer.payments.problem();
+
+    if (splitProblem) {
+        showActionError(el('[data-drawer-submit]'), splitProblem);
+
+        return;
+    }
+
     await run('[data-drawer-submit]', 'Paying…', async () => {
         const response = await auth.call('/transactions/payment', {
             method: 'POST',
@@ -529,6 +548,8 @@ async function submitPayment() {
                 post: true,
                 party_id: bill.party?.id,
                 payments: split,
+                // What the supplier let the workshop off, where they took less.
+                discount: drawer.settle?.discount() ?? null,
                 // Named explicitly rather than left to the oldest-first default:
                 // somebody paying from this bill's own screen means this bill.
                 allocations: [{ bill_transaction_id: bill.id }],

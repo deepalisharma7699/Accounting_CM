@@ -102,6 +102,28 @@
                  document total to measure it against here — the split *is* the
                  amount — which is what `settlesADocument: false` says. --}}
             <div class="mt-4 border-t border-border pt-4" data-settlement-payments></div>
+
+            {{-- Settling for less. Written off after tax, because the invoices it
+                 closes are already posted with their GST declared — and refused
+                 by the server if it is more than they owe. --}}
+            <div class="mt-4 border-t border-border pt-4">
+                <label for="{{ $direction }}-discount" class="field-label">
+                    {{ $receipt ? 'Let them off' : 'Supplier let us off' }}
+                    <span class="font-normal text-muted-foreground">(optional)</span>
+                </label>
+                <input id="{{ $direction }}-discount" name="discount" type="text" inputmode="decimal"
+                       class="field-input w-full text-right font-mono sm:w-44" placeholder="0.00" autocomplete="off">
+                <p class="mt-1.5 text-xs text-muted-foreground">
+                    @if ($receipt)
+                        Paid a round figure to clear what they owe? The rest is written off to Discount Allowed
+                        against their open invoices, oldest first. The invoices' GST stays as issued.
+                    @else
+                        Paid a round figure and the supplier called it square? The rest is booked to Discount
+                        Received against their open bills, oldest first. The bills' GST stays as entered.
+                    @endif
+                </p>
+                <p class="field-error hidden" data-error-for="discount"></p>
+            </div>
         </section>
 
         {{-- Absent rather than disabled for a caller without the grant: a greyed

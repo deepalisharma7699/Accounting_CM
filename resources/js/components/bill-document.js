@@ -133,6 +133,9 @@ export async function mountBillDocument(root, {
         // Lines the operator has agreed are as large as they look — see
         // LARGE_LINE_AMOUNT.
         acknowledgedLarge: false,
+        // A sale to nobody that is not yet paid in full — set by the
+        // confirmation, which is where the figure is current.
+        blockedWalkIn: false,
         /*
         | Whether the bill-level discount box is rupees or a percentage.
         |
@@ -142,6 +145,17 @@ export async function mountBillDocument(root, {
         | does that, against the same lines it is about to tax. See BillDiscount.
         */
         billDiscountMode: 'amount',
+        /*
+        | What the party actually paid, where "Paid in full" was typed at less
+        | than the bill came to — or null.
+        |
+        | Sent as `settle_total`, and the server takes the difference off as a
+        | discount before tax. Dropped the moment anything that changes the bill
+        | is touched (see `unsettle`): ₹1,200 agreed against ₹1,250 is not
+        | ₹1,200 agreed against the ₹1,900 the bill becomes when a line is added,
+        | and carrying it over would hand the customer a discount nobody gave.
+        */
+        settleAt: null,
         /*
         | The trades this workshop records on a sale, from `/transactions/meta`.
         |
@@ -193,6 +207,11 @@ export async function mountBillDocument(root, {
     /** Scoped, so two documents could coexist and neither reaches into the other. */
     const el = (selector) => $(selector, root);
 
+    /** Forget a short settlement — the bill it was agreed against has changed. */
+    const unsettle = () => {
+        state.settleAt = null;
+    };
+
     /* ---------------------------------------------------------------------
      | Lines
      | ------------------------------------------------------------------ */
@@ -211,6 +230,7 @@ export async function mountBillDocument(root, {
         // Whatever was missing when somebody last pressed post, this is part of
         // the answer — the notice goes as soon as they start filling it in.
         state.emptyAttempt = false;
+        unsettle();
 
         const existing = state.lines.find((line) => line.key === choice.key);
 
@@ -285,6 +305,7 @@ export async function mountBillDocument(root, {
 
     function removeLine(id) {
         state.lines = state.lines.filter((line) => line.id !== Number(id));
+        unsettle();
         renderLines();
     }
 
@@ -846,6 +867,17 @@ export async function mountBillDocument(root, {
         );
     }
 
+    /**
+     * The settled figure, where "Paid in full" was typed at less than the bill —
+     * and only then. A bill switched to part paid or on credit has no
+     * settlement, whatever was typed before.
+     */
+    function settlePayload() {
+        return state.settleAt !== null && payments?.state() === 'full'
+            ? { settle_total: state.settleAt }
+            : {};
+    }
+
     /** Say which unit the two bill-discount controls are currently in. */
     function paintBillDiscountMode() {
         const percent = state.billDiscountMode === 'percent';
@@ -914,6 +946,7 @@ export async function mountBillDocument(root, {
                     // Priced through the same BillTemplate the posting uses, so
                     // the discount on the panel is the discount on the invoice.
                     ...billDiscountPayload(),
+                    ...settlePayload(),
                 },
                 /*
                 | Debounced against typing — see `quiet` in auth-client.
@@ -1077,6 +1110,8 @@ export async function mountBillDocument(root, {
                 </div>
             </dl>
 
+            ${settledNote(totals, 'mt-3')}
+
             ${shortfalls.length ? `
                 <div class="mt-3 rounded-[10px] border border-amber-200 bg-amber-50/60 px-3 py-2.5 text-xs
                             text-amber-900">
@@ -1102,6 +1137,29 @@ export async function mountBillDocument(root, {
             </p>`;
 
         payments?.repaint();
+    }
+
+    /**
+     * What a short settlement gave away, said in the terms it was given in —
+     * "paid ₹1,200 for a ₹1,250 bill" — or nothing.
+     *
+     * The discount itself is already among the figures above, before tax and
+     * spread over the lines, which is correct and is also not how anybody at a
+     * counter thinks about it. This is the sentence they would say.
+     */
+    function settledNote(totals, spacing) {
+        if (!totals.before_settlement) return '';
+
+        const given = (Number(totals.before_settlement) - Number(totals.total)).toFixed(2);
+
+        return `
+            <p class="${spacing} rounded-[10px] border border-amber-200 bg-amber-50/60 px-3 py-2.5 text-xs
+                      text-amber-900">
+                <span class="block font-semibold">₹${esc(formatMoney(given))} given as discount</span>
+                ${isPurchase() ? 'Paid' : 'Collected'} ₹${esc(formatMoney(totals.total))} for a
+                ₹${esc(formatMoney(totals.before_settlement))} bill. It comes off before tax, so the GST falls
+                with it.
+            </p>`;
     }
 
     /**
@@ -1131,14 +1189,30 @@ export async function mountBillDocument(root, {
             .filter((line) => Number(line.line_total) > LARGE_LINE_AMOUNT);
     }
 
+    /**
+     * A sale with nobody named — the customer would not give a name or a number.
+     *
+     * Allowed on a sale only, and only paid in full at the counter: the server
+     * refuses anything less (`WALK_IN_NOT_PAID_IN_FULL`), because a balance owed
+     * by nobody can never be collected. The confirmation says so before anybody
+     * presses Post rather than after.
+     */
+    const isWalkIn = () => !isPurchase() && !partyPicker?.id();
+
+    /** Whether what is collected falls short of the total, compared in paise. */
+    function shortOf(settled, total) {
+        return Math.round(Number(settled) * 100) < Math.round(Number(total) * 100);
+    }
+
     /** What an empty document still needs, named rather than implied. */
     function whatIsMissing() {
-        const needsParty = !partyPicker?.id();
+        // A sale can go out to nobody; a purchase cannot.
+        const needsParty = isPurchase() && !partyPicker?.id();
         const needsLines = state.lines.length === 0;
         const noun = partyRole();
 
         if (needsParty && needsLines) return `Add a ${noun} and at least one item.`;
-        if (needsLines) return 'Add at least one item.';
+        if (needsLines || !needsParty) return 'Add at least one item.';
 
         return `Choose a ${noun}.`;
     }
@@ -1214,12 +1288,32 @@ export async function mountBillDocument(root, {
             return;
         }
 
+        /*
+        | The split is checked against the total the server just gave, before
+        | the dialog opens — a part payment of the whole bill, or a cheque with
+        | no number, is something to fix on the form rather than discover as a
+        | refusal after pressing Post.
+        */
+        const paymentProblem = payments.problem();
+
+        if (paymentProblem) {
+            toast(paymentProblem, 'error');
+            payments.focus();
+
+            return;
+        }
+
         const party = partyPicker.value();
         const split = payments.value();
         const settled = split.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
 
+        const walkIn = isWalkIn();
+        const unpaidWalkIn = walkIn && shortOf(settled, totals.total);
+
+        state.blockedWalkIn = unpaidWalkIn;
+
         $('[data-confirm-subtitle]').textContent =
-            `${party?.name ?? 'No party chosen'} · ${el('[data-bill-date]').value}`;
+            `${party?.name ?? (walkIn ? 'Walk-in customer' : 'No party chosen')} · ${el('[data-bill-date]').value}`;
 
         /*
         | Asked inside the confirmation, not in a dialog over it — §2.2 allows
@@ -1237,6 +1331,8 @@ export async function mountBillDocument(root, {
         state.acknowledgedLarge = false;
 
         $('[data-confirm-body]').innerHTML = `
+            ${settledNote(totals, 'mb-3')}
+
             ${oversized.length === 0 ? '' : `
                 <label class="mb-3 flex items-start gap-2.5 rounded-[10px] border border-amber-300 bg-amber-50
                               px-3.5 py-2.5 text-[0.8125rem] text-amber-900">
@@ -1255,10 +1351,25 @@ export async function mountBillDocument(root, {
                     </span>
                 </label>`}
 
-            ${party ? '' : `
+            ${party || walkIn ? '' : `
                 <p class="mb-3 rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-[0.8125rem]
                           text-rose-700">
-                    Nobody has been chosen for this bill. An invoice made out to nobody cannot be collected.
+                    Nobody has been chosen for this bill. A purchase has to name the vendor it is owed to.
+                </p>`}
+
+            ${!walkIn ? '' : unpaidWalkIn ? `
+                <p class="mb-3 rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-[0.8125rem]
+                          text-rose-700">
+                    <span class="block font-semibold">Walk-in sale — no customer details.</span>
+                    It has to be paid in full now: ₹${esc(formatMoney(settled.toFixed(2)))} of
+                    ₹${esc(formatMoney(totals.total))} is collected. Go back and collect the rest, or choose the
+                    customer so the balance is owed by somebody.
+                </p>` : `
+                <p class="mb-3 rounded-[10px] border border-border bg-secondary/40 px-3.5 py-2.5 text-[0.8125rem]
+                          text-secondary-foreground">
+                    <span class="block font-semibold text-foreground">Walk-in sale — no customer details.</span>
+                    Paid in full now. A customer can still be added later if they ask for a GST invoice in
+                    their name.
                 </p>`}
 
             <table class="w-full border-collapse text-[0.8125rem]">
@@ -1332,9 +1443,19 @@ export async function mountBillDocument(root, {
                 </div>
             </dl>`;
 
-        $('[data-confirm-post]').disabled = !party || oversized.length > 0;
+        $('[data-confirm-post]').disabled = !canConfirm() || oversized.length > 0;
 
         showModal('#confirm-bill-modal');
+    }
+
+    /**
+     * Whether the confirmation may post: a party named, or a sale to nobody that
+     * is paid in full. Decided once, for the two places the button is enabled.
+     */
+    function canConfirm() {
+        if (partyPicker?.id()) return true;
+
+        return isWalkIn() && !state.blockedWalkIn;
     }
 
     /* ---------------------------------------------------------------------
@@ -1353,6 +1474,7 @@ export async function mountBillDocument(root, {
             party_id: partyPicker.id(),
             items: itemsPayload(),
             ...billDiscountPayload(),
+            ...settlePayload(),
             payments: payments.value(),
             // Who did the work — M22. Absent on a purchase, where the server
             // refuses it: sending an empty array there would be the form asking
@@ -1441,6 +1563,11 @@ export async function mountBillDocument(root, {
                 billDiscount: el('[data-bill-discount]')?.value ?? '',
                 billDiscountMode: state.billDiscountMode,
                 payments: payments?.value() ?? [],
+                // Which of on credit / part paid / paid in full was chosen. The
+                // rows alone cannot say: an empty split is credit or a bill with
+                // no lines yet, and a full one is re-measured against the total.
+                settlement: payments?.state() ?? null,
+                settleAt: state.settleAt,
                 // §26. A bill restored from a closed tab keeps the two names
                 // that were picked — retyping the lines and forgetting the
                 // fitter is the version of this bug nobody notices until the
@@ -1512,7 +1639,8 @@ export async function mountBillDocument(root, {
 
         if (saved.partyId) await partyPicker.load(saved.partyId);
 
-        payments.set(saved.payments);
+        payments.set(saved.payments, saved.settlement ?? null);
+        state.settleAt = saved.settleAt ?? null;
 
         /*
         | A draft written before this existed carries no `staff` key at all, and
@@ -1533,9 +1661,25 @@ export async function mountBillDocument(root, {
     function mountParty() {
         partyPicker = mountPartyPicker(el('[data-party-host]'), {
             role: partyRole(),
+            /*
+            | A sale may name nobody (`TransactionType::admitsWalkIn()`), on the
+            | condition the engine enforces: paid in full now. Said on the box,
+            | before the lines go on, rather than first at the confirmation.
+            */
+            blank: isPurchase() ? null : {
+                empty: 'Leave blank for a walk-in sale — it must be paid in full now. '
+                    + 'Choose a customer to sell on credit or to put their name on the GST invoice.',
+                typed: 'No customer picked yet — choose one from the list, '
+                    + 'or this sale goes out as a walk-in with no name on it.',
+            },
             onSelect: () => {
+                // Naming a customer is what lets a sale go on credit, and
+                // clearing one takes that away again — said at once, not when
+                // the preview comes back.
+                payments?.repaint();
                 // The party's state code decides CGST+SGST against IGST, so
                 // choosing one changes the total.
+                unsettle();
                 refreshPreview();
                 save();
             },
@@ -1555,6 +1699,7 @@ export async function mountBillDocument(root, {
             name: typed,
             onSaved: (party) => {
                 partyPicker.set(party);
+                unsettle();
                 refreshPreview();
                 save();
             },
@@ -1690,6 +1835,31 @@ export async function mountBillDocument(root, {
         | expense both record money that has already moved — see `canCredit`.
         */
         canCredit: true,
+        /*
+        | A purchase is normally on a vendor's terms; a sale at the counter is
+        | normally paid there and then — and a sale with nobody named *must* be
+        | (`assertWalkInSettled`), so the form starts in the state that posts.
+        */
+        initial: () => (isPurchase() ? 'credit' : 'full'),
+        mustSettle: isWalkIn,
+        mustSettleReason: 'No customer chosen, so this is a walk-in sale and has to be paid in full. '
+            + 'Choose a customer to sell on credit or take part payment.',
+        /*
+        | Paid in full at less than the bill — "₹1,250, they gave ₹1,200, call
+        | it square". The figure is handed to the server, which solves the
+        | discount before tax; the panel and the confirmation then say how much
+        | was given.
+        */
+        settleShort: {
+            before: () => state.preview?.totals?.before_settlement ?? null,
+            onSettle: (amount) => {
+                if (amount === state.settleAt) return;
+
+                state.settleAt = amount;
+                refreshPreview();
+                save();
+            },
+        },
     });
 
     /* --- events --------------------------------------------------------- */
@@ -1726,6 +1896,7 @@ export async function mountBillDocument(root, {
         // table, which is the one moment it is least useful.
         paintLineStock(row, line);
 
+        unsettle();
         refreshPreview();
         save();
     });
@@ -1747,6 +1918,7 @@ export async function mountBillDocument(root, {
             if (!line) return;
 
             line.price_includes_tax = !line.price_includes_tax;
+            unsettle();
 
             // This one changes what the bill comes to, unlike the discount toggle
             // below — the same ₹118 is a different taxable value on each side of
@@ -1769,6 +1941,7 @@ export async function mountBillDocument(root, {
         if (!line) return;
 
         line.discount_mode = line.discount_mode === 'percent' ? 'amount' : 'percent';
+        unsettle();
 
         // The typed figure is kept. "10" meaning ₹10 and "10" meaning 10% are
         // both things somebody meant to type, and clearing the box on a switch
@@ -1807,12 +1980,14 @@ export async function mountBillDocument(root, {
     el('[data-bill-notes]').addEventListener('input', save);
 
     el('[data-bill-discount]').addEventListener('input', () => {
+        unsettle();
         refreshPreview();
         save();
     });
 
     el('[data-bill-discount-mode]').addEventListener('click', () => {
         state.billDiscountMode = state.billDiscountMode === 'percent' ? 'amount' : 'percent';
+        unsettle();
 
         paintBillDiscountMode();
         el('[data-bill-discount]').focus();
@@ -1850,7 +2025,7 @@ export async function mountBillDocument(root, {
         if (!event.target.closest('[data-confirm-large]')) return;
 
         state.acknowledgedLarge = event.target.checked;
-        $('[data-confirm-post]').disabled = !state.acknowledgedLarge || !partyPicker?.id();
+        $('[data-confirm-post]').disabled = !state.acknowledgedLarge || !canConfirm();
     });
 
     $('[data-confirm-post]').addEventListener('click', () => submit(true));
@@ -1871,6 +2046,7 @@ export async function mountBillDocument(root, {
 
         state.lines = [];
         state.lineSeq = 0;
+        unsettle();
         // A fresh document deserves a fresh reference, or the abandoned bill's
         // idempotency key would follow the next one in and the server would
         // answer with the first bill instead of writing the second.
@@ -1936,6 +2112,7 @@ export async function mountBillDocument(root, {
          *  shape of bug that bills the wrong party. */
         setDirection(next) {
             state.direction = next;
+            unsettle();
             mountParty();
             // Who did the work is a sale's question only, so the section arrives
             // and leaves with the direction.
@@ -1957,6 +2134,7 @@ export async function mountBillDocument(root, {
 
         clearLines() {
             state.lines = [];
+            unsettle();
             state.lineSeq = 0;
             renderLines();
         },

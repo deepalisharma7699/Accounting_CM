@@ -68,6 +68,26 @@ class InvalidReturnException extends ApiException
     }
 
     /**
+     * A return against a sale that names no customer.
+     *
+     * The message names the act that does work, because "cannot be returned"
+     * alone leaves somebody at the counter holding the goods with no way on.
+     */
+    public static function walkIn(string $docNo): self
+    {
+        return new self(
+            message: sprintf(
+                '%s was a walk-in sale with no customer named, so there is no account to credit a return to. '.
+                'Cancel the invoice instead — the goods come back onto the shelf and the payment is reversed.',
+                $docNo,
+            ),
+            status: 422,
+            errorCode: 'RETURN_AGAINST_WALK_IN',
+            details: ['bill' => $docNo],
+        );
+    }
+
+    /**
      * More has been returned than was billed — counting what came back earlier.
      *
      * The brief's scenario 6, and the one refusal that has to be stated in units

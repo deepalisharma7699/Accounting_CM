@@ -52,15 +52,18 @@ class StoreBillRequest extends FormRequest
             // A retry after a timeout must not become a second document — M17.
             ...$this->clientRefRules(),
 
-            // Required. An invoice made out to nobody cannot be collected, and a
-            // purchase owed to nobody sits in a control account no statement can
-            // account for. Whether they hold the right role is the engine's check.
-            'party_id' => ['required', 'integer', 'min:1'],
+            // Optional here, and decided by the engine. A purchase owed to nobody
+            // sits in a control account no statement can account for, so it is
+            // refused there; a sale may name nobody when the customer would not
+            // give a name, provided it is paid in full at the counter. Whether a
+            // named party holds the right role is the engine's check too.
+            'party_id' => ['nullable', 'integer', 'min:1'],
 
-            // The cap is generous but finite. Fifty lines is a long bill; an
+            // The cap is generous but finite, and the same as the preview's: a
+            // supplier's monthly bill can run past fifty lines, while an
             // unbounded array is an unbounded number of ledger lines and stock
             // movements in one transaction.
-            'items' => ['required', 'array', 'min:1', 'max:50'],
+            'items' => ['required', 'array', 'min:1', 'max:200'],
             'items.*.item_id' => ['nullable', 'integer', 'min:1'],
             'items.*.variant_id' => ['nullable', 'integer', 'min:1'],
 
@@ -121,6 +124,20 @@ class StoreBillRequest extends FormRequest
                 'nullable', 'numeric', 'min:0', 'max:100', 'prohibits:bill_discount',
             ],
 
+            /*
+            | What the party actually paid, where it was less than the bill came
+            | to and the counter called it square — "₹1,250, they paid ₹1,200,
+            | mark it paid in full".
+            |
+            | The difference is taken off as a bill discount *before* tax, so the
+            | GST falls with it: the discount was agreed at the moment of sale and
+            | is on the invoice, which is exactly when the tax follows it. How
+            | large a discount that takes is solved on the server, against the
+            | lines it is about to tax — see BillTemplate::withBillDiscount(). The
+            | payments must come to this figure; the template refuses otherwise.
+            */
+            'settle_total' => ['nullable', 'numeric', 'decimal:0,2', 'gt:0', 'max:'.self::MAX_AMOUNT],
+
             // Optional, unlike a settlement's. A sale on thirty-day terms carries
             // none; a counter sale carries the whole invoice. What it may not do
             // is exceed the document — the engine refuses that.
@@ -163,7 +180,6 @@ class StoreBillRequest extends FormRequest
     public function messages(): array
     {
         return [
-            'party_id.required' => 'Say who this bill is with.',
             'items.required' => 'A bill needs at least one line saying what was supplied.',
             'items.min' => 'A bill needs at least one line saying what was supplied.',
             'items.*.quantity.gt' => 'Each line needs a quantity greater than zero.',
@@ -178,7 +194,7 @@ class StoreBillRequest extends FormRequest
     }
 
     /**
-     * @return array{date: string, notes: string|null, post: bool, party_id: int, bill_discount: mixed, bill_discount_percent: mixed, items: array<int, array<string, mixed>>, staff: array<int, array<string, mixed>>, payments: array<int, array<string, mixed>>}
+     * @return array{date: string, notes: string|null, post: bool, party_id: int|null, bill_discount: mixed, bill_discount_percent: mixed, settle_total: string|null, items: array<int, array<string, mixed>>, staff: array<int, array<string, mixed>>, payments: array<int, array<string, mixed>>}
      */
     public function payload(): array
     {
@@ -187,11 +203,12 @@ class StoreBillRequest extends FormRequest
             'notes' => $this->filled('notes') ? trim((string) $this->string('notes')) : null,
             'post' => $this->boolean('post'),
             'client_ref' => $this->clientRef(),
-            'party_id' => (int) $this->input('party_id'),
+            'party_id' => $this->filled('party_id') ? (int) $this->input('party_id') : null,
             'bill_discount' => $this->filled('bill_discount') ? $this->input('bill_discount') : null,
             'bill_discount_percent' => $this->filled('bill_discount_percent')
                 ? $this->input('bill_discount_percent')
                 : null,
+            'settle_total' => $this->filled('settle_total') ? (string) $this->input('settle_total') : null,
             'items' => array_map(fn (array $line) => [
                 'item_id' => ($line['item_id'] ?? null) === '' ? null : ($line['item_id'] ?? null),
                 'variant_id' => ($line['variant_id'] ?? null) === '' ? null : ($line['variant_id'] ?? null),

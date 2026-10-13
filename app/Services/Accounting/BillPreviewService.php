@@ -10,6 +10,7 @@ use App\Services\Accounting\Posting\CarriesDocumentLines;
 use App\Services\Accounting\Posting\PostingTemplate;
 use App\Services\Accounting\Posting\PostingTemplateRegistry;
 use App\Services\Accounting\Posting\StatesItsOwnTotal;
+use App\Services\Accounting\Posting\Templates\BillTemplate;
 use App\Services\Accounting\Tax\GstBreakdown;
 use App\Services\Inventory\ItemComponentService;
 use App\Services\Inventory\StockLedgerService;
@@ -65,7 +66,7 @@ class BillPreviewService
      * @return array{
      *     type: string,
      *     lines: array<int, array<string, mixed>>,
-     *     totals: array{gross: string, discount: string, taxable: string, cgst: string, sgst: string, igst: string, tax: string, round_off: string, total: string, inter_state: bool},
+     *     totals: array{gross: string, discount: string, taxable: string, cgst: string, sgst: string, igst: string, tax: string, round_off: string, total: string, before_settlement: string|null, inter_state: bool},
      *     stock: array<int, array<string, mixed>>,
      *     can_post: bool
      * }
@@ -123,7 +124,7 @@ class BillPreviewService
     /**
      * @param  array<int, BillLine>  $lines
      * @param  array<string, mixed>  $input
-     * @return array{gross: string, discount: string, taxable: string, cgst: string, sgst: string, igst: string, tax: string, round_off: string, total: string, inter_state: bool}
+     * @return array{gross: string, discount: string, taxable: string, cgst: string, sgst: string, igst: string, tax: string, round_off: string, total: string, before_settlement: string|null, inter_state: bool}
      */
     private function totalsOf(array $lines, PostingTemplate $template, array $input): array
     {
@@ -167,12 +168,22 @@ class BillPreviewService
             'sgst' => $totals['sgst']->amount(),
             'igst' => $totals['igst']->amount(),
             'tax' => $totals['tax']->amount(),
-            // Between −0.49 and +0.50, and zero for a workshop that does not
+            // Between −0.99 and nil, and zero for a workshop that does not
             // round. Reported separately so the panel can show the line the
             // invoice will carry rather than a total that quietly disagrees
             // with the figures above it.
             'round_off' => $charged->minus($totals['total'])->amount(),
             'total' => $charged->amount(),
+            /*
+            | What the bill came to before it was settled short, or null. The
+            | discount that closed the gap is already inside `discount` above —
+            | before tax, spread over the lines — and this is what lets the
+            | confirmation say it in the terms it was given: "paid ₹1,200 of
+            | ₹1,250".
+            */
+            'before_settlement' => $template instanceof BillTemplate
+                ? $template->totalBeforeSettlement($input)?->amount()
+                : null,
             // One shape or the other, never a mixture — the whole document has
             // one place of supply.
             'inter_state' => ! $totals['igst']->isZero(),

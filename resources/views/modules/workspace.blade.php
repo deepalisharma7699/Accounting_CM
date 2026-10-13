@@ -215,10 +215,10 @@
                     <input id="ws-round-off" name="round_off_invoices" type="checkbox"
                            class="mt-0.5 size-4 rounded border-border">
                     <label for="ws-round-off" class="text-sm text-secondary-foreground">
-                        Round a bill to the nearest rupee
+                        Round a bill down to the whole rupee
                         <span class="mt-0.5 block text-xs text-muted-foreground">
-                            This changes the total a customer pays. The paise are booked to Round Off, so the books
-                            still balance to the last paisa.
+                            This changes the total a customer pays: ₹1,250.80 is billed as ₹1,250. The paise are
+                            booked to Round Off, so the books still balance to the last paisa.
                         </span>
                     </label>
                 </div>
@@ -238,6 +238,16 @@
             You have read-only access to these settings.
         </p>
     </form>
+
+    {{-- This device's printing — outside the form on purpose.
+
+         Saved in this browser, never sent to the server: the counter PC has the
+         thermal printer and the office PC has an A4, and they print the same
+         sale. So it needs no grant and is open to anybody who can reach this
+         screen, a reader of the workshop settings included. The choices are
+         painted by components/device-printing.js from print-settings.js, the
+         one reader of them. --}}
+    @include('partials.device-printing')
 
     </div>{{-- /data-ws-list --}}
 </div>

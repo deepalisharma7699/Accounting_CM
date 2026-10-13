@@ -44,4 +44,9 @@ class CustomerReceiptTemplate extends SettlementTemplate
     {
         return BalanceSide::Credit;
     }
+
+    protected function discountAccount(): ?SystemAccount
+    {
+        return SystemAccount::DiscountAllowed;
+    }
 }

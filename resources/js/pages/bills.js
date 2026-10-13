@@ -74,6 +74,15 @@ let formRoot = null;
 let listRoot = null;
 let form = null;
 let payments = null;
+
+/*
+| The expense's own amount, by id and never by `form.elements.amount`: every
+| payment row carries an `amount` too, so that name answers with a
+| RadioNodeList whose `.value` is always '' — which refused every expense as
+| having no amount and made "Paid in full" fill in 0.00.
+*/
+const amountInput = () => $('#expense-amount', form);
+const gstInput = () => $('#expense-gst', form);
 let workspace = null;
 
 /*
@@ -455,8 +464,8 @@ function resetForm() {
     clearFormErrors(form);
 
     form.elements.account_id.value = '';
-    form.elements.amount.value = '';
-    form.elements.gst_amount.value = '';
+    amountInput().value = '';
+    gstInput().value = '';
     form.elements.notes.value = '';
     payments.reset();
 
@@ -482,8 +491,8 @@ function resetForm() {
  */
 function validate() {
     const errors = {};
-    const amount = form.elements.amount.value.trim();
-    const gst = form.elements.gst_amount.value.trim();
+    const amount = amountInput().value.trim();
+    const gst = gstInput().value.trim();
 
     if (!form.elements.date.value) {
         errors.date = ['Give the date on the receipt.'];
@@ -496,6 +505,10 @@ function validate() {
     if (gst && !(Number(gst) >= 0)) {
         errors.gst_amount = ['Claimable GST is an amount, or empty where none is claimable.'];
     }
+
+    const splitProblem = payments.problem();
+
+    if (splitProblem) errors.payments = [splitProblem];
 
     return Object.keys(errors).length ? errors : null;
 }
@@ -524,8 +537,8 @@ async function submit(event) {
                 post: true,
                 client_ref: state.clientRef,
                 account_id: Number(form.elements.account_id.value) || null,
-                amount: form.elements.amount.value.trim(),
-                gst_amount: form.elements.gst_amount.value.trim() || null,
+                amount: amountInput().value.trim(),
+                gst_amount: gstInput().value.trim() || null,
                 payments: payments.value(),
             },
         });
@@ -640,12 +653,20 @@ export default async function initBills() {
     payments = mountPaymentRows(inForm('[data-expense-payments]'), {
         modes: state.modes,
         outstanding: () => {
-            const amount = Number(form.elements.amount.value) || 0;
-            const gst = Number(form.elements.gst_amount.value) || 0;
+            const amount = Number(amountInput().value) || 0;
+            const gst = Number(gstInput().value) || 0;
 
             return (amount + gst).toFixed(2);
         },
         heading: 'Paid by',
+        // Money going out — the component's default verb is the sale's.
+        verb: 'paid',
+    });
+
+    // "Paid in full" is the expense's amount plus its GST, so it has to follow
+    // both boxes as they are typed rather than keep the figure it started with.
+    [amountInput(), gstInput()].forEach((input) => {
+        input.addEventListener('input', () => payments.repaint());
     });
 
     form.addEventListener('submit', submit);

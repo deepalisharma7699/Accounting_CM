@@ -62,8 +62,12 @@ let mountCount = 0;
  *        optional counterparty. See the note on `role` below.
  * @param {(party: object|null) => void} options.onSelect
  * @param {string} [options.label]
+ * @param {{empty: string, typed: string}|null} [options.blank]  What leaving the
+ *        box empty means, where the document allows it — a sale with nobody
+ *        named goes out as a walk-in. Marks the label optional and says so under
+ *        the box for as long as nobody is chosen. See the note on `blank` below.
  */
-export function mountPartyPicker(host, { role = 'customer', onSelect = () => {}, label = null } = {}) {
+export function mountPartyPicker(host, { role = 'customer', onSelect = () => {}, label = null, blank = null } = {}) {
     const heading = label ?? (role === 'vendor' ? 'Vendor' : role === 'customer' ? 'Customer' : 'Counterparty');
     const uid = `party-${++mountCount}`;
 
@@ -89,9 +93,18 @@ export function mountPartyPicker(host, { role = 'customer', onSelect = () => {},
     */
     let locked = false;
 
+    /*
+    | Where an empty box is a decision rather than an omission, it has to say so
+    | on the box. A walk-in sale used to be discoverable only by pressing Post
+    | without a customer and reading the confirmation — nobody tries that on
+    | purpose, so nobody knew it could be done. And a name typed but never picked
+    | from the list is the same empty id, so that case gets its own sentence:
+    | "Ramesh" in the box reads as Ramesh's invoice until somebody says otherwise.
+    */
     host.innerHTML = `
         <div class="relative" data-party-picker>
-            <label class="field-label" for="${uid}-search">${esc(heading)}</label>
+            <label class="field-label" for="${uid}-search">${esc(heading)}${blank
+                ? ' <span class="font-normal text-muted-foreground">(optional)</span>' : ''}</label>
 
             <div class="flex gap-2">
                 <div class="relative flex-1">
@@ -116,6 +129,8 @@ export function mountPartyPicker(host, { role = 'customer', onSelect = () => {},
 
             <p class="mt-1.5 hidden text-[0.8125rem] text-muted-foreground" data-party-chosen></p>
 
+            <p class="mt-1.5 hidden text-[0.8125rem] text-muted-foreground" data-party-blank></p>
+
             <p class="mt-1 hidden text-[0.8125rem] font-medium" data-party-position></p>
 
             <p class="field-error" data-error-for="party_id"></p>
@@ -127,6 +142,7 @@ export function mountPartyPicker(host, { role = 'customer', onSelect = () => {},
     const positionLine = $('[data-party-position]', host);
     const clear = $('[data-party-clear]', host);
     const addButton = $('[data-party-add]', host);
+    const blankLine = $('[data-party-blank]', host);
 
     // Shown only where the user may actually create one. The gate is applied here
     // as well as by applyPermissionGates, because this markup is written after
@@ -156,6 +172,21 @@ export function mountPartyPicker(host, { role = 'customer', onSelect = () => {},
         | after a receipt had been collected against it.
         */
         positions: new Map(),
+    };
+
+    /** Say what an empty box means — only where it means something, and only while it is empty. */
+    const paintBlank = () => {
+        const shown = blank !== null && state.selected === null && !locked;
+
+        blankLine.classList.toggle('hidden', !shown);
+
+        if (!shown) return;
+
+        const typed = input.value.trim() !== '';
+
+        blankLine.textContent = typed ? blank.typed : blank.empty;
+        // Typed-but-not-picked is the one that bites, so it is the one in amber.
+        blankLine.className = `mt-1.5 text-[0.8125rem] ${typed ? 'font-medium text-amber-600' : 'text-muted-foreground'}`;
     };
 
     const close = () => {
@@ -333,6 +364,7 @@ export function mountPartyPicker(host, { role = 'customer', onSelect = () => {},
         // Not awaited: the pick must finish now so focus can move to the lines,
         // and the position arrives underneath a moment later.
         loadPosition(party);
+        paintBlank();
 
         close();
         onSelect(party);
@@ -344,6 +376,7 @@ export function mountPartyPicker(host, { role = 'customer', onSelect = () => {},
         // that bills the wrong customer.
         if (state.selected) select(null);
 
+        paintBlank();
         search(event.target.value);
     });
 
@@ -393,8 +426,11 @@ export function mountPartyPicker(host, { role = 'customer', onSelect = () => {},
     clear.addEventListener('click', () => {
         select(null);
         input.value = '';
+        paintBlank();
         input.focus();
     });
+
+    paintBlank();
 
     return {
         /** The chosen party, or null. */
@@ -438,6 +474,7 @@ export function mountPartyPicker(host, { role = 'customer', onSelect = () => {},
             input.classList.toggle('bg-muted', on);
             clear.classList.toggle('hidden', on || state.selected === null);
             addButton.classList.toggle('hidden', on || !roled || !can('WRITE', 'PARTIES'));
+            paintBlank();
             close();
         },
     };

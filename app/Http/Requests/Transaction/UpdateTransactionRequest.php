@@ -63,7 +63,7 @@ class UpdateTransactionRequest extends FormRequest
             // mention. Sending these to a type that has no items is refused by
             // the service rather than ignored, because a caller told their edit
             // saved while nothing changed is worse off than one told it was not.
-            'items' => ['sometimes', 'array', 'min:1', 'max:50'],
+            'items' => ['sometimes', 'array', 'min:1', 'max:200'],
             'items.*.item_id' => ['nullable', 'integer', 'min:1'],
             'items.*.variant_id' => ['nullable', 'integer', 'min:1'],
             'items.*.quantity' => ['required', 'numeric', 'decimal:0,3', 'gt:0'],
