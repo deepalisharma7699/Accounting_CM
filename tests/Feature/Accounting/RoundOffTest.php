@@ -19,7 +19,7 @@ use Tests\Concerns\InteractsWithTenancy;
 use Tests\TestCase;
 
 /**
- * Dropping a bill's paise — `tenants.round_off_invoices`.
+ * Taking a bill to the nearest rupee — `tenants.round_off_invoices`.
  *
  * An 18% invoice lands on ₹6,701.10 and a counter does not find ten paise, so a
  * workshop that has switched this on charges ₹6,701 and books the difference to
@@ -177,11 +177,11 @@ class RoundOffTest extends TestCase
     }
 
     /* ---------------------------------------------------------------------
-     | Always down, never up
+     | The nearest rupee
      |-------------------------------------------------------------------- */
 
     #[Test]
-    public function a_workshop_that_rounds_drops_the_paise(): void
+    public function a_workshop_that_rounds_drops_ten_paise(): void
     {
         $this->rounding();
 
@@ -215,7 +215,7 @@ class RoundOffTest extends TestCase
     }
 
     #[Test]
-    public function sixty_four_paise_is_dropped_rather_than_rounded_up(): void
+    public function sixty_four_paise_is_rounded_up(): void
     {
         $this->rounding();
 
@@ -230,27 +230,29 @@ class RoundOffTest extends TestCase
         ]])->assertCreated()->json('data');
 
         /*
-        | Twelve sixty-two, as the counter would say it. The nearest rupee would
-        | be ₹1,063, and that is a figure the customer argues back down at the
-        | till — so the paise are given away every time, and the workshop pays
-        | for them in Round Off.
+        | The nearest rupee, as every invoice the workshop receives is written.
+        | The thirty-six paise asked for beyond the lines are a *credit* to Round
+        | Off — the half of its life the account spends gaining, which the
+        | dropped paise of other bills net against.
         */
-        $this->assertSame('1062.00', $data['total']);
-        $this->assertSame('0.64', $this->balanceOf($this->tenant, SystemAccount::RoundOff));
+        $this->assertSame('1063.00', $data['total']);
+        $this->assertSame('-0.36', $this->balanceOf($this->tenant, SystemAccount::RoundOff));
     }
 
     #[Test]
-    public function ninety_nine_paise_is_dropped_too(): void
+    public function fifty_paise_goes_up_and_forty_nine_goes_down(): void
     {
         $this->rounding();
 
         $variant = $this->variantAt('0.00');
 
-        $this->assertSame('10.00', $this->sale([[
-            'variant_id' => $variant->id,
-            'quantity' => '1',
-            'unit_price' => '10.99',
-        ]])->assertCreated()->json('data.total'));
+        foreach (['10.50' => '11.00', '10.49' => '10.00', '10.99' => '11.00'] as $price => $charged) {
+            $this->assertSame($charged, $this->sale([[
+                'variant_id' => $variant->id,
+                'quantity' => '1',
+                'unit_price' => $price,
+            ]])->assertCreated()->json('data.total'), "₹{$price} is charged as ₹{$charged}");
+        }
     }
 
     #[Test]
@@ -282,7 +284,7 @@ class RoundOffTest extends TestCase
             'unit_price' => '1234.56',
         ]])->assertCreated();
 
-        $this->assertBooksBalance($this->tenant, 'after a bill rounded down to the rupee');
+        $this->assertBooksBalance($this->tenant, 'after a bill rounded to the rupee');
     }
 
     /* ---------------------------------------------------------------------
@@ -435,7 +437,7 @@ class RoundOffTest extends TestCase
     }
 
     #[Test]
-    public function two_part_returns_of_one_invoice_can_leave_a_rupee_on_the_customer(): void
+    public function two_part_returns_of_one_invoice_can_leave_a_rupee_with_the_customer(): void
     {
         $this->rounding();
 
@@ -457,18 +459,18 @@ class RoundOffTest extends TestCase
                 ['line_no' => 1, 'quantity' => '1'],
             ])->assertCreated()->json('data');
 
-            // ₹500.60 each, rounded down to ₹500.
-            $this->assertSame('500.00', $note['total']);
+            // ₹500.60 each, rounded to ₹501.
+            $this->assertSame('501.00', $note['total']);
         }
 
         /*
         | **The consequence, asserted rather than discovered later.**
         |
-        | ₹1,001 charged, ₹1,000 credited: the customer is left owing a rupee on
-        | an invoice they returned in full. Every document rounded correctly and
-        | on its own, which is exactly the problem — the bill dropped twenty
-        | paise and each note dropped sixty, and nothing anywhere is tracking
-        | what the original rounding did.
+        | ₹1,001 charged, ₹1,002 credited: the customer is left a rupee in credit
+        | on an invoice they returned in full. Every document rounded correctly
+        | and on its own, which is exactly the problem — the bill dropped twenty
+        | paise and each note added forty, and nothing anywhere is tracking what
+        | the original rounding did.
         |
         | It is bounded — under a rupee per credit note — and it lands on the
         | party's balance where the workshop can see it and write it off, rather
@@ -481,7 +483,7 @@ class RoundOffTest extends TestCase
         |
         | See docs/billing-module.md.
         */
-        $this->assertSame('1.00', $this->positionOf($this->tenant, $customer)['receivable']);
+        $this->assertSame('-1.00', $this->positionOf($this->tenant, $customer)['net']);
 
         // And the books are still square, which is what the Round Off postings
         // are there to guarantee whatever the residue does to a balance.

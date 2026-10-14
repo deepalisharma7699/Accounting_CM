@@ -142,6 +142,29 @@
                      and the error painter matches on the name it is given. --}}
                 <p class="field-error hidden text-right" data-error-for="bill_discount"></p>
                 <p class="field-error hidden text-right" data-error-for="bill_discount_percent"></p>
+
+                {{-- The grand total printed on the vendor's bill — a purchase
+                     only, so the engine shows it on that direction and empties
+                     it on the other. The vendor rounded it, so their figure is
+                     what is owed; outside the totals panel for the caret's sake,
+                     like the discount above. --}}
+                <div class="mt-3 hidden" data-bill-vendor-total-field>
+                    <label class="flex flex-wrap items-center justify-end gap-2">
+                        <span class="text-[0.8125rem] font-medium text-foreground">
+                            Total on the vendor&rsquo;s bill
+                            <span class="font-normal text-muted-foreground">(optional)</span>
+                        </span>
+                        <input type="text" class="field-input w-32 text-right font-mono" inputmode="decimal"
+                               name="vendor_total" data-bill-vendor-total
+                               placeholder="As printed" autocomplete="off">
+                    </label>
+
+                    <p class="mt-1.5 text-right text-xs text-muted-foreground">
+                        The vendor&rsquo;s own round-off is used, up or down, so you owe exactly what they printed.
+                    </p>
+
+                    <p class="field-error hidden text-right" data-error-for="vendor_total"></p>
+                </div>
             </div>
         </div>
 

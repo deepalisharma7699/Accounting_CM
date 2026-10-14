@@ -191,6 +191,15 @@ export function mountBillRevision(root, { doc, workspace, direction, nouns }) {
         }));
 
         /*
+        | What the vendor printed, on a correction of a purchase: a posted bill's
+        | total is that figure, rounded their way, and reloading it without it
+        | would quietly re-round the replacement by the workshop's own policy. A
+        | draft's comes back with its terms below; a repeat is a bill the vendor
+        | has not printed yet. Ignored on a sale.
+        */
+        if (keepNotes && !keepTerms) doc().setVendorTotal(bill.total ?? '');
+
+        /*
         | Who did the work — M22, and only on a correction.
         |
         | A correction is the *same* repair being re-documented, so the names come
@@ -226,6 +235,7 @@ export function mountBillRevision(root, { doc, workspace, direction, nouns }) {
                 billDiscountMode: terms.bill_discount_percent !== null && terms.bill_discount_percent !== undefined
                     ? 'percent'
                     : 'amount',
+                vendorTotal: terms.vendor_total ?? '',
                 payments: splits,
                 /*
                 | Settled short is "paid in full", by definition. Otherwise no
@@ -274,6 +284,7 @@ export function mountBillRevision(root, { doc, workspace, direction, nouns }) {
                     bill_discount: null,
                     bill_discount_percent: null,
                     settle_total: null,
+                    ...(direction === 'purchase' ? { vendor_total: null } : {}),
                     ...restated,
                 },
             });

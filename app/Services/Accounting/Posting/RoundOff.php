@@ -5,7 +5,7 @@ namespace App\Services\Accounting\Posting;
 use App\Support\Money;
 
 /**
- * The last paise of a bill, dropped.
+ * The last paise of a bill, taken to the nearest rupee.
  *
  * An 18% GST bill almost never lands on a whole rupee — ₹1,062.36 is the shape
  * of nearly every invoice a workshop writes — and a counter that has to find
@@ -19,18 +19,22 @@ use App\Support\Money;
  * return. Only the document's total moves, and the residue is a posting of its
  * own against it.
  *
- * ## Why always down
+ * ## Why the nearest rupee
  *
- * Because that is what the counter does: ₹1,250.80 is "twelve fifty", never
- * "twelve fifty-one", and a bill that asked for the extra paise would be argued
- * down to the same figure at the till. So the paise are given away, every time,
- * and the bill says so on a line of its own. CGST §170 permits rounding the
- * amount payable; nothing requires the rounding to be to the nearest rupee.
+ * Because that is the standard every invoice the workshop receives follows:
+ * fifty paise and over goes up, under fifty goes down, so ₹1,250.80 is ₹1,251
+ * and ₹1,250.30 is ₹1,250. The Round Off account is then the running net of
+ * paise gained and given, which over a year comes to roughly nothing. CGST §170
+ * permits rounding the amount payable to the nearest rupee.
  *
- * It was the nearest rupee until October 2026, and a document posted before
- * then may carry a round-off of up to +50 paise. Nothing re-reads it: a
+ * It was always *down* for part of October 2026, so a document posted in that
+ * window carries a round-off of up to −99 paise. Nothing re-reads it: a
  * reversal mirrors the entries it finds, and the invoice restates the figure
  * from the stored total.
+ *
+ * A vendor's bill is not ours to round. Where the operator types the total the
+ * vendor printed, the purchase takes that figure instead — see
+ * {@see \App\Services\Accounting\Posting\Templates\BillTemplate::charge()}.
  *
  * ## Why this is not applied to a line
  *
@@ -51,29 +55,29 @@ use App\Support\Money;
 final class RoundOff
 {
     /**
-     * The whole rupee at or below this amount — its paise dropped.
+     * The nearest whole rupee to this amount — fifty paise and over rounds up.
      *
-     * Integer arithmetic on paise throughout — `floor()` on a float is how
-     * ₹1,063.00 becomes ₹1,062 on a machine that stored it as 1062.9999.
+     * Integer arithmetic on paise throughout — `round()` on a float is how
+     * ₹1,062.50 becomes ₹1,062 on a machine that stored it as 1062.4999.
      */
     public static function applyTo(Money $amount): Money
     {
         $minor = $amount->minor();
 
         // A credit note's total is positive like an invoice's, so this is
-        // belt-and-braces — but "drop the paise" has to mean the same thing on
-        // both sides of zero or a reversal would not undo what it reversed.
+        // belt-and-braces — but "the nearest rupee" has to mean the same thing
+        // on both sides of zero or a reversal would not undo what it reversed.
         $sign = $minor < 0 ? -1 : 1;
 
-        return Money::fromMinor($sign * intdiv(abs($minor), 100) * 100);
+        return Money::fromMinor($sign * intdiv(abs($minor) + 50, 100) * 100);
     }
 
     /**
      * What has to be booked so the voucher still balances: the rounded total
      * less the real one.
      *
-     * Never positive: the paise are only ever dropped, so the workshop gives
-     * them away and they are a debit to Round Off. Between −99 paise and nil.
+     * Between −49 and +50 paise: negative where the paise were given away,
+     * positive where they were rounded up.
      */
     public static function residueOn(Money $amount): Money
     {

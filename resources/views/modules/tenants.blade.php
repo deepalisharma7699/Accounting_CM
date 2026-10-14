@@ -251,7 +251,7 @@
                         <label class="flex items-start gap-2.5 text-[0.875rem] text-foreground">
                             <input type="checkbox" name="round_off_invoices" class="mt-1">
                             <span>
-                                Round invoices down to the whole rupee
+                                Round invoices to the nearest rupee
                                 <span class="block text-xs text-muted-foreground">The paise are booked to Round Off.</span>
                             </span>
                         </label>

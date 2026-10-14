@@ -70,6 +70,15 @@ class PurchaseTemplate extends BillTemplate
     }
 
     /**
+     * The vendor printed the total, so the vendor rounded it. A debit note is
+     * the workshop's own document and rounds by the workshop's policy.
+     */
+    protected function takesTheVendorsTotal(): bool
+    {
+        return ! $this->isReturn();
+    }
+
+    /**
      * @param  array<int, BillLine>  $lines
      * @param  array<int, StockChange>  $changes
      * @return array<int, PostingLine>

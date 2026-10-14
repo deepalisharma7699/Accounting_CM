@@ -217,10 +217,23 @@ An 18% bill lands on ₹6,701.10 and a counter holding a five-hundred-rupee note
 does not find ten paise. A workshop that has switched this on charges ₹6,701 and
 books the difference to **Round Off** (`5999`).
 
-**Always down.** ₹1,250.80 is billed as ₹1,250, never ₹1,251 — that is how a
-counter quotes, and a bill asking for the extra paise gets argued down at the till
-anyway. Until October 2026 it was the nearest rupee, so a document posted before
-then may carry a round-off of up to +50 paise; nothing re-reads it.
+**The nearest rupee.** Fifty paise and over goes up, under fifty goes down:
+₹1,250.80 is billed as ₹1,251 and ₹1,250.30 as ₹1,250. That is the standard every
+invoice the workshop receives follows, and over a year Round Off nets to roughly
+nothing. For part of October 2026 it was always *down*, so a document posted in
+that window may carry a round-off of up to −99 paise; nothing re-reads it.
+
+**A vendor's bill is the vendor's to round.** Our policy decides only what we
+issue. A purchase form offers **Total on the vendor's bill**; typed, it is sent as
+`vendor_total` and `BillTemplate::charge()` takes that figure as the document's
+total, booking the difference from the lines — up or down — to Round Off. It is
+taken only within **₹1** of what the lines come to: further than that is a rate,
+quantity or discount that does not match the paper, so the preview reports
+`vendor_total_gap` while the lines are still being typed and the posting refuses
+it (`VENDOR_TOTAL_TOO_FAR`). Left empty, a purchase rounds by our policy like
+anything else. A debit note is our own document and never takes one. A
+correction reloads the posted total into the box, so the replacement keeps the
+vendor's rounding.
 
 **On for a workshop provisioned from October 2026, never switched on underneath
 an older one.** A rounding policy changes what a customer is charged; an existing
@@ -241,6 +254,7 @@ Dr Sundry Debtors    6,701.00      ← rounded: what the customer is asked for
 Dr Round Off             0.10      ← the paise the workshop gave up
 ```
 
+A bill rounded up is the mirror — Round Off is credited with the paise gained.
 On a purchase both sides flip: the workshop owing ten paise less than the
 invoice adds up to has *gained* them, so Round Off is credited. Getting that direction backwards would double the error
 rather than cancel it — and the voucher would still balance, which is why
@@ -286,9 +300,9 @@ figure and rounds the same way. **A full return therefore nets the customer to
 nothing**, which is only true because both documents round.
 
 **Two part returns of the same invoice may not.** ₹500.60 × 2 is charged as
-₹1,001; each half returned on its own is ₹500.60 rounded down to ₹500; ₹1,001
-charged against ₹1,000 credited leaves the customer owing a rupee on an invoice
-they returned in full. Every document rounded correctly and on its own, which is
+₹1,001; each half returned on its own is ₹500.60 rounded to ₹501; ₹1,001
+charged against ₹1,002 credited leaves the customer a rupee in credit on an
+invoice they returned in full. Every document rounded correctly and on its own, which is
 exactly the problem — nothing is tracking what the original rounding did.
 
 It is bounded (under a rupee per credit note), it lands on the **party's
@@ -1010,6 +1024,9 @@ where the payloads have nothing in common.
 - [x] Fifty paise goes up
 - [x] The taxable value and the GST are untouched by the rounding
 - [x] Paying the rounded figure settles the bill — nothing is left on the statement
+- [x] A purchase with the vendor's total books their round-off, up or down, and owes exactly that
+- [x] A vendor total more than ₹1 from the lines is reported by the preview and refused on posting
+- [x] A sale ignores a vendor total, and a draft edit refuses one on anything but a purchase
 - [x] The preview quotes the rounded total and says what it rounded
 - [x] A rounded purchase still puts stock on the shelf at the line's taxable value
 - [x] A full return of a rounded invoice nets the customer to nothing

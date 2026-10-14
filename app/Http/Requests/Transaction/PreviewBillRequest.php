@@ -90,6 +90,16 @@ class PreviewBillRequest extends FormRequest
             // What the party actually paid, where it was less than the bill and
             // the rest is being given as a discount. See StoreBillRequest.
             'settle_total' => ['nullable', 'numeric', 'decimal:0,2', 'gt:0', 'max:'.self::MAX_AMOUNT],
+
+            /*
+            | The grand total printed on the vendor's bill — a purchase's only.
+            |
+            | The vendor rounded it, up or down, and what is owed is what they
+            | printed; the difference from the lines is booked to Round Off. The
+            | template refuses a figure more than a rupee from the lines, because
+            | that is a mismatched line rather than a rounding. See BillTemplate::charge().
+            */
+            'vendor_total' => ['nullable', 'numeric', 'decimal:0,2', 'gt:0', 'max:'.self::MAX_AMOUNT],
         ];
     }
 
@@ -127,6 +137,7 @@ class PreviewBillRequest extends FormRequest
                 ? $this->input('bill_discount_percent')
                 : null,
             'settle_total' => $this->filled('settle_total') ? (string) $this->input('settle_total') : null,
+            'vendor_total' => $this->filled('vendor_total') ? (string) $this->input('vendor_total') : null,
             'items' => array_map(fn (array $line) => [
                 'item_id' => ($line['item_id'] ?? null) === '' ? null : ($line['item_id'] ?? null),
                 'variant_id' => ($line['variant_id'] ?? null) === '' ? null : ($line['variant_id'] ?? null),

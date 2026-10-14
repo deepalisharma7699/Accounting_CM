@@ -901,6 +901,19 @@ export async function mountBillDocument(root, {
             : {};
     }
 
+    /**
+     * The grand total printed on the vendor's bill — a purchase's only, and
+     * only where one was typed. The server takes the vendor's own round-off
+     * from it, and refuses a figure further from the lines than a rupee.
+     */
+    function vendorTotalPayload() {
+        const typed = el('[data-bill-vendor-total]').value.trim();
+
+        return isPurchase() && typed !== '' && Number.isFinite(Number(typed)) && Number(typed) > 0
+            ? { vendor_total: typed }
+            : {};
+    }
+
     /** Say which unit the two bill-discount controls are currently in. */
     function paintBillDiscountMode() {
         const percent = state.billDiscountMode === 'percent';
@@ -970,6 +983,7 @@ export async function mountBillDocument(root, {
                     // the discount on the panel is the discount on the invoice.
                     ...billDiscountPayload(),
                     ...settlePayload(),
+                    ...vendorTotalPayload(),
                 },
                 /*
                 | Debounced against typing — see `quiet` in auth-client.
@@ -1088,6 +1102,9 @@ export async function mountBillDocument(root, {
 
         const shortfalls = state.preview.stock ?? [];
 
+        // Held, with the reason painted in the panel below — see vendorGapNote.
+        if (totals.vendor_total_gap) el('[data-post]').disabled = true;
+
         host.innerHTML = `
             <h3 class="text-sm font-semibold text-foreground">What this comes to</h3>
 
@@ -1134,6 +1151,8 @@ export async function mountBillDocument(root, {
             </dl>
 
             ${settledNote(totals, 'mt-3')}
+
+            ${vendorGapNote(totals)}
 
             ${shortfalls.length ? `
                 <div class="mt-3 rounded-[10px] border border-amber-200 bg-amber-50/60 px-3 py-2.5 text-xs
@@ -1182,6 +1201,29 @@ export async function mountBillDocument(root, {
                 ${isPurchase() ? 'Paid' : 'Collected'} ₹${esc(formatMoney(totals.total))} for a
                 ₹${esc(formatMoney(totals.before_settlement))} bill. It comes off before tax, so the GST falls
                 with it.
+            </p>`;
+    }
+
+    /**
+     * A vendor total further from the lines than any round-off — or nothing.
+     *
+     * Said here rather than refused, because the panel is priced while the
+     * lines are still going in, and "₹210 more than these lines" is exactly
+     * how somebody finds the freight line they have not typed yet. The post
+     * button is held until it closes; the server refuses it besides.
+     */
+    function vendorGapNote(totals) {
+        if (!totals.vendor_total_gap) return '';
+
+        const gap = Number(totals.vendor_total_gap);
+
+        return `
+            <p class="mt-3 rounded-[10px] border border-rose-200 bg-rose-50/60 px-3 py-2.5 text-xs text-rose-900"
+               role="status">
+                <span class="block font-semibold">Does not match the vendor&rsquo;s bill</span>
+                Their total is ₹${esc(formatMoney(Math.abs(gap).toFixed(2)))}
+                ${gap > 0 ? 'more' : 'less'} than these lines come to. A round-off is never more than a rupee,
+                so check the rates, quantities and discounts against the bill.
             </p>`;
     }
 
@@ -1498,6 +1540,7 @@ export async function mountBillDocument(root, {
             items: itemsPayload(),
             ...billDiscountPayload(),
             ...settlePayload(),
+            ...vendorTotalPayload(),
             payments: payments.value(),
             // Who did the work — M22. Absent on a purchase, where the server
             // refuses it: sending an empty array there would be the form asking
@@ -1590,6 +1633,7 @@ export async function mountBillDocument(root, {
                 lines: state.lines,
                 billDiscount: el('[data-bill-discount]')?.value ?? '',
                 billDiscountMode: state.billDiscountMode,
+                vendorTotal: el('[data-bill-vendor-total]')?.value ?? '',
                 payments: payments?.value() ?? [],
                 // Which of on credit / part paid / paid in full was chosen. The
                 // rows alone cannot say: an empty split is credit or a bill with
@@ -1634,9 +1678,11 @@ export async function mountBillDocument(root, {
      * asks for the price and the save itself.
      */
     function putTerms({
-        billDiscount = '', billDiscountMode = 'amount', payments: splits = [], settlement = null, settleAt = null,
+        billDiscount = '', billDiscountMode = 'amount', vendorTotal = '', payments: splits = [], settlement = null,
+        settleAt = null,
     }) {
         el('[data-bill-discount]').value = billDiscount ?? '';
+        el('[data-bill-vendor-total]').value = isPurchase() ? (vendorTotal ?? '') : '';
         state.billDiscountMode = billDiscountMode === 'percent' ? 'percent' : 'amount';
         paintBillDiscountMode();
 
@@ -1793,7 +1839,7 @@ export async function mountBillDocument(root, {
     }
 
     /*
-    | The vendor's own bill number — a purchase's only. Emptied, not merely
+    | The vendor's own bill number and grand total — a purchase's only. Emptied, not merely
     | hidden, on a sale, for the reason the staff host is: a hidden box still
     | holding a number would send it with the next document.
     */
@@ -1803,8 +1849,13 @@ export async function mountBillDocument(root, {
         if (!field) return;
 
         field.classList.toggle('hidden', !isPurchase());
+        el('[data-bill-vendor-total-field]').classList.toggle('hidden', !isPurchase());
 
-        if (!isPurchase()) el('[data-bill-vendor-invoice]').value = '';
+        if (!isPurchase()) {
+            el('[data-bill-vendor-invoice]').value = '';
+            el('[data-bill-vendor-total]').value = '';
+        }
+
         checkVendorInvoice();
     }
 
@@ -2109,6 +2160,14 @@ export async function mountBillDocument(root, {
         save();
     });
 
+    // A settlement agreed against the old figure is forgotten, as it is when
+    // the discount changes: "paid in full for less" is measured from this.
+    el('[data-bill-vendor-total]').addEventListener('input', () => {
+        unsettle();
+        refreshPreview();
+        save();
+    });
+
     el('[data-bill-discount-mode]').addEventListener('click', () => {
         state.billDiscountMode = state.billDiscountMode === 'percent' ? 'amount' : 'percent';
         unsettle();
@@ -2190,6 +2249,7 @@ export async function mountBillDocument(root, {
         state.vendorInvoiceOwnId = null;
         checkVendorInvoice();
         el('[data-bill-discount]').value = '';
+        el('[data-bill-vendor-total]').value = '';
         state.billDiscountMode = 'amount';
         paintBillDiscountMode();
         el('[data-restored]').classList.add('hidden');
@@ -2280,6 +2340,16 @@ export async function mountBillDocument(root, {
             state.vendorInvoiceOwnId = ownId;
             save();
             checkVendorInvoice();
+        },
+
+        /**
+         * The total printed on the vendor's bill, set by a host loading a
+         * purchase into the form. Ignored on a sale.
+         */
+        setVendorTotal(total) {
+            el('[data-bill-vendor-total]').value = isPurchase() ? (total ?? '') : '';
+            refreshPreview();
+            save();
         },
 
         /**

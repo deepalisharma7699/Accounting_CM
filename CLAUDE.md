@@ -806,8 +806,11 @@ the browser or in a formula: it is a second copy of the GST rounding. On an
 invoice already posted the GST is declared, so a receipt or payment carries a
 `discount` written off **after** tax to Discount Allowed / Discount Received;
 the settlement's total is what it cleared, and the money lines stay the money.
-Rounding is always **down** and stays its own Round Off line, never a discount.
-See [billing-module.md](docs/billing-module.md).
+Rounding is to the **nearest rupee** and stays its own Round Off line, never a
+discount — and only on what the workshop issues. A purchase may carry
+`vendor_total`, the figure the vendor printed, and then *their* round-off is
+booked, within ₹1 of the lines and refused beyond it; never apply our policy to
+a vendor's total. See [billing-module.md](docs/billing-module.md).
 
 **A sale is corrected on stricter terms than a purchase**, and the posting engine
 is where that is enforced, never the form. A purchase arrives at its own stated

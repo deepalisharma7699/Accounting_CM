@@ -185,7 +185,7 @@ enum SystemAccount: string
             self::ServiceIncome => 'Revenue from labour: repairs and rewinding.',
 
             self::Cogs => 'Cost of the stock consumed by a sale or a job.',
-            self::RoundOff => 'The paise dropped when a bill is taken down to the whole rupee.',
+            self::RoundOff => 'The paise given or gained when a bill is taken to the nearest rupee.',
             self::MiscExpense => 'Day-to-day running costs.',
             self::SalaryExpense => 'Staff salaries.',
             self::DiscountAllowed => 'Balances customers were let off when they settled an invoice for less.',

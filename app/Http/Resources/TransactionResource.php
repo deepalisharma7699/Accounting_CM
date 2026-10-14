@@ -54,8 +54,9 @@ class TransactionResource extends JsonResource
 
             /*
             | A draft bill's terms, as they were saved: the discount on the whole
-            | bill, in whichever unit it was typed, and the figure "paid in full"
-            | was settled at where that was less than the bill.
+            | bill, in whichever unit it was typed, the figure "paid in full"
+            | was settled at where that was less than the bill, and the total
+            | printed on a vendor's bill where one was typed.
             |
             | A draft only. On a posted bill each is already inside the lines and
             | the total, and echoing the request beside them would be a second
@@ -69,6 +70,7 @@ class TransactionResource extends JsonResource
                         'bill_discount' => $this->draft_payload['bill_discount'] ?? null,
                         'bill_discount_percent' => $this->draft_payload['bill_discount_percent'] ?? null,
                         'settle_total' => $this->draft_payload['settle_total'] ?? null,
+                        'vendor_total' => $this->draft_payload['vendor_total'] ?? null,
                     ],
                 ),
             ),

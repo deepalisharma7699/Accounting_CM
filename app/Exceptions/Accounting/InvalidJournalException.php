@@ -168,6 +168,32 @@ class InvalidJournalException extends ApiException
     }
 
     /**
+     * A purchase whose vendor total is further from its lines than any rounding
+     * could take it.
+     *
+     * A vendor rounds by paise, never by more than a rupee — so a larger gap is
+     * a rate, a quantity or a discount on this screen that does not match the
+     * paper, and booking it to Round Off would bury that mistake in an account
+     * nobody reads.
+     */
+    public static function vendorTotalTooFar(string $vendorTotal, string $linesTotal): self
+    {
+        $message = "The vendor's bill says {$vendorTotal}, but these lines come to {$linesTotal}. A round-off "
+            .'is never more than a rupee — check the rates, quantities and discounts against the bill.';
+
+        return new self(
+            message: $message,
+            status: 422,
+            errorCode: 'VENDOR_TOTAL_TOO_FAR',
+            details: [
+                'fields' => ['vendor_total' => [$message]],
+                'vendor_total' => $vendorTotal,
+                'lines_total' => $linesTotal,
+            ],
+        );
+    }
+
+    /**
      * A bill settled short that was not paid at the settled figure.
      *
      * The difference is only a discount because the party paid the rest and

@@ -215,10 +215,11 @@
                     <input id="ws-round-off" name="round_off_invoices" type="checkbox"
                            class="mt-0.5 size-4 rounded border-border">
                     <label for="ws-round-off" class="text-sm text-secondary-foreground">
-                        Round a bill down to the whole rupee
+                        Round a bill to the nearest rupee
                         <span class="mt-0.5 block text-xs text-muted-foreground">
-                            This changes the total a customer pays: ₹1,250.80 is billed as ₹1,250. The paise are
-                            booked to Round Off, so the books still balance to the last paisa.
+                            This changes the total a customer pays: ₹1,250.80 is billed as ₹1,251 and ₹1,250.30 as
+                            ₹1,250. The paise are booked to Round Off, so the books still balance to the last paisa.
+                            A purchase takes the vendor&rsquo;s own total where you type it.
                         </span>
                     </label>
                 </div>

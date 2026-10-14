@@ -142,6 +142,16 @@ class StoreBillRequest extends FormRequest
             */
             'settle_total' => ['nullable', 'numeric', 'decimal:0,2', 'gt:0', 'max:'.self::MAX_AMOUNT],
 
+            /*
+            | The grand total printed on the vendor's bill — a purchase's only.
+            |
+            | The vendor rounded it, up or down, and what is owed is what they
+            | printed; the difference from the lines is booked to Round Off. The
+            | template refuses a figure more than a rupee from the lines, because
+            | that is a mismatched line rather than a rounding. See BillTemplate::charge().
+            */
+            'vendor_total' => ['nullable', 'numeric', 'decimal:0,2', 'gt:0', 'max:'.self::MAX_AMOUNT],
+
             // Optional, unlike a settlement's. A sale on thirty-day terms carries
             // none; a counter sale carries the whole invoice. What it may not do
             // is exceed the document — the engine refuses that.
@@ -199,7 +209,7 @@ class StoreBillRequest extends FormRequest
     }
 
     /**
-     * @return array{date: string, notes: string|null, vendor_invoice_no: string|null, post: bool, party_id: int|null, bill_discount: mixed, bill_discount_percent: mixed, settle_total: string|null, items: array<int, array<string, mixed>>, staff: array<int, array<string, mixed>>, payments: array<int, array<string, mixed>>}
+     * @return array{date: string, notes: string|null, vendor_invoice_no: string|null, post: bool, party_id: int|null, bill_discount: mixed, bill_discount_percent: mixed, settle_total: string|null, vendor_total: string|null, items: array<int, array<string, mixed>>, staff: array<int, array<string, mixed>>, payments: array<int, array<string, mixed>>}
      */
     public function payload(): array
     {
@@ -217,6 +227,7 @@ class StoreBillRequest extends FormRequest
                 ? $this->input('bill_discount_percent')
                 : null,
             'settle_total' => $this->filled('settle_total') ? (string) $this->input('settle_total') : null,
+            'vendor_total' => $this->filled('vendor_total') ? (string) $this->input('vendor_total') : null,
             'items' => array_map(fn (array $line) => [
                 'item_id' => ($line['item_id'] ?? null) === '' ? null : ($line['item_id'] ?? null),
                 'variant_id' => ($line['variant_id'] ?? null) === '' ? null : ($line['variant_id'] ?? null),

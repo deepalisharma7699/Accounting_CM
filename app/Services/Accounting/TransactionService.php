@@ -330,8 +330,9 @@ class TransactionService
 
         // A bill's own terms. Only the sale and purchase templates read them, so
         // on anything else they would be stored on the draft and never applied.
-        // The vendor's number is narrower still — a purchase's alone — and the
-        // engine would drop it from a sale without a word.
+        // The vendor's number and the vendor's total are narrower still — a
+        // purchase's alone — and the engine would drop either from a sale
+        // without a word.
         $billTerms = ['bill_discount', 'bill_discount_percent', 'settle_total'];
 
         foreach ($billTerms as $key) {
@@ -340,8 +341,10 @@ class TransactionService
             }
         }
 
-        if (array_key_exists('vendor_invoice_no', $payload) && $type !== TransactionType::Purchase) {
-            throw TransactionPayloadMismatchException::billTermsNotAccepted($type, 'vendor_invoice_no');
+        foreach (['vendor_invoice_no', 'vendor_total'] as $key) {
+            if (array_key_exists($key, $payload) && $type !== TransactionType::Purchase) {
+                throw TransactionPayloadMismatchException::billTermsNotAccepted($type, $key);
+            }
         }
     }
 

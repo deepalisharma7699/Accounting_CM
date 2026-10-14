@@ -92,6 +92,8 @@ class UpdateTransactionRequest extends FormRequest
                 'sometimes', 'nullable', 'numeric', 'min:0', 'max:100', 'prohibits:bill_discount',
             ],
             'settle_total' => ['sometimes', 'nullable', 'numeric', 'decimal:0,2', 'gt:0', 'max:'.self::MAX_AMOUNT],
+            // The vendor's printed total — a purchase's only. See StoreBillRequest.
+            'vendor_total' => ['sometimes', 'nullable', 'numeric', 'decimal:0,2', 'gt:0', 'max:'.self::MAX_AMOUNT],
 
             // Who did the work — a sale's only, and refused on anything else by
             // WorkAttributionService. The null employee is load-bearing for the
@@ -203,6 +205,10 @@ class UpdateTransactionRequest extends FormRequest
 
         if ($this->has('settle_total')) {
             $payload['settle_total'] = $this->filled('settle_total') ? (string) $this->input('settle_total') : null;
+        }
+
+        if ($this->has('vendor_total')) {
+            $payload['vendor_total'] = $this->filled('vendor_total') ? (string) $this->input('vendor_total') : null;
         }
 
         if ($this->has('staff')) {

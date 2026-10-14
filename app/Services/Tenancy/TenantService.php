@@ -337,8 +337,8 @@ class TenantService
             'currency' => (string) config('tenancy.defaults.currency', 'INR'),
             // Left null: go-live is decided during onboarding, not at sign-up.
             'books_start_date' => null,
-            // A new workshop starts with its bills' paise dropped, which is how
-            // a counter quotes anyway. Stamped here rather than as the column's
+            // A new workshop starts with its bills taken to the nearest rupee,
+            // which is how every invoice it receives is written too. Stamped here rather than as the column's
             // default so that switching it on was never done to a workshop
             // already billing — see RoundOff.
             'round_off_invoices' => true,

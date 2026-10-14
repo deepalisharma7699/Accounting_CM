@@ -66,7 +66,7 @@ class BillPreviewService
      * @return array{
      *     type: string,
      *     lines: array<int, array<string, mixed>>,
-     *     totals: array{gross: string, discount: string, taxable: string, cgst: string, sgst: string, igst: string, tax: string, round_off: string, total: string, before_settlement: string|null, inter_state: bool},
+     *     totals: array{gross: string, discount: string, taxable: string, cgst: string, sgst: string, igst: string, tax: string, round_off: string, total: string, before_settlement: string|null, vendor_total_gap: string|null, inter_state: bool},
      *     stock: array<int, array<string, mixed>>,
      *     can_post: bool
      * }
@@ -126,7 +126,7 @@ class BillPreviewService
     /**
      * @param  array<int, BillLine>  $lines
      * @param  array<string, mixed>  $input
-     * @return array{gross: string, discount: string, taxable: string, cgst: string, sgst: string, igst: string, tax: string, round_off: string, total: string, before_settlement: string|null, inter_state: bool}
+     * @return array{gross: string, discount: string, taxable: string, cgst: string, sgst: string, igst: string, tax: string, round_off: string, total: string, before_settlement: string|null, vendor_total_gap: string|null, inter_state: bool}
      */
     private function totalsOf(array $lines, PostingTemplate $template, array $input): array
     {
@@ -170,7 +170,7 @@ class BillPreviewService
             'sgst' => $totals['sgst']->amount(),
             'igst' => $totals['igst']->amount(),
             'tax' => $totals['tax']->amount(),
-            // Between −0.99 and nil, and zero for a workshop that does not
+            // Within a rupee either way, and zero for a workshop that does not
             // round. Reported separately so the panel can show the line the
             // invoice will carry rather than a total that quietly disagrees
             // with the figures above it.
@@ -185,6 +185,17 @@ class BillPreviewService
             */
             'before_settlement' => $template instanceof BillTemplate
                 ? $template->totalBeforeSettlement($input)?->amount()
+                : null,
+            /*
+            | How far a typed vendor total is from these lines, where that is
+            | more than a rupee — or null. Reported rather than refused, because
+            | the panel is priced while the lines are still being typed and the
+            | gap is what tells somebody the last line is missing; the posting
+            | refuses it. `total` above then falls back to the workshop's own
+            | rounding.
+            */
+            'vendor_total_gap' => $template instanceof BillTemplate
+                ? $template->vendorTotalGap($input)?->amount()
                 : null,
             // One shape or the other, never a mixture — the whole document has
             // one place of supply.

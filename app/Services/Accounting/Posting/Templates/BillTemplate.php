@@ -113,6 +113,19 @@ abstract class BillTemplate implements CarriesDocumentLines, MovesStock, Posting
     /** What the bill came to before it was settled short — see {@see totalBeforeSettlement()}. */
     private ?Money $chargedBeforeSettlement = null;
 
+    /**
+     * The grand total printed on the vendor's bill, where the operator typed it
+     * — a purchase's only. See {@see charge()}.
+     */
+    private ?Money $vendorTotal = null;
+
+    /**
+     * How far the vendor's total is from what the lines come to, where that is
+     * more than a round-off could explain — or null. Measured before any short
+     * settlement, against the bill as the vendor wrote it.
+     */
+    private ?Money $vendorGap = null;
+
     public function __construct(
         protected readonly ChartOfAccountService $accounts,
         protected readonly StockLedgerService $stock,
@@ -155,6 +168,17 @@ abstract class BillTemplate implements CarriesDocumentLines, MovesStock, Posting
      * {@see revenueSide()} and {@see inventorySide()}.
      */
     protected function isReturn(): bool
+    {
+        return false;
+    }
+
+    /**
+     * Whether this document's total is somebody else's to round.
+     *
+     * True for a vendor's bill alone. Every other document is one the workshop
+     * issues, and its round-off is the workshop's own policy.
+     */
+    protected function takesTheVendorsTotal(): bool
     {
         return false;
     }
@@ -204,6 +228,7 @@ abstract class BillTemplate implements CarriesDocumentLines, MovesStock, Posting
     public function build(array $input): array
     {
         $documentLines = $this->documentLinesFrom($input);
+        $this->assertVendorTotalReached();
         $changes = $this->changesByLine($input);
         $exact = BillLine::invoiceTotal($documentLines);
         $total = $this->roundedTotal($exact);
@@ -273,6 +298,41 @@ abstract class BillTemplate implements CarriesDocumentLines, MovesStock, Posting
     }
 
     /**
+     * A vendor total the lines do not reach is refused rather than booked.
+     *
+     * The preview reports the same gap without refusing — see
+     * {@see vendorTotalGap()} — so the panel can say it while the lines are
+     * still being typed; posting is where it stops.
+     *
+     * @throws InvalidJournalException
+     */
+    private function assertVendorTotalReached(): void
+    {
+        if ($this->vendorGap === null) {
+            return;
+        }
+
+        throw InvalidJournalException::vendorTotalTooFar(
+            $this->vendorTotal->amount(),
+            $this->vendorTotal->minus($this->vendorGap)->amount(),
+        );
+    }
+
+    /**
+     * How far the vendor's total is from these lines, where it is further than
+     * a round-off — or null. For the preview, which reports it instead of
+     * refusing.
+     *
+     * @param  array<string, mixed>  $input
+     */
+    public function vendorTotalGap(array $input): ?Money
+    {
+        $this->documentLinesFrom($input);
+
+        return $this->vendorGap;
+    }
+
+    /**
      * The paise the rounding dropped or added, booked so the voucher balances.
      *
      * Its own line and never merged into anything, for the same reason the
@@ -318,8 +378,8 @@ abstract class BillTemplate implements CarriesDocumentLines, MovesStock, Posting
 
     /**
      * What the party is actually asked for: the figure the bill was settled at,
-     * or else the exact total — with its paise dropped, where the workshop
-     * rounds.
+     * or else the exact total — rounded, where the workshop rounds, or as the
+     * vendor printed it.
      *
      * A settled bill is not rounded again. Its discount was solved to land on
      * the settled figure, and the paise the solve could not reach are what the
@@ -330,9 +390,22 @@ abstract class BillTemplate implements CarriesDocumentLines, MovesStock, Posting
         return $this->settledAt ?? $this->charge($exact);
     }
 
-    /** The exact total as the workshop charges it: rounded down, or as it is. */
+    /**
+     * The exact total as the bill states it.
+     *
+     * On a vendor's bill whose total was typed, that figure — the vendor decided
+     * its rounding, up or down, and what is owed is what they printed. Taken
+     * only while it is within a rupee of the lines; further than that it is not
+     * a round-off at all, and {@see assertVendorTotalReached()} refuses it.
+     *
+     * Otherwise the workshop's own policy: the nearest rupee, or as it is.
+     */
     private function charge(Money $exact): Money
     {
+        if ($this->vendorTotal !== null && $this->vendorTotal->minus($exact)->absolute()->minor() <= 100) {
+            return $this->vendorTotal;
+        }
+
         return $this->roundsInvoices() ? RoundOff::applyTo($exact) : $exact;
     }
 
@@ -491,6 +564,12 @@ abstract class BillTemplate implements CarriesDocumentLines, MovesStock, Posting
             $lines[] = $this->lineFrom((array) $row, $index + 1, $place);
         }
 
+        // Before the lines are priced, because pricing a short settlement asks
+        // what the bill is charged at — and on a vendor's bill that is this.
+        $this->vendorTotal = $this->takesTheVendorsTotal()
+            ? Money::ofNullable($input['vendor_total'] ?? null)
+            : null;
+
         return $this->documentLines = $this->withBillDiscount($lines, $input, $place);
     }
 
@@ -537,6 +616,12 @@ abstract class BillTemplate implements CarriesDocumentLines, MovesStock, Posting
         );
 
         $discounted = $apply($stated);
+
+        if ($this->vendorTotal !== null) {
+            $gap = $this->vendorTotal->minus(BillLine::invoiceTotal($discounted));
+            $this->vendorGap = $gap->absolute()->minor() > 100 ? $gap : null;
+        }
+
         $target = Money::ofNullable($input['settle_total'] ?? null);
 
         if ($target === null) {
