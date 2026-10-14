@@ -9,6 +9,7 @@ use App\Enums\TransactionType;
 use App\Http\Controllers\Controller;
 use App\Enums\PaymentStatus;
 use App\Http\Requests\Transaction\AllocateSettlementRequest;
+use App\Http\Requests\Transaction\AssignCustomerRequest;
 use App\Http\Requests\Transaction\IndexTransactionRequest;
 use App\Http\Requests\Transaction\PreviewBillRequest;
 use App\Http\Requests\Transaction\ReverseTransactionRequest;
@@ -30,6 +31,7 @@ use App\Services\Accounting\SettlementService;
 use App\Services\Accounting\TransactionService;
 use App\Services\Staff\WorkAttributionService;
 use App\Support\ApiResponse;
+use App\Support\Money;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -215,6 +217,13 @@ class TransactionController extends Controller
             ], fn ($value) => $value !== null && $value !== []);
         }
 
+        // A draft bill's lines carry ids and figures only. Opening one is the
+        // step before continuing it, and the form needs each line's name, unit
+        // and rate back — resolved here, once, and never on a listing.
+        if ($record->type->hasDocumentLines() && $record->isDraft()) {
+            $record->draftLineDetails = $this->bills->draftLinesFor($record);
+        }
+
         // Who did the work — M22. Attached for a sale at any status, including a
         // draft: a document parked half-written keeps the two names that were
         // picked, or reopening it would silently drop them.
@@ -267,7 +276,22 @@ class TransactionController extends Controller
 
     private function createSettlement(TransactionType $type, StoreSettlementRequest $request): JsonResponse
     {
-        $transaction = $this->transactions->create($type, $request->payload(), $request->user());
+        $payload = $request->payload();
+
+        // A discount closes what is owed and nothing more — checked before the
+        // money is in the books, where it can still be refused rather than
+        // reversed.
+        if ($payload['discount'] !== null) {
+            $this->settlements->assertDiscountWithinOpenBills(
+                $type,
+                $payload['party_id'],
+                Money::sum(array_map(fn (array $split) => Money::of($split['amount']), $payload['payments']))
+                    ->plus(Money::of($payload['discount'])),
+                $request->allocations(),
+            );
+        }
+
+        $transaction = $this->transactions->create($type, $payload, $request->user());
 
         // Which invoices the money settled — M16. Only once it is actually in
         // the books: a draft has moved nothing, so there is nothing yet to point
@@ -437,6 +461,48 @@ class TransactionController extends Controller
      *
      * @param  array<string, mixed>  $meta
      */
+    /**
+     * POST /api/v1/transactions/{transaction}/assign-customer
+     *
+     * A walk-in sale reissued under the customer who turned out to want a GST
+     * invoice in their name. The service builds the replacement from the sale
+     * itself; this carries the names of who did the work across with it, inside
+     * the same database transaction, as {@see revise()} does.
+     */
+    public function assignCustomer(AssignCustomerRequest $request, int $transaction): JsonResponse
+    {
+        $original = $this->transactions->find($transaction);
+
+        $this->attribution->attachTo([$original]);
+
+        $staff = ($original->staffAttribution ?? collect())->map(fn ($row) => [
+            'designation_id' => (int) $row->designation_id,
+            'employee_id' => (int) $row->employee_id,
+        ])->values()->all();
+
+        $revision = DB::transaction(function () use ($transaction, $request, $staff) {
+            $revision = $this->transactions->assignCustomer(
+                $transaction,
+                (int) $request->input('party_id'),
+                $request->clientRef(),
+                $request->user(),
+            );
+
+            if ($revision->wasRecentlyCreated && $staff !== []) {
+                $this->attribution->sync($revision, $staff);
+            }
+
+            return $revision;
+        });
+
+        $this->attribution->attachTo([$revision]);
+
+        return $this->respondToCreate(
+            $revision,
+            'Reissued in the customer’s name. The walk-in sale was cancelled and this replaces it.',
+        );
+    }
+
     private function respondToCreate(Transaction $transaction, string $message, array $meta = []): JsonResponse
     {
         if ($transaction->wasRecentlyCreated) {
@@ -588,15 +654,37 @@ class TransactionController extends Controller
      * PATCH /api/v1/transactions/{transaction}
      *
      * Drafts only, of any type — `lines` for a journal, `payments` for a
-     * settlement. Editing something already in the books is refused by the
-     * service and again by the model.
+     * settlement, `items` and the bill's terms for a sale or a purchase. Editing
+     * something already in the books is refused by the service and again by the
+     * model.
      */
     public function update(UpdateTransactionRequest $request, int $transaction): JsonResponse
     {
-        return ApiResponse::success(
-            new TransactionResource($this->transactions->update($transaction, $request->payload())),
-            'Draft updated.'
-        );
+        $payload = $request->payload();
+
+        /*
+        | The draft and who did the work commit together, for the reason
+        | `createBill` gives: a refusal from the attribution after the draft had
+        | already been rewritten would leave somebody looking at an error over an
+        | edit that went through.
+        |
+        | Synced whenever the key is present, including empty — on a draft being
+        | continued, "nobody is named any more" is an edit like any other. Only a
+        | sale may carry it; the service refuses it on anything else.
+        */
+        $record = DB::transaction(function () use ($transaction, $payload) {
+            $record = $this->transactions->update($transaction, $payload);
+
+            if (array_key_exists('staff', $payload)) {
+                $this->attribution->sync($record, $payload['staff']);
+            }
+
+            return $record;
+        });
+
+        $this->attribution->attachTo([$record]);
+
+        return ApiResponse::success(new TransactionResource($record), 'Draft updated.');
     }
 
     /**
@@ -607,9 +695,20 @@ class TransactionController extends Controller
      */
     public function post(Request $request, int $transaction): JsonResponse
     {
+        $posted = $this->transactions->post($transaction, $request->user());
+
+        $this->attribution->attachTo([$posted]);
+
+        // The warnings a bill posted straight from the form comes back with —
+        // below cost, more than the shelf says is there. A draft authorised later
+        // is the same posting, and is owed the same look before anybody moves on.
+        $warnings = $posted->type->isBillable() ? $this->bills->warningsFor($posted) : [];
+
         return ApiResponse::success(
-            new TransactionResource($this->transactions->post($transaction, $request->user())),
-            'Transaction posted.'
+            new TransactionResource($posted),
+            'Transaction posted.',
+            200,
+            $warnings === [] ? [] : ['warnings' => $warnings],
         );
     }
 

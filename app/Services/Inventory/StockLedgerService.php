@@ -440,6 +440,23 @@ class StockLedgerService
         return $this->movements->movedVariantIds($variantIds);
     }
 
+    /**
+     * Which of these variants have a history beyond their opening declaration —
+     * bought, sold, counted, returned or made into something.
+     *
+     * The line opening stock may not cross. Opening stock is dated at go-live,
+     * so declaring it under a shelf that has moved since would put stock behind
+     * sales that already took their cost from an empty position, and nothing
+     * would restate them.
+     *
+     * @param  array<int, int>  $variantIds
+     * @return array<int, int>
+     */
+    public function tradedVariantIds(array $variantIds): array
+    {
+        return $this->movements->tradedVariantIds($variantIds);
+    }
+
     /* ---------------------------------------------------------------------
      | Reporting
      |-------------------------------------------------------------------- */

@@ -44,6 +44,9 @@ class IndexTransactionRequest extends FormRequest
             // Everything one counterparty was involved in — the drill-down
             // behind a party statement.
             'party_id' => ['nullable', 'integer', 'min:1'],
+            // An exact vendor bill number — how the purchase form asks whether
+            // this vendor's invoice is already in the books.
+            'vendor_invoice_no' => ['nullable', 'string', 'max:50'],
             /*
             | Where a bill stands against what has been paid on it — M16.
             | Derived on the fly from the document's total, its own counter
@@ -56,6 +59,15 @@ class IndexTransactionRequest extends FormRequest
             // "Show me only what is still owed" — the toggle above a bills list,
             // and a shorthand for every payment status except paid.
             'outstanding' => ['nullable', 'boolean'],
+            /*
+            | Drop cancelled documents and the reversals that cancelled them —
+            | the working-list view a counter wants, where a mistake corrected
+            | ten minutes ago is not still taking up two rows.
+            |
+            | Opt-in, so no existing caller's results change. See the filter
+            | itself in EloquentTransactionRepository for why both halves go.
+            */
+            'hide_cancelled' => ['nullable', 'boolean'],
             'sort' => ['nullable', Rule::in(['date', 'total', 'created_at'])],
             'direction' => ['nullable', Rule::in(['asc', 'desc'])],
             'per_page' => ['nullable', 'integer', 'between:1,200'],
@@ -80,11 +92,17 @@ class IndexTransactionRequest extends FormRequest
             'to' => $this->input('to'),
             'account_id' => $this->filled('account_id') ? (int) $this->input('account_id') : null,
             'party_id' => $this->filled('party_id') ? (int) $this->input('party_id') : null,
+            'vendor_invoice_no' => $this->filled('vendor_invoice_no')
+                ? trim((string) $this->input('vendor_invoice_no'))
+                : null,
             'payment_status' => $this->input('payment_status'),
             // Absent rather than false when the toggle is off, so it narrows
             // nothing — `outstanding=0` is "I did not ask", not "show me the
             // settled ones", which is what `payment_status=paid` is for.
             'outstanding' => $this->boolean('outstanding') ?: null,
+            // Absent rather than false when the toggle is off, for the reason
+            // `outstanding` is: it must narrow nothing unless it was asked for.
+            'hide_cancelled' => $this->boolean('hide_cancelled') ?: null,
             'sort' => $this->input('sort'),
             'direction' => $this->input('direction'),
         ];

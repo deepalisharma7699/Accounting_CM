@@ -96,7 +96,7 @@
 
                 {{-- Filled from GET /api/v1/staff/meta. Never listed here. --}}
                 <label for="staff-filter-designation" class="sr-only">Filter by designation</label>
-                <select id="staff-filter-designation" class="field-input h-[2.375rem] w-auto min-w-40 py-0">
+                <select id="staff-filter-designation" class="field-input w-auto min-w-40 py-0">
                     <option value="">Any designation</option>
                 </select>
 
@@ -459,118 +459,7 @@
          4. ADVANCES — pay one, and everything already out
          ================================================================== --}}
     <div data-staff-section="advances" hidden>
-
-        <div data-ws-form>
-            <section class="surface form-card">
-                <div class="form-head">
-                    <span class="tile-icon bg-amber-50 text-amber-600">
-                        <x-icon name="credit-card" :size="17" />
-                    </span>
-                    <div class="min-w-0 flex-1">
-                        <h2 class="text-base font-bold text-foreground">Pay an advance</h2>
-                        <p class="mt-0.5 text-[0.8125rem] text-muted-foreground">
-                            Money against a salary not yet earned. It comes back off the next payroll.
-                        </p>
-                    </div>
-                </div>
-
-                <form id="advance-form" novalidate>
-                    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                        <div>
-                            <label for="advance-employee" class="field-label">Who <span class="req">*</span></label>
-                            <select id="advance-employee" name="employee_id" class="field-input" required>
-                                <option value="">Choose somebody…</option>
-                            </select>
-                            <p class="mt-1.5 text-xs text-muted-foreground" id="advance-outstanding-hint"></p>
-                            <p class="field-error hidden" data-error-for="employee_id"></p>
-                        </div>
-
-                        <div>
-                            <label for="advance-date" class="field-label">Date</label>
-                            <input type="date" id="advance-date" name="date" class="field-input">
-                            <p class="field-error hidden" data-error-for="date"></p>
-                        </div>
-                    </div>
-
-                    {{-- No amount field: the amount *is* the split, exactly as it
-                         is for a vendor payment. A second figure could disagree
-                         with the first, and the disagreement would be a debit in
-                         Staff Advance that no cash box could account for. --}}
-                    <div class="mt-4" id="advance-payments-host"></div>
-
-                    <div class="mt-4">
-                        <label for="advance-notes" class="field-label">Note</label>
-                        <input type="text" id="advance-notes" name="notes" class="field-input" maxlength="400"
-                               placeholder="Optional — appears on the voucher">
-                        <p class="field-error hidden" data-error-for="notes"></p>
-                    </div>
-
-                    <div class="form-foot">
-                        <button type="submit" class="btn btn-primary" data-requires-permission="WRITE:STAFF">
-                            <x-icon name="plus" :size="15" />
-                            Pay advance
-                        </button>
-                        <button type="button" class="btn btn-ghost" data-advance-clear>Clear</button>
-                    </div>
-                </form>
-
-                <p class="hint mt-5">
-                    <x-icon name="info" :size="15" />
-                    <span>
-                        An advance is money the workshop is owed back, not a cost — it sits in
-                        <strong>Staff Advance</strong> until payroll recovers it. An advance typed wrong is
-                        cancelled rather than edited, and cancelling it stops it counting immediately.
-                    </span>
-                </p>
-            </section>
-        </div>
-
-        <div data-ws-list>
-
-            <header class="mb-5 flex flex-wrap items-end gap-2">
-                <div>
-                    <label for="advances-filter-employee" class="sr-only">Filter by person</label>
-                    <select id="advances-filter-employee" class="field-input h-[2.375rem] w-auto min-w-48 py-0">
-                        <option value="">Everybody</option>
-                    </select>
-                </div>
-                <span class="grow"></span>
-                <button type="button" class="btn btn-ghost btn-sm" id="advances-export">
-                    <x-icon name="download" :size="14" />
-                    Export
-                </button>
-            </header>
-
-            <div class="surface overflow-hidden rounded-[14px]">
-                <div class="overflow-x-auto rounded-t-[14px]">
-                    <table class="w-full min-w-[760px] border-collapse">
-                        <thead>
-                            <tr class="border-b border-border bg-background text-left">
-                                <th class="px-4 py-3 text-[11.5px] font-semibold whitespace-nowrap text-muted-foreground"
-                                    scope="col">Date</th>
-                                <th class="px-4 py-3 text-[11.5px] font-semibold whitespace-nowrap text-muted-foreground"
-                                    scope="col">Voucher</th>
-                                <th class="px-4 py-3 text-[11.5px] font-semibold whitespace-nowrap text-muted-foreground"
-                                    scope="col">Who</th>
-                                <th class="px-4 py-3 text-right text-[11.5px] font-semibold whitespace-nowrap text-muted-foreground"
-                                    scope="col">Amount</th>
-                                <th class="px-4 py-3 text-right text-[11.5px] font-semibold whitespace-nowrap text-muted-foreground"
-                                    scope="col">Still out</th>
-                                <th class="px-4 py-3 text-[11.5px] font-semibold whitespace-nowrap text-muted-foreground"
-                                    scope="col">Note</th>
-                                <th class="relative px-4 py-3" scope="col"><span class="sr-only">Actions</span></th>
-                            </tr>
-                        </thead>
-                        <tbody id="advances-body" class="divide-y divide-muted"></tbody>
-                    </table>
-                </div>
-
-                <div class="border-t border-muted px-4 py-3">
-                    <p id="advances-summary" class="text-[0.78125rem] text-muted-foreground"></p>
-                </div>
-            </div>
-
-        </div>{{-- /data-ws-list --}}
+        @include('partials.staff-advance-section', ['prefix' => 'staff'])
     </div>{{-- /advances --}}
 </div>
 
@@ -780,7 +669,7 @@
             </div>
 
             <div class="space-y-4" data-form-body>
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div class="form-grid">
                     <div>
                         <label for="employee-name" class="field-label">Name <span class="req">*</span></label>
                         <input id="employee-name" name="name" type="text" class="field-input" required
@@ -803,9 +692,7 @@
                         </div>
                         <p class="field-error hidden" data-error-for="designation_id"></p>
                     </div>
-                </div>
-
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                
                     <div>
                         <label for="employee-basis" class="field-label">Paid <span class="req">*</span></label>
                         <select id="employee-basis" name="salary_basis" class="field-input" required></select>
@@ -821,9 +708,7 @@
                                min="0" step="0.01" inputmode="decimal" placeholder="0.00">
                         <p class="field-error hidden" data-error-for="pay_rate"></p>
                     </div>
-                </div>
-
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                
                     <div>
                         <label for="employee-joined" class="field-label">Joined</label>
                         <input id="employee-joined" name="joined_on" type="date" class="field-input">
@@ -841,9 +726,7 @@
                         </p>
                         <p class="field-error hidden" data-error-for="left_on"></p>
                     </div>
-                </div>
-
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                
                     <div>
                         <label for="employee-phone" class="field-label">Phone</label>
                         <input id="employee-phone" name="phone" type="tel" class="field-input"

@@ -153,6 +153,9 @@ class EloquentTransactionRepository implements TransactionRepositoryInterface
                 fn ($search) => $search
                     ->where('notes', 'like', '%'.$filters['search'].'%')
                     ->orWhere('doc_no', 'like', '%'.$filters['search'].'%')
+                    // The number a vendor quotes on the phone is theirs, not ours.
+                    ->when(Transaction::recordsVendorInvoiceNo(), fn ($q) => $q
+                        ->orWhere('vendor_invoice_no', 'like', '%'.$filters['search'].'%'))
                     ->orWhereHas(
                         'party',
                         fn ($party) => $party->where('name', 'like', '%'.$filters['search'].'%')
@@ -167,6 +170,32 @@ class EloquentTransactionRepository implements TransactionRepositoryInterface
                 fn ($query) => $query->whereIn('type', $filters['types'])
             )
             ->when(filled($filters['status'] ?? null), fn ($query) => $query->where('status', $filters['status']))
+            /*
+            | Drop a cancelled document and the reversal that cancelled it, as
+            | one pair — both halves, which is the only way it reads correctly.
+            |
+            | `status = reversed` is the document somebody wishes they had never
+            | posted; `reverses_id is not null` is the entry that undid it. Hide
+            | one and not the other and the list shows a mysterious negative
+            | bill with nothing it refers to, which is worse than showing both.
+            | This is the same pair SalesInsights drops on both halves, for the
+            | same reason.
+            |
+            | **Opt-in, never a default.** Every other reader of this repository
+            | — the party statement, the journal, the expenses list — is asking
+            | a books question where a cancelled document is part of the answer,
+            | and a default that hid it would quietly shorten lists nobody asked
+            | to have shortened. Sales and Purchase ask for it by name.
+            |
+            | A draft is untouched: its status is `draft`, it reverses nothing,
+            | and it has never been in the books to be cancelled out of them.
+            */
+            ->when(
+                (bool) ($filters['hide_cancelled'] ?? false),
+                fn ($query) => $query
+                    ->where('status', '!=', TransactionStatus::Reversed->value)
+                    ->whereNull('reverses_id')
+            )
             ->when(filled($filters['source'] ?? null), fn ($query) => $query->where('source', $filters['source']))
             ->when(filled($filters['from'] ?? null), fn ($query) => $query->whereDate('date', '>=', $filters['from']))
             ->when(filled($filters['to'] ?? null), fn ($query) => $query->whereDate('date', '<=', $filters['to']))
@@ -186,6 +215,14 @@ class EloquentTransactionRepository implements TransactionRepositoryInterface
             ->when(
                 filled($filters['party_id'] ?? null),
                 fn ($query) => $query->where('party_id', $filters['party_id'])
+            )
+            // Exact, not a search: "is INV-2291 already in?" On a server the
+            // manual SQL has not reached, nothing can match, so nothing does.
+            ->when(
+                filled($filters['vendor_invoice_no'] ?? null),
+                fn ($query) => Transaction::recordsVendorInvoiceNo()
+                    ? $query->where('vendor_invoice_no', $filters['vendor_invoice_no'])
+                    : $query->whereRaw('1 = 0')
             )
             // Where the bill stands against what has been paid on it — M16.
             ->when(

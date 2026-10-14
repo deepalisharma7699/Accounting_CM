@@ -66,6 +66,18 @@
                  runtime — the engine decides whether it paints. --}}
             <div class="mt-3 hidden" data-staff-host></div>
 
+            {{-- The vendor's own bill number — a purchase only, so the engine
+                 shows it on that direction and empties it on the other. --}}
+            <label class="field mt-3 hidden" data-bill-vendor-invoice-field>
+                <span class="field-label">Vendor invoice no. <span class="font-normal text-muted-foreground">(optional)</span></span>
+                <input type="text" class="field-input" maxlength="50" data-bill-vendor-invoice
+                       placeholder="As printed on the vendor's bill" autocomplete="off">
+                <span class="field-error hidden" data-error-for="vendor_invoice_no"></span>
+                {{-- Advisory: this vendor's number is already on a bill. --}}
+                <span class="mt-1 hidden rounded-[10px] border border-amber-200 bg-amber-50/60 px-3 py-2
+                             text-[0.8125rem] text-amber-900" role="status" data-bill-vendor-invoice-warning></span>
+            </label>
+
             <label class="field mt-3">
                 <span class="field-label">Notes <span class="font-normal text-muted-foreground">(optional)</span></span>
                 <input type="text" class="field-input" maxlength="500" data-bill-notes
@@ -115,7 +127,7 @@
                                aria-label="Discount on the whole bill, in rupees">
 
                         <button type="button" data-bill-discount-mode
-                                class="h-[2.625rem] w-9 shrink-0 rounded-[10px] border border-border bg-card
+                                class="h-[var(--control-h)] w-9 shrink-0 rounded-[10px] border border-border bg-card
                                        text-sm font-semibold text-muted-foreground
                                        hover:bg-secondary hover:text-foreground"
                                 aria-label="Bill discount is in rupees — switch to a percentage">&#8377;</button>

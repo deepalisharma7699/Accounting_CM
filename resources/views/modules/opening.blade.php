@@ -60,16 +60,23 @@
          them. --}}
     <div id="reconciliation" class="mb-4 hidden"></div>
 
-    <div class="surface mb-4 p-4" id="declare-panel" data-requires-permission="UPDATE:WORKSPACE">
+    {{-- `form-card` rather than `p-4`, because the padding was never the point:
+         it is the two lines that make this a `form-surface`, so the grid inside
+         counts its columns against this panel's 1246px instead of falling back
+         to the two the media query gives a surface it cannot measure. The
+         padding is the same figure either way (`--pad-surface`). --}}
+    <div class="surface form-card mb-4" id="declare-panel" data-requires-permission="UPDATE:WORKSPACE">
         <h3 class="text-[0.9375rem] font-semibold text-foreground">Declare what you had</h3>
 
         <p class="mt-1 text-[0.8125rem] text-muted-foreground">
-            Save your existing stock list, customer balances and supplier balances as a CSV and paste it
-            below — or type the rows in by hand. Nothing is posted until you have seen exactly what will be.
+            Choose a CSV of your existing stock, customer balances and supplier balances, paste one below,
+            or type the rows in by hand. To fill in stock for products you have already created, download
+            the opening-stock template from the Stock card. Nothing is posted until you have seen exactly
+            what will be.
         </p>
 
         <form id="opening-form" class="mt-4 space-y-4" novalidate>
-            <div class="grid gap-4 sm:grid-cols-2">
+            <div class="form-grid">
                 <label class="block">
                     <span class="field-label">As at</span>
                     <input type="date" name="date" id="opening-date" class="field-input">
@@ -88,12 +95,22 @@
                 </label>
             </div>
 
-            <label class="block">
-                <span class="field-label">Rows</span>
+            <div>
+                <div class="flex flex-wrap items-center justify-between gap-2">
+                    <label for="opening-csv" class="field-label">Rows</label>
+                    {{-- Read in the browser into the box below, so a file and a
+                         paste are one request and one preview. Its own label, so
+                         pressing "Rows" never opens a file dialog. --}}
+                    <label class="btn btn-ghost btn-sm cursor-pointer">
+                        <x-icon name="file-plus" :size="14" />
+                        Choose a CSV file
+                        <input type="file" id="opening-file" accept=".csv,text/csv,text/plain" class="sr-only">
+                    </label>
+                </div>
                 <textarea name="csv" id="opening-csv" rows="10" spellcheck="false"
-                          class="field-input font-mono text-[0.8125rem]"
+                          class="field-input mt-1 !h-auto py-2 font-mono text-[0.8125rem]"
                           placeholder="kind,name,variant,type,quantity,unit_cost,amount,account"></textarea>
-            </label>
+            </div>
 
             {{-- The column guide is filled from GET /opening-balances/meta rather
                  than written here, so the instructions cannot drift from the rules

@@ -106,9 +106,9 @@ particular bill. It is the wrong default for a receipt raised **from an
 invoice's own drawer**: somebody collecting there means *this* invoice, even
 where an older one is still open. So the drawer names the allocation explicitly.
 
-The "paid in full" shortcut fills in what is left on *this* invoice rather than
-its total, because a part-paid invoice being topped up is the common case at a
-counter. "On credit" is not offered on that surface at all — it records money
+The drawer opens on "Paid in full", which is what is left on *this* invoice
+rather than its total, because a part-paid invoice being topped up is the common
+case at a counter. "On credit" is not offered on that surface at all — it records money
 that has already changed hands, and the invoice behind it is already the credit.
 
 ### The drawer shows the margin, and the customer's copy cannot
@@ -187,7 +187,7 @@ came from exactly as it stands.
 
 | Document | Offered |
 | --- | --- |
-| Draft | Post, Discard |
+| Draft | **Continue editing**, Post, Discard |
 | Posted invoice, nothing collected and nothing credited | Collect payment, Accept return, **Correct**, Repeat, Print, Share, Reverse |
 | Posted invoice, part paid or part credited | Collect payment, Accept return, Repeat, Print, Share, Reverse |
 | Posted invoice, settled | Accept return, Repeat, Print, Share, Reverse |
@@ -196,6 +196,25 @@ came from exactly as it stands.
 The preview a freshly posted invoice lands on offers the same two, gated the same
 way — see [the customer's copy comes up over it](#and-the-customers-copy-comes-up-over-it).
 | Reversed | nothing but Close |
+
+### A draft is continued, not only posted or thrown away
+
+Somebody saves an invoice as a draft because it is not finished, so the drawer's
+first offer is **Continue editing**. It puts the draft back in this module's own
+create form — `components/bill-revision.js`, the same loader a correction uses —
+with everything it was saved with: the party, the date, the notes, each line at
+its rate with its discount in the unit it was typed in and its tax basis, the
+bill discount, the payment split and a short "paid in full", and who did the
+work. A banner names the draft; **Stop editing** leaves it as last saved.
+
+From there the form's own buttons write to that draft: "Save as a draft" rewrites
+it (`PATCH /transactions/{id}`), and "Review & post" rewrites it and then posts
+it (`/post`). It keeps its id, and it takes its number only when it posts. If the
+form is already holding unsaved work, continuing asks before replacing it. If the
+draft was posted or discarded elsewhere in the meantime, the form says which,
+rather than failing with a generic error. The control needs `UPDATE` and `WRITE`
+on transactions — `UPDATE` to rewrite a draft, `WRITE` to reach the create form
+it is finished in.
 
 **Correct disappears the moment anything is against the invoice**, because the
 receipt or the credit note would be left pointing at a cancelled document. The
@@ -224,6 +243,85 @@ which §2.2 says to redesign rather than build. The drawer's body has three stat
 and its footer changes with them. The only thing that opens over it is
 `confirmAction()`, for the acts that cannot be undone.
 
+### A sale may name nobody, if it is paid in full
+
+A customer who will not give a name or a number is still a sale: the stock left,
+the cash came in and the GST is owed. So the customer box may be left empty — a
+**walk-in sale** — on one condition, enforced in the posting engine
+(`assertWalkInSettled`) and stated on the confirmation before Post is enabled: it
+is **paid in full at the counter**. A balance left on it would sit in Sundry
+Debtors against nobody, where no statement lists it and no receipt can be pointed
+at it (`WALK_IN_NOT_PAID_IN_FULL`). A purchase still has to name its vendor.
+
+The option is offered **on the box itself**, not discovered at the confirmation:
+the customer label reads "(optional)" on a sale and a line under the empty box
+says that leaving it blank makes a walk-in sale, paid in full now. A name typed
+but never picked from the list leaves the same empty id, so that state gets its
+own amber line — otherwise "Ramesh" in the box reads as Ramesh's invoice. It is
+the picker's `blank` option; the bill document passes it for a sale only, and a
+locked picker (a workshop bill) shows none.
+
+### How it was settled is chosen, and the boxes obey it
+
+The payment section (`components/payment-rows.js`, shared by every screen that
+takes money) used to *derive* on credit / part paid / paid in full from whatever
+the amount boxes added up to, so the chips and the boxes were not connected:
+"On credit" still asked for a mode and an amount, "Paid in full" filled the box
+once and left it editable — and stale when a line was added afterwards, quietly
+turning a paid bill into a part-paid one. The state is now held, and it decides
+the screen:
+
+- **On credit** — no payment rows at all; the summary says what goes on account.
+- **Paid in full** — the amount is not typed. The last row is read-only and *is*
+  the total, following it as lines change. "+ Split" adds a row above it: type
+  the cash part, the last row takes the rest.
+- **Part paid** — typed, and must be more than nothing and less than the total;
+  either end is refused on the form with the state it should have been.
+
+A cash row asks for no reference; every other mode asks for the thing by name,
+and a cheque's number is required. `problem()` checks all of this before the
+confirmation opens — the server still checks it too.
+
+A sale starts on **Paid in full**, a purchase on **On credit**, and money that
+has already moved (a receipt, an expense, payroll) on **Paid in full**. While a
+sale names nobody, the other two chips are disabled with the reason beside them
+(`mustSettle`) — naming a customer gives them back. The draft remembers the
+chosen state.
+
+`TransactionType::admitsWalkIn()` is the one place that says which document may do
+this, and `requiresParty()` reads it. The role check still applies whenever a party
+*is* named. A draft may be parked with nobody on it; the rule bites when it posts.
+
+A walk-in sale reads "Walk-in" on the list and in the drawer. It cannot take a
+credit note (`RETURN_AGAINST_WALK_IN`) — a credit note credits a customer's
+account and there is none — so the drawer offers no Accept return; **Cancel this
+invoice** is the way back, and it is exact, because the counter payment is
+reversed with it.
+
+### Adding the customer afterwards
+
+Somebody who bought as a walk-in may come back for a GST invoice in their name.
+The customer is not a label on a sale: it decides the place of supply, and their
+GSTIN is what makes the invoice evidence for their input tax credit. So **Add
+customer** — a state of the drawer, and a button on the GST invoice preview — calls
+`POST /transactions/{id}/assign-customer`, which **reverses the sale and reissues
+it under the customer** with a new number, through `PostingEngine::revise()`.
+
+The server builds the replacement from the sale itself — the same lines, rates,
+discounts, inclusive flags, date and counter payment, and who did the work — so
+the only question asked is who. That is also why it does not share Correct's
+refusal of a paid bill: that refusal protects a *receipt* allocated against the
+invoice, and a walk-in sale cannot have one, while its own counter split is
+reversed and posted again with it. Nothing comes off the shelf twice and no money
+moves. It needs WRITE and UPDATE on transactions, as a correction does, and keeps
+a correction's refusal of a sale whose cost basis has moved
+(`REVISION_WOULD_RESTATE_COST`) — then the GST invoice is printed without a name.
+
+Existing customers only: the drawer's picker has no "+ Add", because
+`quick-party.js`'s form lives on the create surface, which is detached while the
+drawer is open over the list, and a second copy of those fields is what §5.2 rules
+out. The drawer says to add a new one on the Customers card first.
+
 ### Credit notes are on the same list
 
 "What did we sell them" and "what came back" are one question asked of one
@@ -247,7 +345,9 @@ is next looked at, not at a moment nobody was watching.
 ### …and the customer's copy comes up over it
 
 A posted sale opens `#invoice-preview` — level 2, the customer's document as they
-would receive it, with **Print**, **Share** and **Next invoice**. It is the other
+would receive it. It opens on the **estimate**, with **Print** and **Get GST
+invoice**; the GST invoice adds **Share** (see billing-module.md, "The estimate
+first"). It is the other
 half of raising an invoice, and it used to be missing: the only route to the copy
 was to show the list, find the row just written and open its drawer, for every
 single sale.
@@ -301,6 +401,35 @@ Shareability is re-asked on every read, which is what makes a reversed invoice
 stop opening without anything having to remember. A bad token, a revoked one and
 a reversed one all answer the same 404. See
 [billing-module.md](billing-module.md#the-customers-copy--m20).
+
+### Cancelling is what reversing is called on this screen
+
+A posted document is immutable and is corrected by **reversing** it — that has
+not changed and cannot. Posting a purchase recomputes the weighted average cost
+of every variant on it, so once anything has been sold the shelf is valued off
+that document and deleting the row could not un-blend it; a sale issues at an
+average that is on no document at all, which is what `REVISION_WOULD_RESTATE_COST`
+already refuses. The GST position and the audit trail have to survive either way.
+
+What changed is the wording and the list. The control says **"Cancel this
+&lt;noun&gt;"** rather than "Reverse", because people looking for "delete" do not
+recognise the accounting term, and because "Cancel" alone beside "Close" in a
+drawer footer reads as "cancel what I am doing". The confirmation then says what
+cancelling actually does.
+
+And the cancelled pair — the document with `status = reversed` **and** the entry
+with `reverses_id` that undid it — comes **off the working list by default**,
+behind a "Show cancelled" toggle. Both halves go together: hiding one would leave
+a negative document referring to nothing. Nothing is hidden from the books; the
+pair is untouched in the ledger, on the Day Book and on the audit trail, which is
+the whole reason it is safe to take off this one screen.
+
+It is a `hide_cancelled` filter on `GET /transactions`, and it is **opt-in at the
+API**: the party statement, the journal and the expenses list are all asking
+books questions where a cancelled document is part of the answer, so the default
+had to stay exactly as it was. The screen also stops sending it the moment
+somebody picks a state from the filter — asking for "Reversed" and being handed
+an empty table would be the screen doing the opposite of what it was told.
 
 ## Idempotency
 
@@ -373,6 +502,10 @@ needed, so switching this module on re-seeds nothing.
   (§8.2).
 - `SaleCorrectionTest` — the correction itself, including the cost-restatement
   refusal, what a refused correction leaves behind, and the double tap.
+- `WalkInSaleTest` — a sale with nobody named: posted only when paid in full, its
+  stock and cash, cancelling it rather than returning it, reissuing it in a
+  customer's name (and the refusal once its cost has moved), and the estimate's
+  figures adding up to the total.
 - `ReturnTest`, `SettlementApiTest`, `AllocationTest`, `RoundOffTest`,
   `InvoiceShareTest`, `BillPostingTest` — the acts, each where it lives.
 - `PagesRenderTest` — the module's markup, fetched through `/modules/sales`

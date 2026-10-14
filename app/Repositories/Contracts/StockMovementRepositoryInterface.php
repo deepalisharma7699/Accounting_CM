@@ -116,4 +116,17 @@ interface StockMovementRepositoryInterface
      * @return array<int, int>
      */
     public function movedVariantIds(array $variantIds): array;
+
+    /**
+     * The variant ids that have moved through anything other than an opening
+     * declaration, out of the ones given.
+     *
+     * An opening balance and its reversal are both typed `opening` on the
+     * transaction, so neither counts as trading: a variant whose only history
+     * is a declaration — reversed or not — is reported as untouched.
+     *
+     * @param  array<int, int>  $variantIds
+     * @return array<int, int>
+     */
+    public function tradedVariantIds(array $variantIds): array;
 }

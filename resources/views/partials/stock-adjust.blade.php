@@ -35,7 +35,7 @@
 
             <div class="max-h-[55vh] space-y-4 overflow-y-auto px-5 py-4">
 
-                <div class="grid gap-4 sm:grid-cols-2">
+                <div class="form-grid">
                     <label class="field">
                         <span class="field-label">Date</span>
                         <input type="date" name="date" class="field-input" required>
@@ -73,7 +73,7 @@
                         <p class="mt-0.5 text-xs text-muted-foreground" id="stock-adjust-variant-position"></p>
                     </div>
 
-                    <div class="grid gap-4 sm:grid-cols-2">
+                    <div class="form-grid">
                         <label class="field">
                             <span class="field-label">Count on the shelf</span>
                             <input type="text" name="counted" class="field-input font-mono" inputmode="decimal"

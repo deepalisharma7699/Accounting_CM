@@ -143,9 +143,11 @@ class AccountTypeTest extends TestCase
     public function the_catalogue_covers_the_accounts_the_engine_posts_by_name(): void
     {
         // Fifteen from the PRD, plus Round Off — added when the workshop gained
-        // the option of taking a bill to the nearest rupee, because the paise it
-        // drops have to land in an account the engine knows by name.
-        $this->assertCount(16, SystemAccount::cases());
+        // the option of rounding a bill, because the paise it drops have to land
+        // in an account the engine knows by name — plus Discount Allowed and
+        // Discount Received, for a receipt or payment that settles an invoice
+        // for less than was owing on it.
+        $this->assertCount(18, SystemAccount::cases());
 
         // Staff Advance and Salary Expense are still in the catalogue, and are
         // no longer waiting for anything: they were seeded from the first day,

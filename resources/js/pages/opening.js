@@ -365,6 +365,45 @@ function invalidate() {
     inForm('#preview-panel').classList.add('hidden');
 }
 
+/**
+ * A chosen file is read into the box, not uploaded beside it.
+ *
+ * So there is one thing the preview was run against and one thing the post
+ * sends — the text in front of the owner — and the rule that an edit after a
+ * check takes the post button away covers a file exactly as it covers a paste.
+ * The file's name goes on the record, which is the question somebody asks when
+ * a figure looks wrong later: which file was this.
+ */
+async function readChosenFile(event) {
+    const input = event.target;
+    const file = input.files?.[0];
+
+    // Cleared at once, so choosing the same file again after editing it on
+    // disk still fires a change.
+    input.value = '';
+
+    if (!file) return;
+
+    clearFormErrors(openingForm);
+
+    // The server's own ceiling on the box (OpeningBalanceRequest), stated here
+    // so a file that big is refused with a reason before it is sent.
+    if (file.size > 4 * 1024 * 1024) {
+        showFormMessage(openingForm, `${file.name} is larger than 4 MB. Split it into smaller files and declare them one at a time.`);
+
+        return;
+    }
+
+    try {
+        inForm('#opening-csv').value = await file.text();
+        inForm('#opening-filename').value = file.name.slice(0, 255);
+        invalidate();
+        inForm('#preview-opening').focus();
+    } catch {
+        showFormMessage(openingForm, `${file.name} could not be read. Save it again as CSV and choose it once more.`);
+    }
+}
+
 /* -------------------------------------------------------------------------
  | Import
  | ---------------------------------------------------------------------- */
@@ -486,6 +525,7 @@ export default async function initOpening() {
     openingForm.addEventListener('submit', preview);
     inForm('#import-opening').addEventListener('click', commit);
     inForm('#opening-csv').addEventListener('input', invalidate);
+    inForm('#opening-file').addEventListener('change', readChosenFile);
     inForm('#opening-date').addEventListener('change', invalidate);
 
     inForm('#load-sample').addEventListener('click', () => {

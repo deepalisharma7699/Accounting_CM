@@ -1,100 +1,113 @@
 {{--
-    Transactions — settlement and the journal voucher. C3.
+    Money in & out — expenses, payments, receipts, advances, the journal voucher
+    and the owner's personal diary. Key `journal`.
 
-    ## What this module stopped being
+    ## Why one card
 
-    It was four tabs over the whole transaction list — sales, purchases,
-    expenses and drafts — with the receipt, the payment and the journal grid
-    behind three buttons on top of it. Every part of that list now has a better
-    home: Sales lists invoices and credit notes, Purchase lists bills and debit
-    notes, Expenses lists expenses, and Insights' Day Book lists every posted
-    document including the journals none of those show. A fifth copy here would
-    have been four screens answering one question (§5.1).
+    It was two: **Transactions** (receipt, payment, voucher) and **Expenses**. A
+    workshop does not think in document types — it thinks "money came in" and
+    "money went out" — and two cards in the same band answering that question
+    meant guessing which to open. So Expenses moved here as a tab, the staff
+    advance gained a second way in beside the Staff card's own, and the owner's
+    personal diary was added. The registry key stays `journal`, which is the
+    card's address; `bills` is gone from config/modules.php and its URL redirects
+    here (routes/web.php, shell.js).
 
-    What was only ever here is the two structural holes, and they are the whole
-    of the module now:
+    Nothing was forked to do it: the expense section is the Expenses card's own
+    markup and code moved, Receipt and Payment are still one partial included
+    twice, and the staff advance is one partial and one component mounted by both
+    this card and Staff.
 
-    - **Money that arrives or leaves without a document.** A customer clearing
-      three invoices with one cheque, or paying on account before anything is
-      raised, had nowhere to go. Settling on the *way in* was never the gap —
-      Sales collects against the invoice its drawer is open on and Purchase pays
-      a bill the same way.
-    - **The manual journal voucher.** CLAUDE.md names it as the correction
-      mechanism for everything else in the books; it is why the Insights overview
-      is allowed to disagree with the P&L at all. Without it the only correction
-      available anywhere was reversing a whole document.
+    ## Six sections, and the shared renderer used six times
 
-    ## Three sections, and the shared renderer used three times
+    Each section is an ordinary §2A workspace mounted on its own root, so each
+    inherits the form/list swap, the one switch control and the count badge with
+    no per-module flow code. Sections mount lazily, on the first click of their
+    tab (§2.5, §7.2), and two of them load their code only then.
 
-    Receipt, Payment and Journal voucher are three write acts on one card, so
-    this follows **Staff** rather than inventing a shape: each section is an
-    ordinary §2A workspace mounted on its own root, so all three inherit the
-    form/list swap, the one switch control and the count badge with no per-module
-    flow code. Sections mount lazily, on the first click of their tab (§2.5,
-    §7.2) — a workshop that only ever takes receipts never pays for the voucher
-    grid's chart of accounts.
+    It opens on **Expense**, which is what most people come to this card for.
 
-    It opens on **Receipt**, which is the one done most, rather than asking which
-    of the three.
+    ## Which tabs a person sees
+
+    The card is READ:TRANSACTIONS. Staff advance additionally needs READ:STAFF —
+    which a data-entry clerk deliberately does not hold, because it guards what
+    people are paid — and Personal needs PERSONAL_EXPENSES, which only OWNER is
+    given. A tab a person may not use is not drawn.
 
     ## Which invoices the money settled — level 2
 
     The allocation screen lives in the drawer of a posted receipt or payment, and
-    nowhere else. `POST /transactions/{id}/allocate` and
-    `GET /transactions/{id}/open-bills` have existed and been tested since M16
-    with no caller anywhere; this is the screen that answers them.
-
-    It is *after* the fact on purpose. A receipt with no allocations named is
-    applied to the party's open bills oldest first, which is what an accounts
-    department does when nobody says otherwise — but it is still a decision about
-    which invoice a cheque was for, and only the operator can make it. Insights
-    reports an unallocated receipt as a worklist and refuses to net it away for
-    the same reason: **nothing may guess which invoice a cheque was for.** What
-    was missing was somewhere to answer.
+    nowhere else. A receipt with no allocations named is applied to the party's
+    open bills oldest first — a default, not an answer — and only the operator can
+    change it. **Nothing may guess which invoice a cheque was for.**
 
     ## What is deliberately not here
 
-    **No transaction list.** See above; three enabled cards already draw it.
-
-    **No draft.** Every converted module posts outright, and this was the last
-    screen in the product that parked a transaction.
+    **No transaction list.** Sales, Purchase and Insights' Day Book already draw
+    it. **No draft.** Money that has moved is a fact, not a work in progress.
 --}}
 <div class="mx-auto max-w-[1080px]">
 
     {{--
-        Three write acts, named. Not one "new transaction" that then asks which:
-        collecting from a customer, paying a supplier and writing a correcting
-        voucher are different jobs done by different people at different moments,
-        and a receipt is much the commonest — it should be one click.
+        Six acts, named. Not one "new transaction" that then asks which: paying
+        the electricity, paying a supplier, collecting from a customer, handing a
+        fitter an advance and writing a correcting voucher are different jobs done
+        by different people at different moments.
 
         Each section root below carries exactly one [data-ws-form] and one
         [data-ws-list], which is what `mountWorkspace()` looks for. The heading
         and the switch control above each pair are the workspace's, so there is
         no <h1> and no create button written out here (§2A.3).
     --}}
-    <div class="tab-strip mb-5" role="tablist" aria-label="Transactions" data-txn-tabs>
-        <button type="button" class="tab" role="tab" data-txn-tab="receipt" aria-selected="true">
-            <x-icon name="arrow-down-left" :size="15" />
-            Receipt
+    <div class="tab-strip mb-5" role="tablist" aria-label="Money in and out" data-txn-tabs>
+        <button type="button" class="tab" role="tab" data-txn-tab="expense" aria-selected="true">
+            <x-icon name="receipt" :size="15" />
+            Expense
         </button>
 
         <button type="button" class="tab" role="tab" data-txn-tab="payment" aria-selected="false">
             <x-icon name="arrow-up-right" :size="15" />
-            Payment
+            Pay a vendor
+        </button>
+
+        <button type="button" class="tab" role="tab" data-txn-tab="receipt" aria-selected="false">
+            <x-icon name="arrow-down-left" :size="15" />
+            Receipt
+        </button>
+
+        <button type="button" class="tab" role="tab" data-txn-tab="advance" aria-selected="false"
+                data-requires-permission="READ:STAFF">
+            <x-icon name="credit-card" :size="15" />
+            Staff advance
         </button>
 
         <button type="button" class="tab" role="tab" data-txn-tab="journal" aria-selected="false">
             <x-icon name="file-text" :size="15" />
             Journal voucher
         </button>
+
+        <button type="button" class="tab" role="tab" data-txn-tab="personal" aria-selected="false"
+                data-requires-permission="READ:PERSONAL_EXPENSES">
+            <x-icon name="dollar-sign" :size="15" />
+            Personal
+        </button>
     </div>
 
-    <div data-txn-section="receipt">
-        @include('partials.settlement-section', ['direction' => 'receipt'])
+    <div data-txn-section="expense">
+        @include('partials.expense-section')
     </div>
 
     <div data-txn-section="payment" hidden>
         @include('partials.settlement-section', ['direction' => 'payment'])
+    </div>
+
+    <div data-txn-section="receipt" hidden>
+        @include('partials.settlement-section', ['direction' => 'receipt'])
+    </div>
+
+    {{-- The same partial and component the Staff card's Advances tab uses. --}}
+    <div data-txn-section="advance" hidden>
+        @include('partials.staff-advance-section', ['prefix' => 'money'])
     </div>
 
     {{--
@@ -119,7 +132,7 @@
 
             <form id="voucher-form" novalidate class="space-y-4">
 
-                <section class="surface p-5 sm:p-6">
+                <section class="surface form-card">
                     <h3 class="text-sm font-bold text-foreground">What this voucher is for</h3>
 
                     <p class="mt-1 text-[0.8125rem] text-muted-foreground">
@@ -129,7 +142,7 @@
                         correction mechanism for all of them.
                     </p>
 
-                    <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                    <div class="mt-4 form-grid">
                         <div>
                             <label for="voucher-date" class="field-label">Date</label>
                             <input id="voucher-date" name="date" type="date" class="field-input" required>
@@ -263,11 +276,16 @@
 
         </div>{{-- /data-ws-list --}}
     </div>
+
+    <div data-txn-section="personal" hidden>
+        @include('partials.personal-expense-section')
+    </div>
 </div>
 
 {{--
-    One document, read without leaving the list — level 2, and one drawer for all
-    three sections rather than one each (§5.1).
+    One document, read without leaving the list — level 2, and one drawer for
+    Receipt, Payment and the voucher rather than one each (§5.1). Expense keeps
+    its own drawer, below, because what it shows is the account it was booked to.
 
     A posted transaction is immutable and there is no edit here. What it offers
     is the two things a posted settlement or voucher still permits: **reverse**,
@@ -309,5 +327,130 @@
         <div class="flex-1 overflow-y-auto px-6 py-5" data-drawer-body></div>
 
         <div class="flex flex-wrap items-center gap-2 border-t border-muted px-6 py-4" data-drawer-actions></div>
+    </div>
+</div>
+
+{{--
+    One expense, read without leaving the list — level 2.
+
+    A drawer rather than a modal, for the reason every drawer here is one: what
+    this cost is read while thinking about the row above it, and losing the list
+    to look is what makes people stop looking.
+
+    There is no edit and no correct. A posted document is immutable, and an
+    expense has no `revise` path — that is for bills, whose replacement has to be
+    re-priced and re-taxed. What an expense has is **reverse**, which posts the
+    mirror entry and leaves both documents on the record.
+--}}
+<div id="expense-drawer" class="drawer-backdrop hidden" data-modal role="dialog" aria-modal="true"
+     aria-labelledby="expense-drawer-title">
+    <div class="drawer-panel max-w-[560px]">
+        <div class="border-b border-muted px-6 py-4">
+            <div class="flex items-start justify-between gap-2">
+                <div class="flex min-w-0 items-center gap-2.5">
+                    <span class="grid size-9 shrink-0 place-items-center rounded-[10px] bg-violet-50 text-violet-600">
+                        <x-icon name="credit-card" :size="16" />
+                    </span>
+                    <div class="min-w-0">
+                        <h3 id="expense-drawer-title" data-drawer-title
+                            class="truncate text-[15.5px] font-bold leading-tight text-foreground"></h3>
+                        <p data-drawer-subtitle class="truncate text-xs text-muted-foreground"></p>
+                    </div>
+                </div>
+
+                <div class="flex shrink-0 items-center gap-2">
+                    <span data-drawer-status></span>
+                    <button type="button" class="btn btn-ghost btn-icon" data-modal-close aria-label="Close">
+                        <x-icon name="x" :size="16" />
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex-1 overflow-y-auto px-6 py-5" data-drawer-body></div>
+
+        <div class="flex flex-wrap gap-2 border-t border-muted px-6 py-4" data-drawer-actions></div>
+    </div>
+</div>
+
+{{--
+    One personal entry — level 2. Read, and as a *state* of the same drawer
+    with the create form adopted into it, edited. Deleted through a confirm
+    (level 3). Nothing here touches the books, so a diary line is simply
+    corrected rather than reversed.
+--}}
+<div id="personal-drawer" class="drawer-backdrop hidden" data-modal role="dialog" aria-modal="true"
+     aria-labelledby="personal-drawer-title">
+    <div class="drawer-panel max-w-[520px]">
+        <div class="border-b border-muted px-6 py-4">
+            <div class="flex items-start justify-between gap-2">
+                <div class="flex min-w-0 items-center gap-2.5">
+                    <span class="grid size-9 shrink-0 place-items-center rounded-[10px] bg-rose-50 text-rose-600">
+                        <x-icon name="dollar-sign" :size="16" />
+                    </span>
+                    <div class="min-w-0">
+                        <h3 id="personal-drawer-title" data-drawer-title
+                            class="truncate text-[15.5px] font-bold leading-tight text-foreground"></h3>
+                        <p data-drawer-subtitle class="truncate text-xs text-muted-foreground"></p>
+                    </div>
+                </div>
+
+                <button type="button" class="btn btn-ghost btn-icon" data-modal-close aria-label="Close">
+                    <x-icon name="x" :size="16" />
+                </button>
+            </div>
+        </div>
+
+        <div class="flex-1 overflow-y-auto">
+            <div class="px-6 py-5" data-drawer-body></div>
+
+            {{-- Where the create form is adopted for an edit. Empty otherwise. --}}
+            <div class="hidden px-6 py-5" data-personal-edit-slot></div>
+        </div>
+
+        <div class="flex flex-wrap gap-2 border-t border-muted px-6 py-4" data-drawer-actions></div>
+    </div>
+</div>
+
+{{--
+    The personal categories — level 2, opened from the form or the list, never
+    from the entry drawer (§2.2). Add, rename, archive, restore, and delete one
+    nothing is filed under; a category in use is archived instead, so the entries
+    keep the word that explains them.
+--}}
+<div id="personal-categories-drawer" class="drawer-backdrop hidden" data-modal role="dialog" aria-modal="true"
+     aria-labelledby="personal-categories-title">
+    <div class="drawer-panel max-w-[460px]">
+        <div class="border-b border-muted px-6 py-4">
+            <div class="flex items-start justify-between gap-2">
+                <div class="min-w-0">
+                    <h3 id="personal-categories-title" class="text-[15.5px] font-bold leading-tight text-foreground">
+                        Personal categories
+                    </h3>
+                    <p class="mt-0.5 text-xs text-muted-foreground">What your own spending is filed under.</p>
+                </div>
+                <button type="button" class="btn btn-ghost btn-icon" data-modal-close aria-label="Close">
+                    <x-icon name="x" :size="16" />
+                </button>
+            </div>
+        </div>
+
+        <div class="flex-1 overflow-y-auto px-6 py-5">
+            <form data-personal-category-form novalidate class="mb-5" data-requires-permission="WRITE:PERSONAL_EXPENSES">
+                <label for="personal-category-name" class="field-label">Add a category</label>
+                <div class="flex flex-wrap items-start gap-2">
+                    <input id="personal-category-name" name="name" type="text" class="field-input min-w-0 flex-1"
+                           maxlength="80" autocomplete="off" placeholder="Pet care">
+                    <button type="submit" class="btn btn-primary">Add</button>
+                </div>
+                <p class="field-error hidden" data-error-for="name"></p>
+            </form>
+
+            <div data-personal-category-list></div>
+        </div>
+
+        <div class="flex justify-end border-t border-muted px-6 py-4">
+            <button type="button" class="btn btn-secondary btn-sm" data-modal-close>Done</button>
+        </div>
     </div>
 </div>

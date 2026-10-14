@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * The specific thing that is bought and sold: this motor, at this rating, at this
@@ -118,6 +119,20 @@ class ItemVariant extends Model
         return $this->belongsTo(Item::class);
     }
 
+    /**
+     * What one of this consumes, where it is something the workshop makes.
+     *
+     * Empty for almost everything: a recipe belongs to a rewind or a service,
+     * not to a bearing. See {@see ItemComponent}, and note that nothing posted
+     * ever reads it — a bill expands it once and keeps the movements.
+     *
+     * @return HasMany<ItemComponent, $this>
+     */
+    public function components(): HasMany
+    {
+        return $this->hasMany(ItemComponent::class, 'parent_variant_id');
+    }
+
     /* ---------------------------------------------------------------------
      | Attributes
      |-------------------------------------------------------------------- */
@@ -173,6 +188,25 @@ class ItemVariant extends Model
      * different sequences read identically — the same reason a party's roles are
      * stored in enum order.
      */
+    /**
+     * The variant with its product: "Copper Winding Wire · 18 SWG".
+     *
+     * Just the product where the variant has no name of its own — its label
+     * then *is* the product's name, and printing it twice read as
+     * "Motor Rewinding · Motor Rewinding".
+     */
+    public function fullLabel(): string
+    {
+        $family = $this->item?->name;
+        $label = $this->displayLabel();
+
+        if ($family === null || $family === '' || $label === $family) {
+            return $label;
+        }
+
+        return $family.' · '.$label;
+    }
+
     public function derivedLabel(): ?string
     {
         $category = $this->item?->category;

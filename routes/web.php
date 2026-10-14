@@ -153,11 +153,14 @@ foreach (array_keys(Modules::declared()) as $module) {
 Route::redirect('/parties', '/dashboard#customers')->name('parties.index');
 
 /*
-| Two screens that were merged into a card rather than converted onto one of
+| Screens that were merged into a card rather than converted onto one of
 | their own, so the loop above no longer declares them: `parties` became
-| Customers and Vendors, and `ledger` became the trial-balance view of
-| Accounting (C5). Each redirects one step further along the same chain rather
+| Customers and Vendors, `ledger` became the trial-balance view of
+| Accounting (C5), and `bills` became the Expense tab of Money in & out. Each redirects one step further along the same chain rather
 | than being deleted — the route names are what the rest of the application
 | links by, and a missing one is a 500 where a redirect is a shrug.
 */
 Route::redirect('/ledger', '/dashboard#accounts')->name('ledger.index');
+
+// `bills` (Expenses) became the Expense tab of Money in & out (key `journal`).
+Route::redirect('/bills', '/dashboard#journal?tab=expense')->name('bills.index');

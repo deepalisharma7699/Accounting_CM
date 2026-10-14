@@ -36,6 +36,7 @@ use App\Services\Accounting\Posting\PostingTemplateRegistry;
 use App\Services\Accounting\Posting\SettlesThroughPaymentModes;
 use App\Services\Accounting\Posting\StatesItsOwnTotal;
 use App\Services\Accounting\Posting\StockChange;
+use App\Services\Accounting\Posting\Templates\SettlementTemplate;
 use App\Services\Inventory\StockLedgerService;
 use App\Support\Money;
 use App\Support\Quantity;
@@ -150,7 +151,35 @@ class PostingEngine
             againstTransactionId: isset($input['against_transaction_id'])
                 ? (int) $input['against_transaction_id']
                 : null,
+            settlementDiscount: $template instanceof SettlementTemplate
+                ? $template->discountFrom($input)
+                : null,
+            // The vendor's own bill number. A purchase's alone — on anything
+            // else it would be a number nobody issued.
+            vendorInvoiceNo: $type === TransactionType::Purchase
+                ? $this->trimmedOrNull($input['vendor_invoice_no'] ?? null)
+                : null,
         );
+    }
+
+    /**
+     * The vendor's bill number as a column write — or nothing, on a server
+     * where the manual SQL has not been run yet. Spread into the row.
+     *
+     * @return array<string, string|null>
+     */
+    private function vendorInvoiceNoOf(PostingBatch $batch): array
+    {
+        return Transaction::recordsVendorInvoiceNo()
+            ? ['vendor_invoice_no' => $batch->vendorInvoiceNo]
+            : [];
+    }
+
+    private function trimmedOrNull(mixed $value): ?string
+    {
+        $value = trim((string) $value);
+
+        return $value === '' ? null : $value;
     }
 
     /**
@@ -244,6 +273,7 @@ class PostingEngine
                 'date' => $batch->date,
                 'total' => $batch->total()->amount(),
                 'notes' => $batch->notes,
+                ...$this->vendorInvoiceNoOf($batch),
                 'draft_lines' => null,
                 'draft_payments' => null,
                 'draft_payload' => null,
@@ -267,7 +297,7 @@ class PostingEngine
             'total' => $batch->total()->amount(),
         ]);
 
-        return $transaction->load(['entries.account', 'payments', 'lines.stockMovement', 'stockMovements', 'creator']);
+        return $transaction->load(['entries.account', 'payments', 'lines.stockMovements', 'stockMovements', 'creator']);
     }
 
     /**
@@ -297,6 +327,7 @@ class PostingEngine
             'date' => $batch->date,
             'total' => $batch->total()->amount(),
             'notes' => $batch->notes,
+            ...$this->vendorInvoiceNoOf($batch),
             'draft_lines' => $batch->toArray(),
             // Held on the row rather than in transaction_payments, exactly as
             // the intended lines are held out of the ledger: nothing reading
@@ -330,6 +361,7 @@ class PostingEngine
             'date' => $batch->date,
             'total' => $batch->total()->amount(),
             'notes' => $batch->notes,
+            ...$this->vendorInvoiceNoOf($batch),
             'draft_lines' => $batch->toArray(),
             'draft_payments' => $batch->hasPayments() ? $batch->paymentsToArray() : null,
             'draft_payload' => $batch->payload,
@@ -373,6 +405,7 @@ class PostingEngine
                 // somebody discarded the draft — M16.
                 'doc_no' => $this->numbers->assign($draft->type, $draft->date),
                 'total' => $batch->total()->amount(),
+                ...$this->vendorInvoiceNoOf($batch),
                 'draft_lines' => null,
                 'draft_payments' => null,
                 'draft_payload' => null,
@@ -387,7 +420,7 @@ class PostingEngine
             'total' => $posted->total,
         ]);
 
-        return $posted->load(['entries.account', 'payments', 'lines.stockMovement', 'stockMovements', 'creator']);
+        return $posted->load(['entries.account', 'payments', 'lines.stockMovements', 'stockMovements', 'creator']);
     }
 
     /* ---------------------------------------------------------------------
@@ -438,6 +471,14 @@ class PostingEngine
             ))
             ->all();
 
+        $payments = $original->payments
+            ->map(fn ($payment) => PaymentSplit::of(
+                $payment->mode,
+                $payment->amountMoney(),
+                $payment->reference,
+            ))
+            ->all();
+
         $batch = PostingBatch::of(
             type: $original->type,
             date: $date ?? CarbonImmutable::now(),
@@ -454,13 +495,7 @@ class PostingEngine
             // Copied, not re-derived: a reversed receipt is the same money going
             // back the way it came, and a voucher that could not say which cheque
             // was returned would be useless at the only moment anyone reads it.
-            payments: $original->payments
-                ->map(fn ($payment) => PaymentSplit::of(
-                    $payment->mode,
-                    $payment->amountMoney(),
-                    $payment->reference,
-                ))
-                ->all(),
+            payments: $payments,
             // Every quantity back the way it came, at the value it left at.
             // Re-valuing here would be wrong twice over: the average has moved
             // since, and a reversal is supposed to net to nothing — a return
@@ -470,6 +505,12 @@ class PostingEngine
                 ->map(fn ($movement) => StockChange::reversing($movement))
                 ->all(),
             documentTotal: $original->totalMoney(),
+            // A settlement's total is its money plus whatever it let the party
+            // off, so the difference *is* that discount — and the reversal
+            // takes back both, or the party would be charged the discount twice.
+            settlementDiscount: $original->type->isSettlement()
+                ? $original->totalMoney()->minus(PaymentSplit::total($payments))
+                : null,
         );
 
         // Archived parties are allowed here, and only here. Archiving says "no
@@ -519,7 +560,7 @@ class PostingEngine
             'tenant_id' => $reversal->tenant_id,
         ]);
 
-        return $reversal->load(['entries.account', 'payments', 'lines.stockMovement', 'stockMovements', 'creator']);
+        return $reversal->load(['entries.account', 'payments', 'lines.stockMovements', 'stockMovements', 'creator']);
     }
 
     /**
@@ -626,7 +667,7 @@ class PostingEngine
             'tenant_id' => $revision->tenant_id,
         ]);
 
-        return $revision->load(['entries.account', 'payments', 'lines.stockMovement', 'stockMovements', 'creator']);
+        return $revision->load(['entries.account', 'payments', 'lines.stockMovements', 'stockMovements', 'creator']);
     }
 
     /**
@@ -836,6 +877,7 @@ class PostingEngine
         $this->assertLinesUsable($batch);
         $this->assertPartyUsable($batch, $allowArchivedParty);
         $this->assertSettlementUsable($batch);
+        $this->assertWalkInSettled($batch);
         $this->assertStockUsable($batch, $allowArchivedParty);
         $this->assertBooksOpenOn($batch->date);
 
@@ -876,8 +918,13 @@ class PostingEngine
         // A settlement *is* its split, so the two must be equal: compared
         // against one side, not the sum of both, because the settlement lines
         // are one side of the voucher and the control-account line is the other.
-        if ($batch->type->isSettlement() && ! $split->equals($batch->total())) {
-            throw InvalidJournalException::paymentSplitMismatch($split->amount(), $batch->total()->amount());
+        //
+        // Plus whatever it let the party off: a receipt of ₹1,200 that closes a
+        // ₹1,250 invoice clears ₹1,250, and the fifty is its own line.
+        $cleared = $split->plus($batch->settlementDiscount ?? Money::zero());
+
+        if ($batch->type->isSettlement() && ! $cleared->equals($batch->total())) {
+            throw InvalidJournalException::paymentSplitMismatch($cleared->amount(), $batch->total()->amount());
         }
 
         // A bill merely *accepts* one, so the rule is weaker and different: pay
@@ -887,6 +934,34 @@ class PostingEngine
         // sit in Receivables as a negative nobody asked for.
         if (! $batch->type->isSettlement() && $split->compareTo($batch->total()) > 0) {
             throw InvalidJournalException::paymentSplitExceedsDocument($split->amount(), $batch->total()->amount());
+        }
+    }
+
+    /**
+     * A sale that names nobody must be paid in full at the counter.
+     *
+     * The control account is Sundry Debtors, and a balance left there against
+     * no party is one no statement lists, no receipt can be allocated to and
+     * nobody can be asked for — money owed by nobody, for ever. So the split has
+     * to cover the document exactly; anything less is refused with the remedy
+     * named, which is to collect the rest or name the customer.
+     *
+     * Checked at posting and not on a draft, because a draft is work in
+     * progress: the clerk may still be counting the cash. A reversal passes on
+     * its own terms, since it carries the original's split mirrored.
+     *
+     * @throws InvalidJournalException
+     */
+    private function assertWalkInSettled(PostingBatch $batch): void
+    {
+        if ($batch->partyId !== null || ! $batch->type->admitsWalkIn()) {
+            return;
+        }
+
+        $paid = $batch->paymentsTotal();
+
+        if (! $paid->equals($batch->total())) {
+            throw InvalidJournalException::walkInNotPaidInFull($paid->amount(), $batch->total()->amount());
         }
     }
 

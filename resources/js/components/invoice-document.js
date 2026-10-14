@@ -151,7 +151,9 @@ function columnsFor(invoice) {
 
 function columnsMarkup(columns) {
     return `<tr>${columns
-        .map((column) => `<th class="${column.align === 'right' ? 'text-right' : 'text-left'}">${esc(column.label)}</th>`)
+        .map((column) => `<th class="${column.align === 'right' ? 'text-right' : 'text-left'}" data-col="${
+            column.key
+        }">${esc(column.label)}</th>`)
         .join('')}</tr>`;
 }
 
@@ -183,9 +185,9 @@ function rowsMarkup(invoice, columns) {
     };
 
     return invoice.lines.map((line) => `<tr>${columns
-        .map((column) => `<td class="${column.align === 'right' ? 'text-right num' : ''}">${
-            cell[column.key](line)
-        }</td>`)
+        .map((column) => `<td class="${column.align === 'right' ? 'text-right num' : ''}" data-col="${
+            column.key
+        }">${cell[column.key](line)}</td>`)
         .join('')}</tr>`).join('');
 }
 
@@ -270,17 +272,155 @@ function settlementMarkup(invoice) {
 }
 
 /* -------------------------------------------------------------------------
+ | The estimate — the counter's plain receipt
+ | ---------------------------------------------------------------------- */
+
+/*
+ * The same sale, shown the way a customer at a counter is handed it by default:
+ * what they bought and what they paid, every figure with the GST already in it.
+ *
+ * Deliberately without the workshop band, a number, a GSTIN, an HSN or a tax
+ * column — the GST invoice carries those and is printed from the same sale on
+ * request. Every figure comes from the `estimate` block InvoiceDocumentService
+ * builds; nothing here adds tax to anything, so the lines cannot disagree with
+ * the total they sit above.
+ */
+
+function estimateHead(estimate) {
+    return `
+        <div class="invoice-title invoice-title-left">
+            <p class="invoice-heading">Estimate</p>
+            <p class="invoice-date">${esc(formatDate(estimate.date))}</p>
+        </div>`;
+}
+
+/** Whoever it is for, where the workshop took their details. Nothing otherwise. */
+function estimateParties(invoice) {
+    const customer = invoice.customer;
+
+    if (customer === null) return '';
+
+    return `
+        <div class="invoice-party">
+            <p class="invoice-party-name">${esc(customer.name)}</p>
+            ${customer.address ? `<p class="invoice-issuer-line">${esc(customer.address)}</p>` : ''}
+            ${field('Phone', customer.phone)}
+        </div>`;
+}
+
+function estimateColumns(estimate) {
+    const columns = [
+        { key: 'no', label: '#', align: 'left' },
+        { key: 'description', label: 'Item', align: 'left' },
+        { key: 'quantity', label: 'Qty', align: 'right' },
+        { key: 'rate', label: 'Rate', align: 'right' },
+    ];
+
+    if (estimate.lines.some((line) => !isZeroAmount(line.discount))) {
+        columns.push({ key: 'discount', label: 'Discount', align: 'right' });
+    }
+
+    columns.push({ key: 'amount', label: 'Amount', align: 'right' });
+
+    return columns;
+}
+
+function estimateRows(estimate, columns) {
+    const cell = {
+        no: (line) => esc(String(line.line_no ?? '')),
+        description: (line) => `${esc(line.description ?? '')}${
+            line.memo ? `<span class="invoice-memo">${esc(line.memo)}</span>` : ''
+        }`,
+        quantity: (line) => `${esc(line.quantity)} ${esc(line.unit_symbol ?? '')}`.trim(),
+        rate: (line) => num(line.rate),
+        discount: (line) => (isZeroAmount(line.discount) ? '' : num(line.discount)),
+        amount: (line) => num(line.amount),
+    };
+
+    return estimate.lines.map((line) => `<tr>${columns
+        .map((column) => `<td class="${column.align === 'right' ? 'text-right num' : ''}" data-col="${
+            column.key
+        }">${cell[column.key](line)}</td>`)
+        .join('')}</tr>`).join('');
+}
+
+function estimateTotals(estimate) {
+    const row = (label, value, className = '') =>
+        `<div class="${className}"><dt>${esc(label)}</dt><dd>${value}</dd></div>`;
+
+    // The subtotal only earns a row when a round-off sits between it and the
+    // total; otherwise it is the total written twice.
+    const rounded = !isZeroAmount(estimate.round_off);
+
+    return [
+        rounded ? row('Subtotal', money(estimate.subtotal)) : '',
+        rounded ? row('Round off', signedPaise(estimate.round_off)) : '',
+        row('Total', money(estimate.total), 'invoice-total'),
+    ].join('');
+}
+
+function estimateSettlement(estimate) {
+    if (estimate.paid === null) return '';
+
+    // A balance only where there is one: "₹0.00 due" under a receipt somebody
+    // has just paid in full is a figure to read past.
+    return `
+        <dl class="invoice-settlement">
+            <div><dt>Paid</dt><dd>${money(estimate.paid)}</dd></div>
+            ${isZeroAmount(estimate.due) ? '' : `
+                <div class="invoice-due"><dt>Balance due</dt><dd>${money(estimate.due)}</dd></div>`}
+        </dl>`;
+}
+
+function renderEstimate(root, invoice) {
+    const estimate = invoice.estimate;
+    const columns = estimateColumns(estimate);
+
+    $('[data-invoice-head]', root).innerHTML = estimateHead(estimate);
+    $('[data-invoice-parties]', root).innerHTML = estimateParties(invoice);
+    $('[data-invoice-columns]', root).innerHTML = columnsMarkup(columns);
+    $('[data-invoice-rows]', root).innerHTML = estimateRows(estimate, columns);
+    $('[data-invoice-aside]', root).innerHTML = asideMarkup(invoice);
+    $('[data-invoice-totals]', root).innerHTML = estimateTotals(estimate);
+    $('[data-invoice-words]', root).textContent = estimate.in_words;
+    $('[data-invoice-settlement]', root).innerHTML = estimateSettlement(estimate);
+
+    // Said on the paper, because somebody may later present this as if it
+    // were the tax invoice.
+    $('[data-invoice-foot]', root).textContent = 'Estimate — not a tax invoice.';
+}
+
+/* -------------------------------------------------------------------------
  | The one entry point
  | ---------------------------------------------------------------------- */
 
 /**
  * Paint one invoice into a mounted copy of `partials/invoice-document.blade.php`.
  *
+ * The same sheet draws either document — the estimate a sale is handed over as
+ * by default, or the GST invoice — so there is still exactly one node to print
+ * (see invoice-delivery.js). `data-as` on the sheet says which is on it, for
+ * the styling that differs.
+ *
  * @param {Element} root     the `[data-invoice-document]` element, attached or not
  * @param {object}  invoice  the array from InvoiceDocumentService, as JSON
+ * @param {object}  [options]
+ * @param {'invoice'|'estimate'} [options.as]  Which document to draw. A credit
+ *        note has no estimate and is always drawn as itself.
  */
-export function renderInvoice(root, invoice) {
+export function renderInvoice(root, invoice, { as = 'invoice' } = {}) {
     if (!root || !invoice) return;
+
+    const drawn = as === 'estimate' && invoice.estimate ? 'estimate' : 'invoice';
+
+    root.dataset.as = drawn;
+    root.setAttribute('aria-label', drawn === 'estimate' ? 'Estimate' : 'Invoice');
+
+    if (drawn === 'estimate') {
+        renderEstimate(root, invoice);
+
+        return;
+    }
 
     const columns = columnsFor(invoice);
 

@@ -195,10 +195,17 @@ function collectAttributes() {
     return bag;
 }
 
-/** Hidden, not disabled: once the family exists its fields are answered. */
+/**
+ * Hidden, not disabled: once the family exists its fields are answered.
+ *
+ * Both classes are toggled, and the second is not belt-and-braces. Tailwind
+ * emits `hidden` well before any display utility of ours, so `.form-grid`'s
+ * `display: grid` simply outranks `display: none` and the block stays on the
+ * screen. The layout class has to come off with it.
+ */
 function showFamilyFields(visible) {
     $('#quick-item-fields').classList.toggle('hidden', !visible);
-    $('#quick-item-fields').classList.toggle('grid', visible);
+    $('#quick-item-fields').classList.toggle('form-grid', visible);
 }
 
 /**

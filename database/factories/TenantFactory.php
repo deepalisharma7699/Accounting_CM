@@ -6,6 +6,7 @@ use App\Enums\TenantStatus;
 use App\Models\Tenant;
 use App\Services\Accounting\ChartOfAccountProvisioner;
 use App\Services\Inventory\CatalogueProvisioner;
+use App\Services\Personal\PersonalCategoryProvisioner;
 use App\Services\Rbac\RoleProvisioner;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Str;
@@ -33,7 +34,7 @@ class TenantFactory extends Factory
      * and idempotent either way.
      *
      * Note for anyone force-deleting a factory tenant: chart_of_accounts,
-     * units and item_categories are all restrictOnDelete, so they have to go
+     * units, item_categories and personal_expense_categories are all restrictOnDelete, so they have to go
      * first.
      */
     public function configure(): static
@@ -42,6 +43,7 @@ class TenantFactory extends Factory
             app(ChartOfAccountProvisioner::class)->seedFor($tenant);
             app(CatalogueProvisioner::class)->seedFor($tenant);
             app(RoleProvisioner::class)->seedFor($tenant);
+            app(PersonalCategoryProvisioner::class)->seedFor($tenant);
         });
     }
 

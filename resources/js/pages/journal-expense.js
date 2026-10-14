@@ -2,7 +2,6 @@ import auth from '../auth-client';
 import { badge, lifecycleTone } from '../components/badge';
 import { mountPaymentRows } from '../components/payment-rows';
 import { can } from '../permissions';
-import { clearModuleParams, moduleParams } from '../shell';
 import {
     $, clearFormErrors, confirmAction, debounce, esc, formatDate, formatMoney,
     setSubmitting, showFormErrors, showModal, tableMessage, toast,
@@ -10,44 +9,34 @@ import {
 import { mountWorkspace } from '../workspace';
 
 /**
- * Expenses — what it costs the workshop to be open.
+ * Expense — what it costs the workshop to be open. One tab of Money in & out.
  *
  * ```
- * card → EXPENSE FORM              ← always lands here (§2A.5)
- *      → "Show list (18)"          → every expense ever recorded
- *      → row → drawer (level 2)    → reverse → confirm (level 3)
+ * tab → EXPENSE FORM               ← where Money in & out lands (§2A.5)
+ *     → "Show list (18)"           → every expense ever recorded
+ *     → row → drawer (level 2)     → reverse → confirm (level 3)
  * ```
  *
- * ## What this file stopped doing
+ * This was the Expenses card. It moved under Money in & out, beside Receipt,
+ * Payment, the journal voucher, staff advances and the owner's personal diary,
+ * because a workshop thinks "money came in" and "money went out", not in
+ * document types — and two cards in one band answering that question meant
+ * guessing which to open. The section is mounted by `pages/journal.js`, lazily,
+ * on the first click of its tab — which is also why this file is loaded on
+ * demand rather than with the card (§2.5).
  *
- * It was the Bills list: sales, purchases, expenses and both kinds of note in
- * one table, with a payment-status filter and the expense form behind a button.
- * Every part of that list now has a better home — Sales lists invoices and
- * credit notes, Purchase lists bills and debit notes, and Insights' Day Book
- * lists every posted document, including the journals neither of those shows.
- * Keeping a fourth copy here would be three screens answering one question, and
- * the second one is always the one nobody opens (§5.1).
- *
- * What was only ever here is **writing an expense**: `/transactions/expense` has
- * exactly one caller in the front end and it is this file. So that is the whole
- * module now, and the list behind "Show list" is expenses and nothing else.
- *
- * ## Why an expense is not a purchase, and why that is worth a card
+ * ## Why an expense is not a purchase
  *
  * A purchase is bought to sell or to fit: it becomes inventory, and then cost of
  * goods when it leaves. An expense is what it costs to be open. Keeping the two
- * apart is the only reason a P&L can separate gross margin from overheads —
- * which is the only reason either figure is worth having. With no way to enter
- * one, the margin was reported against overheads of nil and the cash position
- * drifted from the tin.
+ * apart is the only reason a P&L can separate gross margin from overheads.
  *
  * ## The client reference is per document, not per attempt
  *
  * Minted when the form is cleared for the next entry and reused on every retry
  * of the same expense — M17. Without it a request that timed out after the
  * server had already posted would be re-sent by an operator who saw no
- * confirmation, and the electricity bill would be in the books twice. The API
- * has always accepted the field; this form never sent it.
+ * confirmation, and the electricity bill would be in the books twice.
  */
 
 const PAGE_SIZE = 25;
@@ -69,11 +58,19 @@ const state = {
     clientRef: null,
 };
 
-let root = null;
 let formRoot = null;
 let listRoot = null;
 let form = null;
 let payments = null;
+
+/*
+| The expense's own amount, by id and never by `form.elements.amount`: every
+| payment row carries an `amount` too, so that name answers with a
+| RadioNodeList whose `.value` is always '' — which refused every expense as
+| having no amount and made "Paid in full" fill in 0.00.
+*/
+const amountInput = () => $('#expense-amount', form);
+const gstInput = () => $('#expense-gst', form);
 let workspace = null;
 
 /*
@@ -90,7 +87,8 @@ const inForm = (selector) => $(selector, formRoot);
 const inList = (selector) => $(selector, listRoot);
 
 /** The drawer, which lives outside both surfaces and is always attached. */
-const el = (selector) => $(selector, root);
+let drawerRoot = null;
+const el = (selector) => $(selector, drawerRoot);
 
 /* -------------------------------------------------------------------------
  | The list
@@ -247,7 +245,7 @@ async function openDrawer(id) {
     drawer.id = id;
     drawer.expense = null;
 
-    $('#expense-drawer-title', root).textContent = 'Loading…';
+    el('[data-drawer-title]').textContent = 'Loading…';
     el('[data-drawer-subtitle]').textContent = '';
     el('[data-drawer-status]').innerHTML = '';
     el('[data-drawer-actions]').innerHTML = '';
@@ -275,7 +273,7 @@ async function loadDocument() {
 function paint() {
     const expense = drawer.expense;
 
-    $('#expense-drawer-title', root).textContent = expense.doc_no ?? `Expense #${expense.id}`;
+    el('[data-drawer-title]').textContent = expense.doc_no ?? `Expense #${expense.id}`;
 
     el('[data-drawer-subtitle]').textContent = [
         formatDate(expense.date),
@@ -455,8 +453,8 @@ function resetForm() {
     clearFormErrors(form);
 
     form.elements.account_id.value = '';
-    form.elements.amount.value = '';
-    form.elements.gst_amount.value = '';
+    amountInput().value = '';
+    gstInput().value = '';
     form.elements.notes.value = '';
     payments.reset();
 
@@ -482,8 +480,8 @@ function resetForm() {
  */
 function validate() {
     const errors = {};
-    const amount = form.elements.amount.value.trim();
-    const gst = form.elements.gst_amount.value.trim();
+    const amount = amountInput().value.trim();
+    const gst = gstInput().value.trim();
 
     if (!form.elements.date.value) {
         errors.date = ['Give the date on the receipt.'];
@@ -496,6 +494,10 @@ function validate() {
     if (gst && !(Number(gst) >= 0)) {
         errors.gst_amount = ['Claimable GST is an amount, or empty where none is claimable.'];
     }
+
+    const splitProblem = payments.problem();
+
+    if (splitProblem) errors.payments = [splitProblem];
 
     return Object.keys(errors).length ? errors : null;
 }
@@ -524,8 +526,8 @@ async function submit(event) {
                 post: true,
                 client_ref: state.clientRef,
                 account_id: Number(form.elements.account_id.value) || null,
-                amount: form.elements.amount.value.trim(),
-                gst_amount: form.elements.gst_amount.value.trim() || null,
+                amount: amountInput().value.trim(),
+                gst_amount: gstInput().value.trim() || null,
                 payments: payments.value(),
             },
         });
@@ -609,16 +611,23 @@ function bindFilters() {
 }
 
 /* -------------------------------------------------------------------------
- | Boot
+ | Mount
  | ---------------------------------------------------------------------- */
 
-export default async function initBills() {
-    root = $('[data-ws-form]').closest('[data-module-root]');
+/**
+ * Build the section on its own root. Called once, by `pages/journal.js`, the
+ * first time the Expense tab is shown.
+ *
+ * @param {HTMLElement} sectionRoot the `[data-txn-section="expense"]` node
+ * @param {HTMLElement} drawer      the `#expense-drawer` node
+ */
+export async function mountExpenseSection(sectionRoot, drawer) {
+    drawerRoot = drawer;
 
     // Before `mountWorkspace`, which is what takes both surfaces out of the
     // document. After it, these lookups would find nothing.
-    formRoot = $('[data-ws-form]', root);
-    listRoot = $('[data-ws-list]', root);
+    formRoot = $('[data-ws-form]', sectionRoot);
+    listRoot = $('[data-ws-list]', sectionRoot);
 
     form = $('#expense-form', formRoot);
 
@@ -630,22 +639,26 @@ export default async function initBills() {
     await loadReference();
 
     /*
-    | Mounted once and reset between entries, rather than rebuilt per open as
-    | the modal it replaced did. The rows are part of the form now, so they
-    | survive the trip to the list and back with everything else on it (§2A.6).
-    |
     | "On credit" is not offered, which is the component's default: an expense
     | *is* its split — take the money away and there is no event left.
     */
     payments = mountPaymentRows(inForm('[data-expense-payments]'), {
         modes: state.modes,
         outstanding: () => {
-            const amount = Number(form.elements.amount.value) || 0;
-            const gst = Number(form.elements.gst_amount.value) || 0;
+            const amount = Number(amountInput().value) || 0;
+            const gst = Number(gstInput().value) || 0;
 
             return (amount + gst).toFixed(2);
         },
         heading: 'Paid by',
+        // Money going out — the component's default verb is the sale's.
+        verb: 'paid',
+    });
+
+    // "Paid in full" is the expense's amount plus its GST, so it has to follow
+    // both boxes as they are typed rather than keep the figure it started with.
+    [amountInput(), gstInput()].forEach((input) => {
+        input.addEventListener('input', () => payments.repaint());
     });
 
     form.addEventListener('submit', submit);
@@ -656,8 +669,9 @@ export default async function initBills() {
         if (event.target.closest('[data-drawer-reverse]')) reverseExpense();
     });
 
-    workspace = mountWorkspace(root, {
-        key: 'bills',
+    workspace = mountWorkspace(sectionRoot, {
+        // A key of its own, never `journal` — see the Escape note in journal.js.
+        key: 'journal:expense',
         title: 'Expenses',
         formSubtitle: 'What it costs the workshop to be open — rent, power, a courier, the tea.',
         listSubtitle: (count) => (count === null
@@ -682,27 +696,13 @@ export default async function initBills() {
         onShowForm: () => form.elements.account_id.focus(),
     });
 
-    applyDeepLink(moduleParams());
+    return {
+        workspace,
 
-    // Reopening an already-mounted module cannot run this function again, so a
-    // second deep link is announced on the root instead.
-    root.addEventListener('module:params', (event) => applyDeepLink(event.detail));
-}
-
-/**
- * `#bills?doc=88` — an expense picked out of the topbar's search.
- *
- * The drawer fetches the document by id, so the module is left on whichever
- * surface it landed on and the expense opens over it; nothing loads a list in
- * order to show one row (§7.2). Spent once acted on, or a refresh or a Back
- * would reopen a drawer somebody has just closed.
- */
-function applyDeepLink(params) {
-    const document_ = params.get('doc');
-
-    if (!document_) return;
-
-    openDrawer(document_);
-
-    clearModuleParams();
+        /**
+         * `#journal?tab=expense&doc=88` — an expense picked out of the topbar's
+         * search. The drawer fetches by id, so no list is loaded to show one row.
+         */
+        openDocument: (id) => openDrawer(id),
+    };
 }

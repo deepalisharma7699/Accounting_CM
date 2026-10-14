@@ -2,8 +2,10 @@
 
 namespace App\Models;
 
+use App\Contracts\QuestionSet;
 use App\Models\Concerns\Auditable;
 use App\Models\Concerns\BelongsToTenant;
+use App\Models\Concerns\DefinesAQuestionSet;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
@@ -39,9 +41,9 @@ use Illuminate\Support\Collection;
     'holds_stock', 'uses_sac_code', 'default_unit_code', 'default_hsn_sac',
     'default_gst_rate', 'is_system', 'is_active', 'display_order',
 ])]
-class ItemCategory extends Model
+class ItemCategory extends Model implements QuestionSet
 {
-    use Auditable, BelongsToTenant;
+    use Auditable, BelongsToTenant, DefinesAQuestionSet;
 
     /**
      * `holds_stock` is the one that matters most in a trail. Turning it off does
@@ -182,41 +184,6 @@ class ItemCategory extends Model
         }
 
         return new Collection(array_values($fields));
-    }
-
-    /**
-     * The keys a product of this category cannot exist without.
-     *
-     * @return array<int, string>
-     */
-    public function requiredAttributeKeys(): array
-    {
-        return $this->resolvedAttributes()
-            ->filter(fn (ItemAttribute $attribute) => $attribute->is_required)
-            ->map(fn (ItemAttribute $attribute) => $attribute->key)
-            ->values()
-            ->all();
-    }
-
-    /**
-     * The question set in the shape the universal form reads — and the shape
-     * `ItemType::attributeSchema()` used to return, key for key.
-     *
-     * That compatibility is deliberate and is why the front end did not have to
-     * be rewritten: it already built its inputs from the server's answer, so
-     * changing where the answer comes from changed nothing it could see.
-     *
-     * @return array<string, array<string, mixed>>
-     */
-    public function attributeSchema(): array
-    {
-        $schema = [];
-
-        foreach ($this->resolvedAttributes() as $attribute) {
-            $schema[$attribute->key] = $attribute->toSchemaField();
-        }
-
-        return $schema;
     }
 
     /* ---------------------------------------------------------------------

@@ -69,6 +69,23 @@ class StoreSettlementRequest extends FormRequest
             'payments.*.reference' => ['nullable', 'string', 'max:100'],
 
             /*
+            | What the party is let off on top of the money — the ₹50 in "paid
+            | ₹1,200 to close a ₹1,250 invoice".
+            |
+            | Written off *after* tax, to Discount Allowed or Discount Received:
+            | the invoice is already posted and its GST declared, so the sale it
+            | records stands as issued. A discount agreed at the counter goes on
+            | the bill instead, before tax — see StoreBillRequest's settle_total.
+            |
+            | Posted only. A parked receipt is already refused by the screen, and
+            | a parked write-off would be a balance forgiven on paper that the
+            | books do not know about.
+            */
+            'discount' => [
+                'nullable', 'numeric', 'decimal:0,2', 'gt:0', 'max:'.self::MAX_AMOUNT, 'prohibited_if:post,false',
+            ],
+
+            /*
             | Which bills this money settles — M16. Optional, and the omission
             | means something: leave it out and the money is applied to the
             | party's open bills oldest first, which is what an accounts
@@ -102,6 +119,8 @@ class StoreSettlementRequest extends FormRequest
             'payments.min' => 'Say how the money moved — cash, bank, UPI or cheque.',
             'payments.*.amount.gt' => 'Each payment line needs an amount greater than zero.',
             'payments.*.amount.decimal' => 'Amounts are in rupees and paise — at most two decimal places.',
+            'discount.prohibited_if' => 'A discount settles an invoice, so it has to be posted rather than saved as a draft.',
+            'discount.gt' => 'A discount has to be more than nothing.',
             'date.date_format' => 'Give the transaction date as YYYY-MM-DD.',
         ];
     }
@@ -129,7 +148,7 @@ class StoreSettlementRequest extends FormRequest
     }
 
     /**
-     * @return array{date: string, notes: string|null, post: bool, party_id: int, payments: array<int, array<string, mixed>>}
+     * @return array{date: string, notes: string|null, post: bool, party_id: int, discount: string|null, payments: array<int, array<string, mixed>>}
      */
     public function payload(): array
     {
@@ -139,6 +158,7 @@ class StoreSettlementRequest extends FormRequest
             'post' => $this->boolean('post'),
             'client_ref' => $this->clientRef(),
             'party_id' => (int) $this->input('party_id'),
+            'discount' => $this->filled('discount') ? (string) $this->input('discount') : null,
             'payments' => array_map(fn (array $split) => [
                 'mode' => $split['mode'] ?? null,
                 'amount' => $split['amount'] ?? 0,

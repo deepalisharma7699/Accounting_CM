@@ -2,6 +2,7 @@
 
 namespace App\Repositories\Eloquent;
 
+use App\Enums\TransactionType;
 use App\Models\ItemVariant;
 use App\Models\StockMovement;
 use App\Models\Transaction;
@@ -185,6 +186,23 @@ class EloquentStockMovementRepository implements StockMovementRepositoryInterfac
 
         return StockMovement::query()
             ->forVariants($variantIds)
+            ->distinct()
+            ->pluck('variant_id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+    }
+
+    public function tradedVariantIds(array $variantIds): array
+    {
+        if ($variantIds === []) {
+            return [];
+        }
+
+        // Through the relation rather than a join, so the transaction's own
+        // tenant scope applies as well as the movement's.
+        return StockMovement::query()
+            ->forVariants($variantIds)
+            ->whereHas('transaction', fn ($query) => $query->where('type', '!=', TransactionType::Opening->value))
             ->distinct()
             ->pluck('variant_id')
             ->map(fn ($id) => (int) $id)

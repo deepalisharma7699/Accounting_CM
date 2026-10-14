@@ -34,8 +34,11 @@
 
 import auth from '../auth-client';
 import { can } from '../permissions';
+import { isThermal, paperFor, printSettings } from '../print-settings';
 import { $, confirmAction, esc, formatDate, showModal, toast } from '../ui';
 import { renderInvoice } from './invoice-document';
+import { agentPrint } from './print-agent';
+import { receiptBytes } from './receipt-escpos';
 
 /*
 | The document currently being handed over.
@@ -69,8 +72,19 @@ const delivery = {
      * teaches somebody the product is unreliable.
      */
     shareable: false,
+    /**
+     * Which document the preview is showing: `'estimate'` — the plain receipt
+     * every sale is handed over as by default — or `'invoice'`, the GST
+     * invoice, which is only ever shown when somebody asks for it.
+     */
+    as: 'estimate',
     /** What the host wants doing when the preview closes. Set per open. */
     onClosed: null,
+    /**
+     * How the host adds a customer to a walk-in sale, or null where it cannot.
+     * Only Sales offers it: the act belongs to that module's drawer.
+     */
+    onAddCustomer: null,
 };
 
 /** One request at a time across the whole surface, whichever button started it. */
@@ -97,6 +111,7 @@ export function deliver(bill) {
     delivery.invoice = null;
     delivery.share = null;
     delivery.shareable = false;
+    delivery.as = 'estimate';
 }
 
 /**
@@ -194,6 +209,34 @@ function borrowSheet() {
 }
 
 /**
+ * Size the paper for one print.
+ *
+ * The sheet says which paper it is on (`data-paper`), which is what the thermal
+ * layout in app.css keys off. The page rule is the one thing CSS on the sheet
+ * cannot say, so a single `<style>` in the head is rewritten per print.
+ *
+ * A4 states its size. Thermal states none and no margin: a roll has no page
+ * length, and naming one makes the driver feed blank paper to the end of it.
+ * The roll's width is the printer driver's own paper setting, which is chosen
+ * once when the printer is installed.
+ */
+function setPaper(node, paper) {
+    node.dataset.paper = paper;
+
+    let rule = document.getElementById('print-page-rule');
+
+    if (rule === null) {
+        rule = document.createElement('style');
+        rule.id = 'print-page-rule';
+        document.head.appendChild(rule);
+    }
+
+    rule.textContent = paper === 'a4'
+        ? '@page { size: A4; margin: 12mm; }'
+        : '@page { margin: 0; }';
+}
+
+/**
  * Print, without leaving the page.
  *
  * The sheet is mounted in the application's layout and hidden; painting it and
@@ -205,15 +248,47 @@ function borrowSheet() {
  * blocks in every browser this runs in, so it is back on screen by the time the
  * dialog closes; `afterprint` puts it back as well, for any browser where that
  * stops being true.
+ *
+ * Every Print button in the application comes through here, so which paper a
+ * document goes on is decided once — from this device's settings
+ * (`print-settings.js`) — rather than per screen.
+ *
+ * Thermal paper on a device set to print directly goes to the print agent as
+ * ESC/POS, which prints without a dialog and cuts the paper. If the agent does
+ * not answer, the same document goes through the dialog instead and the
+ * operator is told why — the customer is standing at the counter, and "the
+ * receipt did not print" is not an outcome to leave them with.
+ *
+ * @param {HTMLElement|null} button
+ * @param {object} [options]
+ * @param {'estimate'|'invoice'} [options.as]  Which document; the one on the
+ *        preview where omitted.
  */
-export async function printInvoice(button) {
+export async function printInvoice(button, { as = delivery.as } = {}) {
     await run(button, 'Preparing…', async () => {
         const invoice = await loadInvoice();
+        const paper = paperFor(as);
+        const settings = printSettings();
+
+        if (isThermal(paper) && settings.method === 'agent') {
+            try {
+                await agentPrint(settings.agentUrl, receiptBytes(invoice, as, paper));
+                toast('Sent to the printer.');
+
+                return;
+            } catch (error) {
+                toast(`${error.message} Printing through the dialog instead.`, 'error');
+            }
+        }
 
         releaseSheet();
-        renderInvoice(sheet(), invoice);
+        renderInvoice(sheet(), invoice, { as });
+        setPaper(sheet(), paper);
 
         window.print();
+
+        // The preview goes on showing what it showed, whichever was printed.
+        if (previewing()) renderInvoice(sheet(), invoice, { as: delivery.as });
 
         borrowSheet();
     });
@@ -260,10 +335,17 @@ function bindPrintCustody() {
  * @param {string} [options.title]      The heading — "Invoice raised" after a post.
  * @param {Function} [options.onClosed] What the host wants doing on the way out.
  */
-export function openInvoicePreview(bill, { title = 'Invoice raised', onClosed = null } = {}) {
+export function openInvoicePreview(bill, {
+    title = 'Invoice raised',
+    onClosed = null,
+    onAddCustomer = null,
+    as = 'estimate',
+} = {}) {
     deliver(bill);
 
     delivery.onClosed = onClosed;
+    delivery.onAddCustomer = onAddCustomer;
+    delivery.as = as;
 
     $('[data-invoice-preview-title]').textContent = title;
     $('[data-invoice-preview-subtitle]').textContent = delivery.label;
@@ -291,7 +373,7 @@ async function loadPreview() {
     previewStatus('Fetching the customer’s copy…');
 
     try {
-        renderInvoice(sheet(), await loadInvoice());
+        renderInvoice(sheet(), await loadInvoice(), { as: delivery.as });
 
         previewStatus(null);
         borrowSheet();
@@ -335,8 +417,31 @@ function paintPreviewActions() {
         '<button type="button" class="btn btn-primary btn-sm" data-preview-print>Print</button>',
     ];
 
-    if (delivery.shareable && can('WRITE', 'TRANSACTIONS')) {
-        buttons.push('<button type="button" class="btn btn-secondary btn-sm" data-preview-share>Share</button>');
+    /*
+    | The estimate first, the GST invoice on request.
+    |
+    | Both are the same posted sale — the tax is in the books either way — so
+    | switching is a repaint of the one sheet and never a request. Sharing goes
+    | with the GST invoice only: the link a customer is sent opens the tax
+    | invoice, and offering it beside the estimate would suggest otherwise.
+    */
+    if (delivery.as === 'estimate' && delivery.invoice?.estimate) {
+        buttons.push('<button type="button" class="btn btn-secondary btn-sm" data-preview-as="invoice">'
+            + 'Get GST invoice</button>');
+    } else {
+        if (delivery.shareable && can('WRITE', 'TRANSACTIONS')) {
+            buttons.push('<button type="button" class="btn btn-secondary btn-sm" data-preview-share>Share</button>');
+        }
+
+        if (isWalkInSale() && delivery.onAddCustomer) {
+            buttons.push('<button type="button" class="btn btn-secondary btn-sm" data-preview-add-customer>'
+                + 'Add customer</button>');
+        }
+
+        if (delivery.invoice?.estimate) {
+            buttons.push('<button type="button" class="btn btn-ghost btn-sm" data-preview-as="estimate">'
+                + '← Estimate</button>');
+        }
     }
 
     // Named for where it goes rather than for the act of closing, the same rule
@@ -347,6 +452,27 @@ function paintPreviewActions() {
         + 'Done</button>');
 
     $('[data-invoice-preview-actions]').innerHTML = buttons.join('');
+}
+
+/**
+ * A posted sale that names nobody — and so a GST invoice with no "Billed to".
+ *
+ * Adding the customer is offered only where the host can do it and the person
+ * holds both grants a correction needs (the endpoint asserts them too, §6.2).
+ */
+function isWalkInSale() {
+    return delivery.invoice?.document?.type === 'sale'
+        && delivery.invoice.customer === null
+        && can('WRITE', 'TRANSACTIONS')
+        && can('UPDATE', 'TRANSACTIONS');
+}
+
+/** Show the other document of the same sale on the preview. */
+function showAs(as) {
+    delivery.as = as;
+
+    renderInvoice(sheet(), delivery.invoice, { as });
+    paintPreviewActions();
 }
 
 /* --- publishing it ----------------------------------------------------- */
@@ -520,8 +646,10 @@ export function bindDelivery() {
         const hit = (hook) => event.target.closest(`[${hook}]`);
 
         if (hit('data-preview-print')) printInvoice(hit('data-preview-print'));
+        else if (hit('data-preview-as')) showAs(hit('data-preview-as').dataset.previewAs);
         else if (hit('data-preview-share')) openShare();
         else if (hit('data-preview-retry')) loadPreview();
+        else if (hit('data-preview-add-customer')) delivery.onAddCustomer?.(delivery.id);
     });
 
     // The share dialog's own controls, delegated for the same reason: the panel
@@ -560,6 +688,7 @@ export function bindDelivery() {
         const closed = delivery.onClosed;
 
         delivery.onClosed = null;
+        delivery.onAddCustomer = null;
 
         closed?.();
     }).observe(preview, { attributeFilter: ['class'] });

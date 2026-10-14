@@ -71,19 +71,25 @@ class WorkshopJobResource extends JsonResource
             | Which kind of thing, and what its kind asked about it.
             |
             | Three keys over one fact, and each has exactly one reader.
-            | `category_id` is what the intake form's Kind select is set to and
+            | `job_kind_id` is what the intake form's Kind select is set to and
             | what decides which fields it draws. `kind_label` is the name copied
             | at intake, which is what a list row prints without a join and what
-            | survives the category being renamed or archived. And `specs` is the
+            | survives the kind being renamed or archived. And `specs` is the
             | raw bag — the same flat shape `item_variants.attributes` holds — put
             | back into the form's inputs on an edit.
             |
-            | `specs_display` is the same bag resolved through the category that
+            | `specs_display` is the same bag resolved through the kind that
             | asked: the label, the value and the unit, in the order the form
             | draws them. Absent where nothing resolved it rather than printed as
             | JSON keys at a counter — see WorkshopJob::resolvedSpecs().
+            |
+            | One key over two columns, deliberately. §4.6 means this code is
+            | deployed before `job_kind_id` exists, and in that window a job's
+            | kind is still a category — so the *client* is told one thing and
+            | the fallback is decided here, rather than in `pages/jobs.js` where
+            | it would be a second place that knows about the window.
             */
-            'category_id' => $this->category_id,
+            'job_kind_id' => $this->job_kind_id ?? $this->category_id,
             'kind_label' => $this->kind_label,
             'specs' => (object) ($this->specs ?? []),
             'specs_display' => $this->resolvedSpecs(),

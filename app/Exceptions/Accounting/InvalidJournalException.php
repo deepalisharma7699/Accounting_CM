@@ -134,6 +134,58 @@ class InvalidJournalException extends ApiException
     }
 
     /**
+     * A walk-in sale — no customer named — that was not paid in full.
+     *
+     * The balance would sit in Sundry Debtors against nobody, where it can never
+     * be collected. The message names both ways out.
+     */
+    public static function walkInNotPaidInFull(string $paid, string $total): self
+    {
+        return new self(
+            message: "A sale with no customer named has to be paid in full at the counter — {$paid} of {$total} ".
+                'is recorded. Collect the rest now, or choose the customer so the balance is owed by somebody.',
+            status: 422,
+            errorCode: 'WALK_IN_NOT_PAID_IN_FULL',
+            details: ['field' => 'payments', 'payments_total' => $paid, 'document_total' => $total],
+        );
+    }
+
+    /**
+     * A bill settled for more than it comes to.
+     *
+     * Settling short is a discount; there is no settling long. A figure above
+     * the total is a typo in the amount box, and the remedy is to correct it.
+     */
+    public static function settledAboveDocument(string $settled, string $total): self
+    {
+        return new self(
+            message: "{$settled} is more than this bill comes to ({$total}). A bill can be settled for less than "
+                .'its total, never more.',
+            status: 422,
+            errorCode: 'SETTLED_ABOVE_DOCUMENT',
+            details: ['field' => 'payments', 'settle_total' => $settled, 'document_total' => $total],
+        );
+    }
+
+    /**
+     * A bill settled short that was not paid at the settled figure.
+     *
+     * The difference is only a discount because the party paid the rest and
+     * the bill was called square. Settled at one figure and paid another, it is
+     * a markdown with a balance left owing, which is an ordinary bill discount.
+     */
+    public static function settledShortNotPaidInFull(string $paid, string $settled): self
+    {
+        return new self(
+            message: "This bill was settled at {$settled} but {$paid} is recorded as paid. Settling for less is "
+                .'for a bill paid in full at the smaller figure — to leave a balance owing, give a discount instead.',
+            status: 422,
+            errorCode: 'SETTLED_SHORT_NOT_PAID_IN_FULL',
+            details: ['field' => 'payments', 'payments_total' => $paid, 'settle_total' => $settled],
+        );
+    }
+
+    /**
      * The counterparty does not hold the role the transaction's control account
      * asserts they do.
      *

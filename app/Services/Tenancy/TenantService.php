@@ -13,6 +13,8 @@ use App\Repositories\Contracts\TenantRepositoryInterface;
 use App\Repositories\Contracts\UserRepositoryInterface;
 use App\Services\Accounting\ChartOfAccountProvisioner;
 use App\Services\Inventory\CatalogueProvisioner;
+use App\Services\Personal\PersonalCategoryProvisioner;
+use App\Services\Workshop\JobKindProvisioner;
 use App\Services\Rbac\RoleProvisioner;
 use App\Services\Auth\TokenService;
 use App\Support\Tenancy\TenantContext;
@@ -38,6 +40,8 @@ class TenantService
         private readonly TenantContext $context,
         private readonly ChartOfAccountProvisioner $chartOfAccounts,
         private readonly CatalogueProvisioner $catalogue,
+        private readonly JobKindProvisioner $jobKinds,
+        private readonly PersonalCategoryProvisioner $personalCategories,
         private readonly RoleProvisioner $roles,
     ) {}
 
@@ -333,6 +337,11 @@ class TenantService
             'currency' => (string) config('tenancy.defaults.currency', 'INR'),
             // Left null: go-live is decided during onboarding, not at sign-up.
             'books_start_date' => null,
+            // A new workshop starts with its bills' paise dropped, which is how
+            // a counter quotes anyway. Stamped here rather than as the column's
+            // default so that switching it on was never done to a workshop
+            // already billing — see RoundOff.
+            'round_off_invoices' => true,
         ]);
 
         // Every workshop gets its books the moment it exists. Inside the
@@ -344,6 +353,15 @@ class TenantService
         // breath: a workshop with no units and no categories cannot record a
         // product at all, and the create form would open on an empty dropdown.
         $this->catalogue->seedFor($tenant);
+
+        // And the kinds of thing it takes in. After the catalogue rather than
+        // before it, because a kind's fields carry units — 'hp', 'mm', 'µF' —
+        // and a unit the workshop does not have yet is dropped on the way in.
+        $this->jobKinds->seedFor($tenant);
+
+        // And the owner's personal diary categories. Skipped quietly where the
+        // manual schema step has not been run — see the provisioner.
+        $this->personalCategories->seedFor($tenant);
 
         // And its roles — OWNER, MANAGER, ACCOUNTANT, DATA_ENTRY — which are
         // this workshop's own rows and nobody else's. Same breath again, and

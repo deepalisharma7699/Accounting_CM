@@ -92,6 +92,24 @@ class StoreVariantRequest extends FormRequest
 
             'is_draft' => ['nullable', 'boolean'],
             'is_active' => ['nullable', 'boolean'],
+
+            // The recipe — what one of this consumes, where it is something the
+            // workshop makes rather than holds. Shape only: whether this variant
+            // may have one at all, whether each material is stocked, and whether
+            // any of them is itself made from a recipe are questions about the
+            // catalogue, and they live in ItemComponentService with the rest of
+            // the refusals.
+            //
+            // `present` rather than `required` on the array itself, so sending
+            // `[]` can mean "this consumes nothing" — it is a replacement, and
+            // clearing the last row has to be expressible.
+            'components' => ['nullable', 'array', 'max:60'],
+            'components.*.component_variant_id' => ['required', 'integer', 'min:1'],
+
+            // `gt:0` here as well as in the service and again as a CHECK on the
+            // column. A row of nought consumes nothing and is one somebody
+            // forgot to fill in; a negative one would *create* stock on a sale.
+            'components.*.quantity' => ['required', 'numeric', 'decimal:0,3', 'gt:0'],
         ];
     }
 
@@ -104,6 +122,9 @@ class StoreVariantRequest extends FormRequest
             'attributes.array' => 'Attributes are a set of named values, like {"hp": "5", "rpm": "1440"}.',
             'sell_price.decimal' => 'Prices are in rupees and paise — at most two decimal places.',
             'purchase_price.decimal' => 'Prices are in rupees and paise — at most two decimal places.',
+            'components.*.component_variant_id.required' => 'Choose the material this consumes.',
+            'components.*.quantity.gt' => 'How much of it does one of these consume?',
+            'components.*.quantity.decimal' => 'Quantities go to three decimal places at most.',
         ];
     }
 
@@ -153,6 +174,20 @@ class StoreVariantRequest extends FormRequest
             if ($this->has($flag)) {
                 $payload[$flag] = $this->boolean($flag);
             }
+        }
+
+        // Only when the caller said something about it. A PATCH that changes a
+        // price must leave the recipe alone, and `sync()` replaces whatever it
+        // is given — so an absent key and an empty array have to stay different
+        // things all the way down.
+        if ($this->has('components')) {
+            $payload['components'] = array_values(array_map(
+                fn (array $row) => [
+                    'component_variant_id' => (int) ($row['component_variant_id'] ?? 0),
+                    'quantity' => $row['quantity'] ?? 0,
+                ],
+                (array) $this->input('components', []),
+            ));
         }
 
         return $payload;

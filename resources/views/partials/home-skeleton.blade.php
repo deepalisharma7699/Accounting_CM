@@ -28,7 +28,7 @@
     screen reader needs.
 --}}
 <div data-home-skeleton aria-hidden="true">
-    <span class="skel mb-3 h-3.5 w-40"></span>
+    <span class="skel mb-2 h-3.5 w-40"></span>
 
     <div class="card-grid">
         @for ($i = 0; $i < 8; $i++)

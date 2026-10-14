@@ -47,4 +47,9 @@ class VendorPaymentTemplate extends SettlementTemplate
     {
         return BalanceSide::Debit;
     }
+
+    protected function discountAccount(): ?SystemAccount
+    {
+        return SystemAccount::DiscountReceived;
+    }
 }

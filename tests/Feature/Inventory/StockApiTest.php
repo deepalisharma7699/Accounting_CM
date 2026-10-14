@@ -3,6 +3,8 @@
 namespace Tests\Feature\Inventory;
 
 use App\Models\Item;
+use App\Models\ItemAttribute;
+use App\Models\ItemCategory;
 use App\Models\ItemVariant;
 use App\Models\Tenant;
 use App\Models\Transaction;
@@ -73,6 +75,37 @@ class StockApiTest extends TestCase
         // Decimal strings, not JSON numbers — these get multiplied by costs on
         // the other side.
         $this->assertIsString($row['average_cost']);
+    }
+
+    /**
+     * What the opening-stock template is built from.
+     *
+     * Two out-of-stock rows that look identical on the shelf and are not: one
+     * was never entered, one was bought and sold back to nought. Only the first
+     * may still have opening stock declared, and the row has to say which —
+     * along with the purchase price the template starts its unit cost at.
+     */
+    #[Test]
+    public function a_row_says_whether_the_variant_has_a_trading_history(): void
+    {
+        $untouched = $this->variantFor($this->tenant, 'part');
+        $soldOut = $this->variantFor($this->tenant, 'part');
+
+        $this->actingForTenant($this->tenant, fn () => $untouched->update(['purchase_price' => '95.50']));
+
+        $this->receiveStock($this->tenant, $soldOut, '4', '100.00');
+        $this->issueStock($this->tenant, $soldOut, '4');
+
+        $rows = collect($this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/stock?status=out')
+            ->assertOk()
+            ->json('data'))->keyBy('variant_id');
+
+        $this->assertFalse($rows[$untouched->id]['has_trading_history']);
+        $this->assertSame('95.50', $rows[$untouched->id]['purchase_price']);
+
+        $this->assertTrue($rows[$soldOut->id]['has_trading_history']);
+        $this->assertNull($rows[$soldOut->id]['purchase_price']);
     }
 
     #[Test]
@@ -405,6 +438,97 @@ class StockApiTest extends TestCase
             ->assertJsonCount(1, 'data');
 
         $this->assertSame('MFD_A', $response->json('data.0.display_label'));
+    }
+
+    /**
+     * The specification is searchable even though no column holds it.
+     *
+     * The reported case, exactly: an item called "Capacitor" whose capacitance
+     * and type are attributes an admin added from the Items card, with no
+     * `label` on any variant — what the row shows is assembled from the bag at
+     * render time. "Capacitor 200" matched nothing, because the only thing the
+     * search could see was the family name.
+     */
+    #[Test]
+    public function a_search_reaches_a_variants_attributes(): void
+    {
+        $item = $this->capacitorsDescribedByAttributes();
+
+        $response = $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/stock?search=capacitor+200')
+            ->assertOk()
+            ->assertJsonCount(2, 'data');
+
+        $this->assertSame(
+            ['200 / Dry', '200 / Oil filled'],
+            collect($response->json('data'))->pluck('display_label')->sort()->values()->all(),
+        );
+
+        // A second attribute narrows it the same way — the words are matched
+        // independently of which attribute holds them.
+        $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/stock?search=capacitor+200+dry')
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.display_label', '200 / Dry');
+
+        $this->assertSame('Capacitor', $item->name);
+    }
+
+    /**
+     * A key is not a value.
+     *
+     * `JSON_SEARCH` is pointed at `'$.*'` so it reads the bag's values only. Were
+     * it matching the whole document, every product that records a "type" would
+     * answer a search for that word, which is a picker full of things nobody
+     * asked for.
+     */
+    #[Test]
+    public function a_search_does_not_match_attribute_key_names(): void
+    {
+        $this->capacitorsDescribedByAttributes();
+
+        $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/stock?search=capacitance')
+            ->assertOk()
+            ->assertJsonCount(0, 'data');
+    }
+
+    /**
+     * One family described the way the Items card describes one: dynamic
+     * attributes, no stored label.
+     */
+    private function capacitorsDescribedByAttributes(): Item
+    {
+        return $this->actingForTenant($this->tenant, function () {
+            $category = ItemCategory::create([
+                'code' => 'capacitor', 'name' => 'Capacitor', 'holds_stock' => true,
+                'default_unit_code' => 'piece', 'is_active' => true,
+            ]);
+
+            ItemAttribute::create([
+                'category_id' => $category->id, 'key' => 'capacitance', 'label' => 'Capacitance',
+                'data_type' => 'number', 'display_order' => 1, 'is_active' => true,
+            ]);
+            ItemAttribute::create([
+                'category_id' => $category->id, 'key' => 'type', 'label' => 'Type',
+                'data_type' => 'text', 'display_order' => 2, 'is_active' => true,
+            ]);
+
+            $item = Item::factory()->create([
+                'name' => 'Capacitor', 'category_id' => $category->id,
+                'base_uom' => 'piece', 'is_stock' => true,
+            ]);
+
+            foreach ([['36', 'Oil filled'], ['200', 'Oil filled'], ['200', 'Dry'], ['250', 'Dry']] as [$mfd, $type]) {
+                ItemVariant::factory()->for($item)->create([
+                    'label' => null,
+                    'attributes' => ['capacitance' => $mfd, 'type' => $type],
+                ]);
+            }
+
+            return $item;
+        });
     }
 
     /**

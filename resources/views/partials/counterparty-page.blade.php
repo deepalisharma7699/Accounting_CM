@@ -71,7 +71,7 @@
                  toolbar: they are set once and left alone, and two permanent
                  selects would crowd out the filters people actually reach for. --}}
             <div class="relative">
-                <button type="button" id="filter-toggle" class="btn btn-secondary btn-sm h-[2.375rem]"
+                <button type="button" id="filter-toggle" class="btn btn-secondary btn-sm h-[var(--control-h)]"
                         aria-expanded="false" aria-haspopup="true">
                     <x-icon name="sliders-horizontal" :size="14" />
                     Filter
@@ -108,7 +108,7 @@
             </div>
 
             <div class="relative">
-                <button type="button" id="sort-toggle" class="btn btn-secondary btn-sm h-[2.375rem]"
+                <button type="button" id="sort-toggle" class="btn btn-secondary btn-sm h-[var(--control-h)]"
                         aria-expanded="false" aria-haspopup="true">
                     <x-icon name="arrow-up-down" :size="14" />
                     Sort

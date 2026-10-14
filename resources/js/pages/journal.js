@@ -12,33 +12,42 @@ import {
 import { mountWorkspace } from '../workspace';
 
 /**
- * Transactions — settlement and the journal voucher. C3.
+ * Money in & out — expenses, payments, receipts, staff advances, the journal
+ * voucher and the owner's personal diary. Key `journal`.
  *
  * ```
- * card → RECEIPT FORM                    ← always lands here (§2A.1, §2A.5)
- *      → tab → PAYMENT / JOURNAL VOUCHER ← each an ordinary §2A workspace
- *      → "Show list (18)"                → what has been taken, paid or posted
- *      → row → drawer (level 2)          → which bills it settles, or reverse
- *                                        → confirm (level 3)
+ * card → EXPENSE FORM                    ← always lands here (§2A.1, §2A.5)
+ *      → tab → any of the other five     ← each an ordinary §2A workspace
+ *      → "Show list (18)"                → what has been spent, paid or taken
+ *      → row → drawer (level 2)          → reverse, allocate, edit · confirm (level 3)
  * ```
  *
- * ## Three sections, and the shared renderer used three times
+ * It was two cards — Transactions and Expenses — and became one because a
+ * workshop thinks "money came in" and "money went out", not in document types.
+ * See the note at the top of `modules/journal.blade.php`.
  *
- * Receipt, Payment and Journal voucher are three write acts on one card, so this
- * follows **Staff** rather than inventing a shape: `mountWorkspace()` is called
- * once per section, on that section's own root, and each inherits the form/list
- * swap, the single switch control, the count badge and the Escape step. There is
- * no per-module flow code here, which is the rule §2A exists to state.
+ * ## Six sections, and the shared renderer used six times
  *
- * Sections mount **lazily**, on the first click of their tab (§2.5, §7.2). A
- * workshop that only ever takes receipts never pays for the voucher grid's chart
- * of accounts, and opening the module fetches the payment modes and nothing
- * else.
+ * Each act is its own section, so this follows **Staff** rather than inventing
+ * a shape: `mountWorkspace()` is called once per section, on that section's own
+ * root, and each inherits the form/list swap, the single switch control, the
+ * count badge and the Escape step. There is no per-module flow code here.
+ *
+ * Three sections live in other files and are imported on their first tab click:
+ * `journal-expense.js`, `journal-personal.js`, and `components/staff-advance.js`
+ * — the last shared with the Staff card, which mounts the same component over
+ * the same partial. Sections mount **lazily**, on the first click of their tab
+ * (§2.5, §7.2): opening the card fetches the payment modes and the expense form's
+ * accounts and nothing else.
+ *
+ * A tab the person may not use — Staff advance without READ:STAFF, Personal
+ * without PERSONAL_EXPENSES — is hidden by its permission gate, and a deep link
+ * to it is ignored rather than honoured.
  *
  * Each section's workspace registers Escape under a key of its own and the
  * module registers `journal`, because the shell asks for the module key — the
  * same reason Staff does it. Without that the last-mounted section would answer
- * for all three, and a press on the voucher list would swap the receipt form.
+ * for all six, and a press on the voucher list would swap the expense form.
  *
  * ## Receipt and Payment are one implementation
  *
@@ -105,7 +114,10 @@ let root = null;
 /** sectionKey -> { root, form, list, workspace, opened, mount } */
 const sections = {};
 
-let activeSection = 'receipt';
+let activeSection = 'expense';
+
+/** The tabs, in the order they are drawn. */
+const SECTION_KEYS = ['expense', 'payment', 'receipt', 'advance', 'journal', 'personal'];
 
 /** The ways money can move, from the server. Four readers, fetched once. */
 let modes = [];
@@ -350,11 +362,27 @@ function renderSplit(txn) {
             </td>
         </tr>`).join('');
 
+    // Not a way the money moved — what the party was let off on top of it, so
+    // it sits under the split rather than among the modes.
+    const discount = Number(txn.discount) > 0
+        ? `<tr class="border-t border-border bg-secondary/40">
+               <td class="px-2 py-2 text-[0.8125rem]">
+                   <span class="font-medium">Discount</span>
+                   <span class="mt-0.5 block text-[0.6875rem] text-muted-foreground">
+                       ${txn.type === 'payment' ? 'The supplier let the workshop off' : 'Let off, after tax'}
+                   </span>
+               </td>
+               <td class="px-2 py-2 text-right font-mono text-[0.8125rem] font-medium">
+                   ${esc(formatMoney(txn.discount))}
+               </td>
+           </tr>`
+        : '';
+
     return `
         <div class="mb-5">
             <h4 class="section-label mb-2">How the money moved</h4>
             <div class="overflow-hidden rounded-[10px] border border-border">
-                <table class="w-full border-collapse"><tbody>${rows}</tbody></table>
+                <table class="w-full border-collapse"><tbody>${rows}${discount}</tbody></table>
             </div>
         </div>`;
 }
@@ -921,6 +949,12 @@ function settlementSection(direction) {
             errors.date = ['Give the date the money moved.'];
         }
 
+        const discount = form.elements.discount.value.trim();
+
+        if (discount !== '' && !(Number(discount) > 0 && /^\d+(\.\d{1,2})?$/.test(discount))) {
+            errors.discount = ['Give the discount in rupees and paise, or leave it blank.'];
+        }
+
         if (!split.length) {
             errors.payments = ['Say how the money moved — enter at least one amount.'];
 
@@ -949,6 +983,7 @@ function settlementSection(direction) {
 
         picker.set(null);
         inForm(`#${direction}-notes`).value = '';
+        form.elements.discount.value = '';
         payments.reset();
 
         /*
@@ -1027,6 +1062,7 @@ function settlementSection(direction) {
                     client_ref: state.clientRef,
                     party_id: picker.id(),
                     payments: split,
+                    discount: form.elements.discount.value.trim() || null,
                 },
             });
 
@@ -1609,6 +1645,60 @@ function voucherSection() {
  | Sections
  | ---------------------------------------------------------------------- */
 
+/* -------------------------------------------------------------------------
+ | The three sections that live in their own files
+ |
+ | Imported on the first click of their tab, so a workshop that only ever takes
+ | receipts never downloads the personal diary (§2.5).
+ | ---------------------------------------------------------------------- */
+
+function expenseSection() {
+    const section = sections.expense;
+
+    section.mount = async () => {
+        const { mountExpenseSection } = await import('./journal-expense');
+
+        section.api = await mountExpenseSection(section.root, el('#expense-drawer'));
+        section.workspace = section.api.workspace;
+    };
+}
+
+/**
+ * The same component and partial the Staff card's Advances tab mounts. This
+ * card holds no staff list of its own, so the component fetches one.
+ */
+function advanceSection() {
+    const section = sections.advance;
+
+    section.canCreate = can('WRITE', 'STAFF') && can('WRITE', 'TRANSACTIONS');
+
+    section.mount = async () => {
+        const { mountStaffAdvances } = await import('../components/staff-advance');
+
+        section.api = await mountStaffAdvances(section.root, {
+            key: 'journal:advance',
+            modes,
+        });
+        section.workspace = section.api.workspace;
+    };
+}
+
+function personalSection() {
+    const section = sections.personal;
+
+    section.canCreate = can('WRITE', 'PERSONAL_EXPENSES');
+
+    section.mount = async () => {
+        const { mountPersonalSection } = await import('./journal-personal');
+
+        section.api = await mountPersonalSection(section.root, {
+            entry: el('#personal-drawer'),
+            categories: el('#personal-categories-drawer'),
+        });
+        section.workspace = section.api.workspace;
+    };
+}
+
 /**
  * Show a section, mounting it the first time it is asked for.
  *
@@ -1617,7 +1707,7 @@ function voucherSection() {
  * opening the module fetches the payment modes and nothing else.
  */
 async function openSection(key) {
-    if (!sections[key]) return;
+    if (!sections[key] || !permitted(key)) return;
 
     activeSection = key;
 
@@ -1641,10 +1731,21 @@ async function openSection(key) {
     }
 }
 
+/**
+ * Whether this person may open a section — read off its tab, which the
+ * permission gate has already hidden or not. One answer, asked of the markup
+ * the gate wrote, rather than a second copy of each tab's grant here.
+ */
+function permitted(key) {
+    const tab = $(`[data-txn-tab="${key}"]`, root);
+
+    return Boolean(tab) && !tab.classList.contains('hidden');
+}
+
 function requestedTab(params = moduleParams()) {
     const tab = params.get('tab');
 
-    return tab && sections[tab] ? tab : null;
+    return tab && sections[tab] && permitted(tab) ? tab : null;
 }
 
 /**
@@ -1669,7 +1770,10 @@ async function applyDeepLink(params) {
 
     // The drawer fetches by id, so it needs no list behind it — the section is
     // left on whichever surface it landed on and the document opens over it.
-    if (document_) await openDrawer(document_, tab ?? activeSection);
+    // An expense opens in its own drawer, which shows the account it was
+    // booked to; everything else in the shared one.
+    if (document_ && tab === 'expense') await sections.expense.api?.openDocument(document_);
+    else if (document_) await openDrawer(document_, tab ?? activeSection);
 
     clearModuleParams();
 }
@@ -1681,7 +1785,7 @@ async function applyDeepLink(params) {
 export default async function initJournal() {
     root = $('[data-txn-section="receipt"]').closest('[data-module-root]');
 
-    ['receipt', 'payment', 'journal'].forEach((key) => {
+    SECTION_KEYS.forEach((key) => {
         const sectionRoot = $(`[data-txn-section="${key}"]`, root);
 
         sections[key] = {
@@ -1695,6 +1799,9 @@ export default async function initJournal() {
             opened: false,
             mount: async () => {},
             reload: async () => {},
+
+            /** Whether this person may write here — what Escape back to the form asks. */
+            canCreate: can('WRITE', 'TRANSACTIONS'),
         };
     });
 
@@ -1706,6 +1813,9 @@ export default async function initJournal() {
     settlementSection('receipt');
     settlementSection('payment');
     voucherSection();
+    expenseSection();
+    advanceSection();
+    personalSection();
 
     $('[data-txn-tabs]', root).addEventListener('click', (event) => {
         const tab = event.target.closest('[data-txn-tab]');
@@ -1740,7 +1850,7 @@ export default async function initJournal() {
         const section = sections[activeSection];
 
         if (!section?.workspace || section.workspace.mode() !== 'list') return false;
-        if (!can('WRITE', 'TRANSACTIONS')) return false;
+        if (!section.canCreate) return false;
 
         section.workspace.showForm();
 
@@ -1748,12 +1858,13 @@ export default async function initJournal() {
     });
 
     /*
-    | The section a deep link asked for, or Receipt — the one done most (§2A.5).
+    | The section a deep link asked for, or Expense — what most people open this
+    | card for (§2A.5).
     | `openSection()` is called here rather than left to `applyDeepLink()`,
     | because a module opened from its own card asked for nothing and must still
     | land somewhere.
     */
-    await openSection(requestedTab() ?? 'receipt');
+    await openSection(requestedTab() ?? 'expense');
 
     await applyDeepLink(moduleParams());
 

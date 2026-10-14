@@ -18,6 +18,8 @@ use App\Http\Controllers\Api\V1\PartyController;
 use App\Http\Controllers\Api\V1\PasskeyController;
 use App\Http\Controllers\Api\V1\PayrollController;
 use App\Http\Controllers\Api\V1\PermissionController;
+use App\Http\Controllers\Api\V1\PersonalExpenseCategoryController;
+use App\Http\Controllers\Api\V1\PersonalExpenseController;
 use App\Http\Controllers\Api\V1\ReportController;
 use App\Http\Controllers\Api\V1\RoleController;
 use App\Http\Controllers\Api\V1\StaffAdvanceController;
@@ -27,6 +29,7 @@ use App\Http\Controllers\Api\V1\TenantController;
 use App\Http\Controllers\Api\V1\TransactionController;
 use App\Http\Controllers\Api\V1\UnitController;
 use App\Http\Controllers\Api\V1\UserController;
+use App\Http\Controllers\Api\V1\JobKindController;
 use App\Http\Controllers\Api\V1\WorkshopJobController;
 use App\Http\Controllers\Api\V1\WorkspaceController;
 use App\Http\Middleware\EnsurePermission;
@@ -733,6 +736,16 @@ Route::prefix('v1')->group(function () {
                 ->middleware('permission:WRITE:TRANSACTIONS,UPDATE:TRANSACTIONS');
 
             /*
+            | Putting a customer on a walk-in sale, so its GST invoice can name
+            | them. A correction in all but the form — the sale is reversed and
+            | reissued under the customer — so it asks for the same two grants.
+            | See `TransactionService::assignCustomer()`.
+            */
+            Route::post('{transaction}/assign-customer', [TransactionController::class, 'assignCustomer'])
+                ->whereNumber('transaction')
+                ->middleware('permission:WRITE:TRANSACTIONS,UPDATE:TRANSACTIONS');
+
+            /*
             | Taking part of a bill back — M18, and the brief's scenarios 5 and 6.
             |
             | Beside `reverse`, not instead of it, because the two are different
@@ -1113,6 +1126,76 @@ Route::prefix('v1')->group(function () {
         | quietly conferred the ability to post to the ledger would be a hole in
         | the permission model rather than a convenience.
         */
+        /*
+        | The Kind Master — what the workshop takes in, and what it asks about
+        | each.
+        |
+        | Its own list rather than the catalogue's categories, which is what the
+        | intake form read until now. The filter it used — `holds_stock` —
+        | separates "kept on a shelf" from "made when it is sold" and says
+        | nothing about whether somebody wheels one through a door, so the bench
+        | was offered Part, Bulk material, Bearing and Wire and was offered no
+        | cooler, fan or submersible at all. See App\Models\JobKind.
+        |
+        | Gated on WORKSHOP_JOBS and split the way the Category Master is split:
+        | READ because the intake form cannot draw without the list, UPDATE to
+        | change what the workshop asks about every cooler, DELETE for the
+        | tidying-up authority. A clerk who books motors in holds the first and
+        | not the second.
+        |
+        | DELETE only ever reaches a definition nothing depends on. A kind with
+        | jobs filed under it and a field jobs have answered are both refused and
+        | archived instead — the same rule as a category, an account and a party,
+        | for the same reason: the record left behind would lose the thing that
+        | explains it.
+        */
+        Route::prefix('job-kinds')->group(function () {
+            Route::get('/', [JobKindController::class, 'index'])
+                ->middleware('permission:READ,WORKSHOP_JOBS');
+
+            Route::get('{kind}', [JobKindController::class, 'show'])
+                ->whereNumber('kind')
+                ->middleware('permission:READ,WORKSHOP_JOBS');
+
+            Route::post('/', [JobKindController::class, 'store'])
+                ->middleware('permission:UPDATE,WORKSHOP_JOBS');
+
+            Route::patch('{kind}', [JobKindController::class, 'update'])
+                ->whereNumber('kind')
+                ->middleware('permission:UPDATE,WORKSHOP_JOBS');
+
+            Route::delete('{kind}', [JobKindController::class, 'destroy'])
+                ->whereNumber('kind')
+                ->middleware('permission:DELETE,WORKSHOP_JOBS');
+
+            /*
+            | The questions a kind asks. Nested because a field has no meaning
+            | apart from its kind — "head" is uninterpretable without knowing it
+            | belongs to Submersible pump — and because the kind is what decides
+            | whether a key is already taken.
+            */
+            Route::get('{kind}/fields', [JobKindController::class, 'fields'])
+                ->whereNumber('kind')
+                ->middleware('permission:READ,WORKSHOP_JOBS');
+
+            Route::post('{kind}/fields', [JobKindController::class, 'storeField'])
+                ->whereNumber('kind')
+                ->middleware('permission:UPDATE,WORKSHOP_JOBS');
+
+            // Before {field}, or "order" is parsed as an id.
+            Route::put('{kind}/fields/order', [JobKindController::class, 'reorderFields'])
+                ->whereNumber('kind')
+                ->middleware('permission:UPDATE,WORKSHOP_JOBS');
+
+            Route::patch('{kind}/fields/{field}', [JobKindController::class, 'updateField'])
+                ->whereNumber('kind')->whereNumber('field')
+                ->middleware('permission:UPDATE,WORKSHOP_JOBS');
+
+            Route::delete('{kind}/fields/{field}', [JobKindController::class, 'destroyField'])
+                ->whereNumber('kind')->whereNumber('field')
+                ->middleware('permission:DELETE,WORKSHOP_JOBS');
+        });
+
         Route::prefix('workshop-jobs')->group(function () {
             // Before {job}, or "meta" is parsed as an id — the same habit that
             // keeps `accounts/types` working.
@@ -1355,6 +1438,51 @@ Route::prefix('v1')->group(function () {
             Route::delete('{employee}', [EmployeeController::class, 'destroy'])
                 ->whereNumber('employee')
                 ->middleware('permission:DELETE,STAFF');
+        });
+
+        /*
+        | The owner's personal diary — money out of their own pocket.
+        |
+        | Not the workshop's money, so nothing below posts and no report reads
+        | it. PERSONAL_EXPENSES is given to OWNER alone; the diary is one per
+        | workshop, shared by whoever holds it. The category master is declared
+        | before `{expense}`, which is numeric-constrained.
+        */
+        Route::prefix('personal-expenses')->group(function () {
+            Route::get('meta', [PersonalExpenseController::class, 'meta'])
+                ->middleware('permission:READ,PERSONAL_EXPENSES');
+
+            Route::get('categories', [PersonalExpenseCategoryController::class, 'index'])
+                ->middleware('permission:READ,PERSONAL_EXPENSES');
+
+            Route::post('categories', [PersonalExpenseCategoryController::class, 'store'])
+                ->middleware('permission:WRITE,PERSONAL_EXPENSES');
+
+            Route::patch('categories/{category}', [PersonalExpenseCategoryController::class, 'update'])
+                ->whereNumber('category')
+                ->middleware('permission:UPDATE,PERSONAL_EXPENSES');
+
+            Route::delete('categories/{category}', [PersonalExpenseCategoryController::class, 'destroy'])
+                ->whereNumber('category')
+                ->middleware('permission:DELETE,PERSONAL_EXPENSES');
+
+            Route::get('/', [PersonalExpenseController::class, 'index'])
+                ->middleware('permission:READ,PERSONAL_EXPENSES');
+
+            Route::get('{expense}', [PersonalExpenseController::class, 'show'])
+                ->whereNumber('expense')
+                ->middleware('permission:READ,PERSONAL_EXPENSES');
+
+            Route::post('/', [PersonalExpenseController::class, 'store'])
+                ->middleware('permission:WRITE,PERSONAL_EXPENSES');
+
+            Route::patch('{expense}', [PersonalExpenseController::class, 'update'])
+                ->whereNumber('expense')
+                ->middleware('permission:UPDATE,PERSONAL_EXPENSES');
+
+            Route::delete('{expense}', [PersonalExpenseController::class, 'destroy'])
+                ->whereNumber('expense')
+                ->middleware('permission:DELETE,PERSONAL_EXPENSES');
         });
 
         /*

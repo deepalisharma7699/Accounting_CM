@@ -115,7 +115,7 @@ and its footer changes with them. The only thing that opens over the drawer is
 
 | Document | Offered |
 | --- | --- |
-| Draft | Post, Discard |
+| Draft | **Continue editing**, Post, Discard |
 | Posted purchase, nothing paid and nothing returned | Record payment, **Edit**, Return to vendor, Reverse |
 | Posted purchase, part-paid or part-returned | Record payment, Return to vendor, Reverse |
 | Posted purchase, settled | Return to vendor, Reverse |
@@ -126,6 +126,25 @@ A debit note can be reversed because one raised against the wrong bill is as muc
 a mis-posting as the bill was, and reversal is the only correction once either is
 in the books. It cannot be paid or returned against: there is nothing to pay on
 one, and nothing to send back off one.
+
+### A draft is continued, not only posted or thrown away
+
+Somebody saves a bill as a draft because it is not finished, so the drawer's
+first offer is **Continue editing**. It puts the draft back in this module's own
+create form — `components/bill-revision.js`, the same loader a correction uses —
+with everything it was saved with: the vendor, the date, the vendor's invoice
+number, the notes, each line at its rate with its discount in the unit it was
+typed in and its tax basis, the bill discount, and the payment split. A banner
+names the draft; **Stop editing** leaves it as last saved.
+
+From there the form's own buttons write to that draft: "Save as a draft" rewrites
+it (`PATCH /transactions/{id}`), and "Review & post" rewrites it and then posts
+it (`/post`). It keeps its id, and it takes its number only when it posts. If the
+form is already holding unsaved work, continuing asks before replacing it. If the
+draft was posted or discarded elsewhere in the meantime, the form says which,
+rather than failing with a generic error. The control needs `UPDATE` and `WRITE`
+on transactions — `UPDATE` to rewrite a draft, `WRITE` to reach the create form
+it is finished in.
 
 ### Correct is reverse-and-repost, and it says so
 
@@ -267,6 +286,57 @@ happens whenever they next look at the list, not at a moment nobody was watching
 "What did we buy from them" and "what did we send back" are one question asked of
 one supplier. Two lists have to be reconciled by hand, and the second one is
 always the one nobody opens.
+
+### Cancelling is what reversing is called on this screen
+
+A posted document is immutable and is corrected by **reversing** it — that has
+not changed and cannot. Posting a purchase recomputes the weighted average cost
+of every variant on it, so once anything has been sold the shelf is valued off
+that document and deleting the row could not un-blend it; a sale issues at an
+average that is on no document at all, which is what `REVISION_WOULD_RESTATE_COST`
+already refuses. The GST position and the audit trail have to survive either way.
+
+What changed is the wording and the list. The control says **"Cancel this
+&lt;noun&gt;"** rather than "Reverse", because people looking for "delete" do not
+recognise the accounting term, and because "Cancel" alone beside "Close" in a
+drawer footer reads as "cancel what I am doing". The confirmation then says what
+cancelling actually does.
+
+And the cancelled pair — the document with `status = reversed` **and** the entry
+with `reverses_id` that undid it — comes **off the working list by default**,
+behind a "Show cancelled" toggle. Both halves go together: hiding one would leave
+a negative document referring to nothing. Nothing is hidden from the books; the
+pair is untouched in the ledger, on the Day Book and on the audit trail, which is
+the whole reason it is safe to take off this one screen.
+
+It is a `hide_cancelled` filter on `GET /transactions`, and it is **opt-in at the
+API**: the party statement, the journal and the expenses list are all asking
+books questions where a cancelled document is part of the answer, so the default
+had to stay exactly as it was. The screen also stops sending it the moment
+somebody picks a state from the filter — asking for "Reversed" and being handed
+an empty table would be the screen doing the opposite of what it was told.
+
+## The vendor's invoice number
+
+A purchase may carry `vendor_invoice_no` — the number printed on the vendor's
+own bill, optional, up to 50 characters. It is ours to *record*, never ours to
+issue: our number is still `doc_no`. The engine keeps it on a purchase only and
+drops it from any other type; it rides in a draft's payload, survives a
+correction (a revision is still that vendor's bill) and is cleared on a repeat.
+The list search matches it.
+
+**Entering the same vendor bill twice is warned about, never refused** — vendors
+reuse numbers across financial years. The form asks
+`GET /transactions?type=purchase&party_id=…&vendor_invoice_no=…&hide_cancelled=1`
+(an exact, case-insensitive match) when the number is left or the vendor
+changes, and shows the matching bills under the field; a correction passes its
+own id so it is not reported against itself. The save response carries
+`DUPLICATE_VENDOR_INVOICE` in `meta.warnings` for whoever saved anyway. Reversed
+bills never count, which is what lets a correction keep the original's number.
+
+The column arrives by manual SQL (`database/manual/sql/2026_10_13_001_*`). Until
+that runs the field is accepted and not stored — see
+`Transaction::recordsVendorInvoiceNo()`.
 
 ## Idempotency
 

@@ -68,6 +68,26 @@ class InvalidReturnException extends ApiException
     }
 
     /**
+     * A return against a sale that names no customer.
+     *
+     * The message names the act that does work, because "cannot be returned"
+     * alone leaves somebody at the counter holding the goods with no way on.
+     */
+    public static function walkIn(string $docNo): self
+    {
+        return new self(
+            message: sprintf(
+                '%s was a walk-in sale with no customer named, so there is no account to credit a return to. '.
+                'Cancel the invoice instead — the goods come back onto the shelf and the payment is reversed.',
+                $docNo,
+            ),
+            status: 422,
+            errorCode: 'RETURN_AGAINST_WALK_IN',
+            details: ['bill' => $docNo],
+        );
+    }
+
+    /**
      * More has been returned than was billed — counting what came back earlier.
      *
      * The brief's scenario 6, and the one refusal that has to be stated in units
@@ -112,6 +132,43 @@ class InvalidReturnException extends ApiException
      * series is the one thing in this module that has to be explicable line by
      * line.
      */
+    /**
+     * A line that supplied something the workshop *made*.
+     *
+     * A rewind is one line at one price and several quantities off the shelf,
+     * and a credit note is built one line at a time: it carries an item, a
+     * variant and one `stock_value`, which is the shape of something that came
+     * off exactly one shelf. There is no honest way to put copper, varnish and
+     * sleeve back through a row that names a service.
+     *
+     * Refused rather than approximated, because the plausible approximations are
+     * all wrong in the same direction: crediting the line with no movement at
+     * all silently keeps the materials issued, and crediting it against the
+     * service variant would put stock onto a shelf that does not exist.
+     *
+     * **Reversing the invoice is the supported correction, and it is exact.** A
+     * reversal mirrors the movements that were actually written — every
+     * material, at the value it left at — so nothing is lost by sending
+     * somebody there. That is also the only correct answer for a rewind: a
+     * customer does not return half a winding.
+     */
+    public static function lineWasMadeFromMaterials(string $docNo, int $lineNo, string $description): self
+    {
+        return new self(
+            message: sprintf(
+                'Line %d of %s ("%s") was made from materials, so it cannot be credited on its own — '.
+                'a credit note can put one thing back on one shelf, and this line took several off. '.
+                'Reverse the invoice instead, which returns every material at exactly the cost it left at.',
+                $lineNo,
+                $docNo,
+                $description,
+            ),
+            status: 422,
+            errorCode: 'RETURN_LINE_WAS_MADE_FROM_MATERIALS',
+            details: ['line_no' => $lineNo, 'description' => $description],
+        );
+    }
+
     public static function nothingToReturn(string $docNo): self
     {
         return new self(

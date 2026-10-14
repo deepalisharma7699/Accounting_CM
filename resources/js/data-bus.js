@@ -46,6 +46,11 @@
 /**
  * The kinds of fact a screen can hold a copy of.
  *
+ * `kinds` is what the bench asks about a thing on it — held by the Jobs module,
+ * which is also the only thing that writes it. Named here anyway, because the
+ * announcement is what has to be right: a screen that comes to hold a copy of
+ * it later only has to subscribe.
+ *
  * `ledger` is held by Opening balances, whose position is a copy of the books
  * and of the go-live date on the settings screen. `staff` has no subscriber yet
  * — the module that would hold a copy of it refreshes its own sections already.
@@ -53,7 +58,7 @@
  * write that reports nothing is invisible, and the module that comes to hold
  * that data later only has to subscribe.
  */
-const RESOURCES = ['stock', 'items', 'transactions', 'parties', 'ledger', 'staff'];
+const RESOURCES = ['stock', 'items', 'transactions', 'parties', 'ledger', 'staff', 'kinds'];
 
 /** resource -> the handlers that want to know. */
 const listeners = new Map(RESOURCES.map((resource) => [resource, new Set()]));
@@ -101,6 +106,17 @@ const WRITES = [
     */
     [/^\/workshop-jobs(\/|\?|$)/, ['transactions', 'stock', 'parties', 'ledger']],
 
+    /*
+    | The bench's own vocabulary. Listed **before** nothing and after nothing in
+    | particular — it shares no prefix with `workshop-jobs` — but it is here
+    | rather than folded into the row above because it invalidates a different
+    | thing: no figure moves, and what goes stale is the question set the intake
+    | form draws. Announced all the same, for §3.7's reason: the failure being
+    | guarded against is a *missed* invalidation, and a convention that each
+    | write site remembers to announce fails silently, one site at a time.
+    */
+    [/^\/job-kinds(\/|\?|$)/, ['kinds']],
+
     // A new variant is a new row on the stock screen, at a position of zero.
     [/^\/items(\/|\?|$)/, ['items', 'stock']],
 
@@ -120,6 +136,11 @@ const WRITES = [
     [/^\/staff(\/|\?|$)/, ['staff', 'ledger']],
 
     [/^\/accounts(\/|\?|$)/, ['ledger']],
+
+    // The owner's personal diary. Listed so the omission reads as a decision:
+    // it is not the workshop's money, so a write here leaves every held screen
+    // — the ledger, every report, every list — exactly as true as it was.
+    [/^\/personal-expenses(\/|\?|$)/, []],
 
     /*
     | Which cards sit at the top of home. Listed *ahead* of `/workspace` below,

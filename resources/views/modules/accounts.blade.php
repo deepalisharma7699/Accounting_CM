@@ -101,7 +101,7 @@
                     </span>
                 </p>
 
-                <section class="surface p-5 sm:p-6">
+                <section class="surface form-card">
                     <div data-form-chrome="inline">
                         <h3 class="text-sm font-bold text-foreground">A new account on the chart</h3>
                         <p class="mt-1 text-[0.8125rem] text-muted-foreground">
@@ -112,7 +112,7 @@
                         </p>
                     </div>
 
-                    <div class="mt-4 grid gap-4 sm:grid-cols-2">
+                    <div class="mt-4 form-grid">
                         <div>
                             <label for="account-type" class="field-label">Type <span class="req">*</span></label>
                             <select id="account-type" name="type" class="field-input" required>

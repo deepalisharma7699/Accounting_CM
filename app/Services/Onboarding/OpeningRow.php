@@ -28,6 +28,19 @@ final class OpeningRow
         /** The specification, for a stock row: "6204", "22 SWG", "5 HP / 3 ph / 1440". */
         public readonly ?string $variant,
         /**
+         * The variant this row is about, where the caller already knows it.
+         *
+         * A file of the workshop's own has names in it, which is what
+         * `variant` and the name matcher are for. A *screen* is the opposite
+         * case, and so is the template the Stock card downloads, which writes
+         * the id into every row: the Items drawer is looking at one variant and
+         * holds its id, so putting that id through a fuzzy name match would be
+         * throwing away the one certain thing it knows and risking a near-miss
+         * on a shop with "Bearing 6204" and "Bearing 6204 ZZ". Set, it short-circuits
+         * resolution entirely — see OpeningBalanceService::resolveItem().
+         */
+        public readonly ?int $variantId,
+        /**
          * The category the row names, needed only when the item is new.
          *
          * The raw text from the file rather than a resolved record: the column
@@ -55,6 +68,9 @@ final class OpeningRow
             kind: OpeningRowKind::tryFrom(strtolower(trim((string) ($data['kind'] ?? '')))) ?? OpeningRowKind::Balance,
             name: self::text($data['name'] ?? null),
             variant: self::text($data['variant'] ?? null),
+            variantId: isset($data['variant_id']) && $data['variant_id'] !== ''
+                ? (int) $data['variant_id']
+                : null,
             categoryName: self::text($data['type'] ?? null),
             quantity: self::number($data['quantity'] ?? null),
             unitCost: self::number($data['unit_cost'] ?? null),
@@ -89,7 +105,7 @@ final class OpeningRow
      */
     public function fingerprintParts(): array
     {
-        return [
+        $parts = [
             $this->kind->value,
             strtolower((string) $this->name),
             strtolower((string) $this->variant),
@@ -101,6 +117,30 @@ final class OpeningRow
             strtolower((string) $this->side),
             (string) $this->gstin,
         ];
+
+        /*
+        | The variant id distinguishes a row, and it has to.
+        |
+        | Two variants of one product are the same *name*, and a screen
+        | declaring them sends no `variant` text at all — so "10 @ 50 of Bearing
+        | 6204" for the 6204 and for the 6204 ZZ produce identical parts without
+        | this, one hash, and the second declaration refused outright as a file
+        | already imported. Not a wrong figure: a correct one the product would
+        | not accept, with a message about a file nobody used.
+        |
+        | **Appended only when set**, which is what keeps the paste box exactly
+        | as it was. A CSV row without a `variant_id` column has a null id, so
+        | its parts array is unchanged byte for byte and every fingerprint
+        | already stored against an imported file still matches it. Adding an
+        | empty segment unconditionally would rehash every one of them, and a
+        | workshop re-pasting last month's file would stop being told it had
+        | already been imported.
+        */
+        if ($this->variantId !== null) {
+            $parts[] = 'variant#'.$this->variantId;
+        }
+
+        return $parts;
     }
 
     /**
@@ -112,7 +152,24 @@ final class OpeningRow
         return $this->name === null
             && $this->account === null
             && $this->amount === null
-            && $this->quantity === null;
+            && $this->quantity === null
+            // A row that names a variant by id is about something, whatever
+            // else it left out.
+            && $this->variantId === null;
+    }
+
+    /**
+     * True for a row of the Stock card's template that nobody filled in: it
+     * names a variant and declares nothing about it.
+     *
+     * A unit cost on its own does not count as filled — the template writes the
+     * purchase price into every row before anybody has counted anything.
+     */
+    public function isUnfilledTemplateRow(): bool
+    {
+        return $this->variantId !== null
+            && $this->quantity === null
+            && $this->amount === null;
     }
 
     /* ---------------------------------------------------------------------

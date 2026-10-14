@@ -5,7 +5,8 @@ import { mountBillRevision } from '../components/bill-revision';
 import {
     bindDelivery, deliver, openInvoicePreview, openShare, printInvoice,
 } from '../components/invoice-delivery';
-import { mountPaymentRows } from '../components/payment-rows';
+import { mountPartyPicker } from '../components/party-picker';
+import { mountPaymentRows, settleAgainst } from '../components/payment-rows';
 import { describeAttribution, mountStaffAttribution } from '../components/staff-attribution';
 import { describeShortfalls } from '../components/stock-position';
 import { can } from '../permissions';
@@ -70,6 +71,15 @@ const state = {
     payment: '',
     status: '',
     outstanding: false,
+    /*
+    | Whether a cancelled document and the reversal that cancelled it are on the
+    | list. Off by default: this screen is the working list, and a mistake
+    | corrected an hour ago should not go on occupying two rows of it for ever.
+    |
+    | It hides nothing from the books. The pair is untouched in the ledger, on
+    | the Day Book and on the audit trail — this is the one list it comes off.
+    */
+    showCancelled: false,
     from: '',
     to: '',
     page: 1,
@@ -130,6 +140,15 @@ function query() {
     if (state.payment) params.set('payment_status', state.payment);
     if (state.status) params.set('status', state.status);
     if (state.outstanding) params.set('outstanding', '1');
+
+    /*
+    | Not sent while a state has been chosen explicitly, and that guard is the
+    | whole of why this is decided here rather than on the server. Picking
+    | "Reversed" from the state filter and being handed an empty table would be
+    | the screen doing the opposite of what it was asked, with nothing saying
+    | so — so an explicit question about state always wins over the default.
+    */
+    if (!state.showCancelled && !state.status) params.set('hide_cancelled', '1');
     if (state.from) params.set('from', state.from);
     if (state.to) params.set('to', state.to);
 
@@ -233,7 +252,7 @@ function renderRow(row) {
             </td>
 
             <td class="table-cell text-[0.8125rem]">
-                ${esc(row.party?.name ?? '—')}
+                ${esc(customerName(row))}
                 ${row.notes ? `<span class="block text-xs text-muted-foreground">${esc(row.notes)}</span>` : ''}
             </td>
 
@@ -277,6 +296,8 @@ const drawer = {
     bill: null,
     meta: null,
     payments: null,
+    // "Paid in full, for less" on the pay form — see `settleAgainst`.
+    settle: null,
     /*
     | Minted per credit note being written and reused on every retry of it.
     |
@@ -295,8 +316,25 @@ const drawer = {
     */
     /** The correction dialog's pickers while it is open — M22. */
     staffEditor: null,
+    /** The customer picker while a walk-in sale is being given a customer. */
+    customerPicker: null,
+    /** The reissue's client reference — per document, kept across a retry. */
+    customerRef: null,
     busy: false,
 };
+
+/**
+ * A sale raised for somebody who gave no name — paid in full at the counter,
+ * and the one kind of invoice with no customer on it.
+ */
+const isWalkIn = (bill) => bill.type === 'sale' && (bill.party_id ?? null) === null;
+
+/** Who a document is for, as a list or a drawer says it. */
+function customerName(bill) {
+    if (bill.party?.name) return bill.party.name;
+
+    return isWalkIn(bill) ? 'Walk-in' : '—';
+}
 
 async function openDrawer(id) {
     drawer.id = id;
@@ -307,6 +345,7 @@ async function openDrawer(id) {
     // next would make a return on B come back as the credit note already raised
     // on A.
     drawer.returnRef = null;
+    drawer.customerRef = null;
 
     el('[data-drawer-subtitle]').textContent = '';
     el('[data-drawer-status]').innerHTML = '';
@@ -348,7 +387,7 @@ function paint() {
         `${bill.type_label} ${bill.doc_no ?? `#${bill.id}`}`;
 
     el('[data-drawer-subtitle]').textContent = [
-        bill.party?.name,
+        customerName(bill),
         formatDate(bill.date),
         bill.notes,
     ].filter(Boolean).join(' · ');
@@ -362,6 +401,7 @@ function paint() {
 
     if (drawer.mode === 'pay') return paintPay();
     if (drawer.mode === 'return') return paintReturn();
+    if (drawer.mode === 'customer') return paintCustomer();
 
     paintView();
 }
@@ -581,6 +621,11 @@ function paintPay() {
             <em>it</em> moves rather than only the customer's overall balance.
         </p>
 
+        <p class="mb-4 text-[0.8125rem] text-muted-foreground">
+            Paid less to close it? Type what they paid under <strong>Paid in full</strong> — the rest is written
+            off as a discount. The invoice and its GST stay as issued.
+        </p>
+
         <label class="field mb-4">
             <span class="field-label">Date</span>
             <input type="date" class="field-input" data-pay-date value="${esc(todayISO())}">
@@ -592,12 +637,16 @@ function paintPay() {
         <p class="field-error hidden" data-error-for="payments"></p>
         <p class="field-error hidden" data-error-for="party_id"></p>`;
 
+    // Paid in full at less than is owing — the rest written off after tax.
+    drawer.settle = settleAgainst(bill.due ?? '0.00');
+
     drawer.payments = mountPaymentRows(el('[data-pay-host]'), {
         modes: doc.paymentModes(),
         // Pre-fills "Paid in full" with what is actually left on this invoice
         // rather than its total — a part-paid invoice being topped up is the
         // common case at a counter.
-        outstanding: () => bill.due ?? '0.00',
+        outstanding: drawer.settle.outstanding,
+        settleShort: drawer.settle.settleShort,
         heading: 'Collected now',
         noun: 'customer',
         verb: 'collected',
@@ -611,12 +660,111 @@ function paintPay() {
     paintActions();
 }
 
+/* --- putting a customer on a walk-in sale ------------------------------ */
+
+/**
+ * Who a walk-in sale turns out to have been for — so the GST invoice can carry
+ * their name, and their GSTIN where they are registered.
+ *
+ * A drawer state rather than a dialog over it, because it is one more thing done
+ * to this one record (§2). The sale is reversed and reissued under the customer
+ * by the server, from the sale itself: nothing on it can be changed here, which
+ * is the point — the only question asked is who.
+ *
+ * Existing customers only. Writing a new one is `quick-party.js`, whose form
+ * lives on this module's create surface and is detached while a drawer is open
+ * over the list; a second copy of those fields here is exactly what §5.2 rules
+ * out. So the picker's "+ Add" is taken off and the screen says where it is.
+ */
+function paintCustomer() {
+    const bill = drawer.bill;
+
+    el('[data-drawer-body]').innerHTML = `
+        <p class="mb-4 text-[0.8125rem] text-muted-foreground">
+            Choose who ${esc(bill.doc_no ?? `#${bill.id}`)} was for. It is reissued in their name as a new
+            invoice with a new number — same items, same prices, same payment — and this walk-in sale is
+            cancelled. Nothing comes off the shelf twice and no money moves.
+        </p>
+
+        <div data-customer-host></div>
+        <p class="field-error hidden" data-error-for="party_id"></p>
+
+        <p class="mt-3 text-xs text-muted-foreground">
+            Not a customer yet? Add them on the Customers card first, then come back to this sale.
+        </p>`;
+
+    drawer.customerPicker = mountPartyPicker(el('[data-customer-host]'), {
+        role: 'customer',
+        label: 'Customer',
+    });
+
+    el('[data-customer-host] [data-party-add]')?.remove();
+
+    paintActions();
+    drawer.customerPicker.focus();
+}
+
+/**
+ * From the GST invoice a walk-in sale was just handed over as, straight to
+ * putting a customer on it — the preview is closed rather than stacked under the
+ * drawer, so there is one level-2 surface at a time.
+ */
+async function addCustomerTo(id) {
+    hideModal('#invoice-preview');
+
+    await openDrawer(id);
+
+    if (drawer.bill && isWalkIn(drawer.bill)) {
+        drawer.mode = 'customer';
+        paint();
+    }
+}
+
+async function submitCustomer() {
+    const partyId = drawer.customerPicker?.id();
+
+    if (!partyId) {
+        showActionError(el('[data-drawer-submit]'), 'Choose the customer this invoice is for.');
+
+        return;
+    }
+
+    await run('[data-drawer-submit]', 'Reissuing…', async () => {
+        const response = await auth.call(`/transactions/${drawer.bill.id}/assign-customer`, {
+            method: 'POST',
+            body: {
+                party_id: partyId,
+                // Per document, kept across a retry: a second press after a
+                // timeout must find the invoice the first one wrote.
+                client_ref: drawer.customerRef ??= crypto.randomUUID(),
+            },
+        });
+
+        drawer.customerRef = null;
+        toast(response.message ?? 'Reissued in the customer’s name.');
+
+        hideModal('#sales-drawer');
+        await refreshList();
+
+        // What they came back for: the GST invoice, with their name on it.
+        openInvoicePreview(response.data, { title: 'GST invoice', as: 'invoice' });
+    });
+}
+
 async function submitReceipt() {
     const bill = drawer.bill;
     const split = drawer.payments.value();
 
     if (split.length === 0) {
         showActionError(el('[data-drawer-submit]'), 'Say how the money arrived — cash, bank, UPI or cheque.');
+
+        return;
+    }
+
+    const splitProblem = drawer.payments.problem();
+
+    if (splitProblem) {
+        showActionError(el('[data-drawer-submit]'), splitProblem);
 
         return;
     }
@@ -629,6 +777,8 @@ async function submitReceipt() {
                 post: true,
                 party_id: bill.party?.id,
                 payments: split,
+                // What the customer was let off, where they paid less to close it.
+                discount: drawer.settle?.discount() ?? null,
                 // Named explicitly rather than left to the oldest-first default:
                 // somebody collecting from this invoice's own screen means this
                 // invoice, even where an older one is still open.
@@ -784,22 +934,50 @@ async function submitReturn() {
     });
 }
 
+/**
+ * What this document is called, for the one control that has to name it.
+ *
+ * "Cancel" on its own sits next to "Close" in a drawer footer and reads as
+ * "cancel what I am doing", which is the opposite of what it does. Naming the
+ * document is what makes the button unambiguous, and the same noun then carries
+ * into the confirmation so the two read as one sentence.
+ */
+function docNoun(bill) {
+    return bill.type === 'sale' ? 'invoice' : 'credit note';
+}
+
 /* --- the acts that cannot be undone ----------------------------------- */
 
+/**
+ * Cancel a posted document — what somebody looking for "delete" has come for.
+ *
+ * Still a reversal underneath, and on this side it must be: a sale issues stock
+ * at whatever the weighted average was on the day, a figure that is on no
+ * document, so deleting the row would leave the cost of goods sold restated with
+ * nothing saying so — the same thing `REVISION_WOULD_RESTATE_COST` refuses. The
+ * customer is also holding a numbered tax invoice, which is the other reason the
+ * row stays.
+ *
+ * Both halves come off the working list instead (see `hide_cancelled`), which is
+ * the part that was actually being asked for.
+ */
 async function reverseDocument() {
     const bill = drawer.bill;
     const isInvoice = bill.type === 'sale';
+    const noun = docNoun(bill);
 
     const ok = await confirmAction({
-        title: `Reverse ${bill.doc_no ?? `#${bill.id}`}?`,
+        title: `Cancel ${bill.doc_no ?? `#${bill.id}`}?`,
         body: isInvoice
-            ? 'A mirroring entry is posted and the goods come back onto the shelf. Both documents stay on '
-                + 'the record — nothing is erased. If only part of the sale is coming back, raise a credit '
-                + 'note instead: that leaves the invoice standing, which is what the customer is holding.'
-            : 'A mirroring entry is posted and the goods go back off the shelf. Both documents stay on the '
-                + 'record — nothing is erased. The invoice this credit note was raised against is left '
-                + 'owing again.',
-        confirmLabel: 'Reverse it',
+            ? 'This invoice is cancelled by posting a mirroring entry, and the goods come back onto the '
+                + 'shelf. It comes off this list, and both entries stay in the books, on the day book and '
+                + 'on the audit trail — nothing is erased, which is what keeps the figures explainable. '
+                + 'If only part of the sale is coming back, raise a credit note instead: that leaves the '
+                + 'invoice standing, which is what the customer is holding.'
+            : 'This credit note is cancelled by posting a mirroring entry, and the goods go back off the '
+                + 'shelf. It comes off this list, and both entries stay in the books — nothing is erased. '
+                + 'The invoice it was raised against is left owing again.',
+        confirmLabel: `Cancel the ${noun}`,
     });
 
     if (!ok) return;
@@ -824,9 +1002,9 @@ async function reverseDocument() {
 
             const accepted = await confirmAction({
                 title: 'This will take stock below zero',
-                body: `${describeShortfalls(error.details?.shortfalls ?? [])} Reversing anyway leaves the `
+                body: `${describeShortfalls(error.details?.shortfalls ?? [])} Cancelling anyway leaves the `
                     + 'shelf showing a negative, which stays wrong until a stock count corrects it.',
-                confirmLabel: 'Reverse anyway',
+                confirmLabel: 'Cancel it anyway',
             });
 
             if (!accepted) return;
@@ -842,12 +1020,23 @@ async function reverseDocument() {
  * point of the refusal is that somebody has to have seen it.
  */
 async function postReversal(acknowledged) {
-    const response = await auth.call(`/transactions/${drawer.bill.id}/reverse`, {
+    // Named before the request, because `loadDocument()` below replaces
+    // `drawer.bill` with the document as it now stands.
+    const label = drawer.bill.doc_no ?? `The ${docNoun(drawer.bill)}`;
+
+    await auth.call(`/transactions/${drawer.bill.id}/reverse`, {
         method: 'POST',
         body: acknowledged ? { acknowledge_negative_stock: true } : {},
     });
 
-    toast(response.message ?? 'Reversing entry posted.');
+    /*
+    | The screen's own word, not the server's. `/reverse` answers "Reversing
+    | entry posted." — correct in the books, and shared with every other caller
+    | of that route — but somebody who just pressed "Cancel this invoice" should be
+    | told the thing they asked for happened. The document is named, because a
+    | drawer can be closed before the alert is read.
+    */
+    toast(`${label} cancelled. Both entries stay in the books.`);
 
     await loadDocument();
     await refreshList();
@@ -893,7 +1082,7 @@ function paintActions() {
         host.innerHTML = `
             <button type="button" class="btn btn-secondary btn-sm" data-drawer-back>← Back to the invoice</button>
             <button type="button" class="btn btn-primary btn-sm ml-auto" data-drawer-submit>
-                ${drawer.mode === 'pay' ? 'Record the receipt' : 'Raise the credit note'}
+                ${{ pay: 'Record the receipt', customer: 'Issue GST invoice' }[drawer.mode] ?? 'Raise the credit note'}
             </button>`;
 
         return;
@@ -910,8 +1099,21 @@ function paintActions() {
     | document.
     */
     if (bill.status === 'draft') {
+        /*
+        | Finishing it is why it was saved, so that comes first. Rewriting a
+        | draft is UPDATE on the server, like authorising one — and it is done
+        | in the create form, which only somebody holding WRITE has: without it
+        | the form would open with no way back to the list.
+        */
+        const continues = can('UPDATE', 'TRANSACTIONS') && can('WRITE', 'TRANSACTIONS');
+
+        if (continues) {
+            buttons.push('<button type="button" class="btn btn-primary btn-sm" data-drawer-continue>Continue editing</button>');
+        }
+
         if (can('UPDATE', 'TRANSACTIONS')) {
-            buttons.push('<button type="button" class="btn btn-primary btn-sm" data-drawer-post>Post it</button>');
+            buttons.push(`<button type="button" class="btn ${continues ? 'btn-secondary' : 'btn-primary'} btn-sm" `
+                + 'data-drawer-post>Post it</button>');
         }
 
         if (can('DELETE', 'TRANSACTIONS')) {
@@ -932,7 +1134,17 @@ function paintActions() {
                 buttons.push('<button type="button" class="btn btn-primary btn-sm" data-drawer-pay>Collect payment</button>');
             }
 
-            buttons.push('<button type="button" class="btn btn-secondary btn-sm" data-drawer-return>Accept return</button>');
+            // Not on a walk-in sale: a credit note credits a customer's account
+            // and this one names nobody, so the server refuses it. Cancelling the
+            // invoice is the exact way back, and that button is below.
+            if (!isWalkIn(bill)) {
+                buttons.push('<button type="button" class="btn btn-secondary btn-sm" data-drawer-return>Accept return</button>');
+            } else if (can('UPDATE', 'TRANSACTIONS') && Number(bill.credited ?? 0) === 0) {
+                // Somebody who came back wanting a GST invoice in their name.
+                // The same two grants a correction takes, which the route asserts.
+                buttons.push('<button type="button" class="btn btn-secondary btn-sm" data-drawer-customer>'
+                    + 'Add customer</button>');
+            }
 
             /*
             | Correcting an invoice is UPDATE as well as WRITE — it changes the
@@ -974,11 +1186,26 @@ function paintActions() {
         | Both only on a posted document, because that is the only kind there is
         | a document *of*: a draft has no number, no priced lines and no tax.
         */
-        buttons.push('<button type="button" class="btn btn-secondary btn-sm" data-drawer-print>Print</button>');
+        /*
+        | An invoice prints either way: the estimate the customer is handed by
+        | default, or the GST invoice when they ask for one. A credit note has no
+        | estimate and prints as itself. Which paper each goes on is this
+        | device's setting, decided inside `printInvoice()`.
+        */
+        if (bill.type === 'sale') {
+            buttons.push('<button type="button" class="btn btn-secondary btn-sm" data-drawer-print="estimate">'
+                + 'Print estimate</button>');
+            buttons.push('<button type="button" class="btn btn-secondary btn-sm" data-drawer-print="invoice">'
+                + 'Print GST invoice</button>');
+        } else {
+            buttons.push('<button type="button" class="btn btn-secondary btn-sm" data-drawer-print="invoice">'
+                + 'Print</button>');
+        }
 
         if (canWrite) {
             buttons.push('<button type="button" class="btn btn-secondary btn-sm" data-drawer-share>Share</button>');
-            buttons.push('<button type="button" class="btn btn-ghost btn-sm" data-drawer-reverse>Reverse</button>');
+            buttons.push('<button type="button" class="btn btn-ghost btn-sm" data-drawer-reverse>'
+                + `Cancel this ${docNoun(bill)}</button>`);
         }
     }
 
@@ -986,11 +1213,27 @@ function paintActions() {
         + '<button type="button" class="btn btn-secondary btn-sm ml-auto" data-modal-close>Close</button>';
 }
 
+/**
+ * Put the draft back in the create form to finish it — `bill-revision.js`, the
+ * component that already loads a posted document there to correct it. The
+ * drawer closes only once the form has it: a "replace what is on the form?"
+ * answered no leaves the draft open where it was.
+ */
+async function continueDraft() {
+    if (await revision.continueDraft(drawer.bill)) hideModal('#sales-drawer');
+}
+
 async function postDraft() {
     await run('[data-drawer-post]', 'Posting…', async () => {
         const response = await auth.call(`/transactions/${drawer.id}/post`, { method: 'POST' });
 
-        toast(response.message ?? 'Invoice posted.');
+        toast(revision.release(drawer.id)
+            ? 'Invoice posted. The form that was continuing it has been cleared.'
+            : (response.message ?? 'Invoice posted.'));
+
+        // What the form's own post shows, shown here too: the invoice did post,
+        // and somebody still needs to look at it.
+        (response.meta?.warnings ?? []).forEach((warning) => toast(warning.message, 'error'));
 
         await loadDocument();
         await refreshList();
@@ -1010,7 +1253,9 @@ async function discardDraft() {
     await run(null, null, async () => {
         await auth.call(`/transactions/${drawer.id}`, { method: 'DELETE' });
 
-        toast('Draft discarded.');
+        toast(revision.release(drawer.id)
+            ? 'Draft discarded, and taken off the form that was continuing it.'
+            : 'Draft discarded.');
 
         hideModal('#sales-drawer');
         await refreshList();
@@ -1086,7 +1331,8 @@ function todayISO() {
 
 function clearFilters() {
     Object.assign(state, {
-        search: '', kind: '', payment: '', status: '', outstanding: false, from: '', to: '',
+        search: '', kind: '', payment: '', status: '', outstanding: false,
+        showCancelled: false, from: '', to: '',
     });
 
     listEl('[data-filter-search]').value = '';
@@ -1096,6 +1342,7 @@ function clearFilters() {
     listEl('[data-filter-from]').value = '';
     listEl('[data-filter-to]').value = '';
     listEl('[data-filter-outstanding]').setAttribute('aria-pressed', 'false');
+    listEl('[data-filter-cancelled]').setAttribute('aria-pressed', 'false');
 
     refetch();
 }
@@ -1120,6 +1367,12 @@ function bindFilters() {
     listEl('[data-filter-outstanding]').addEventListener('click', (event) => {
         state.outstanding = !state.outstanding;
         event.currentTarget.setAttribute('aria-pressed', String(state.outstanding));
+        refetch();
+    });
+
+    listEl('[data-filter-cancelled]').addEventListener('click', (event) => {
+        state.showCancelled = !state.showCancelled;
+        event.currentTarget.setAttribute('aria-pressed', String(state.showCancelled));
         refetch();
     });
 
@@ -1172,6 +1425,9 @@ function bindDrawer() {
         if (hit('data-drawer-pay')) {
             drawer.mode = 'pay';
             paint();
+        } else if (hit('data-drawer-customer')) {
+            drawer.mode = 'customer';
+            paint();
         } else if (hit('data-drawer-return')) {
             drawer.mode = 'return';
             paint();
@@ -1180,7 +1436,10 @@ function bindDrawer() {
             paint();
         } else if (hit('data-drawer-submit')) {
             if (drawer.mode === 'pay') submitReceipt();
+            else if (drawer.mode === 'customer') submitCustomer();
             else submitReturn();
+        } else if (hit('data-drawer-continue')) {
+            continueDraft();
         } else if (hit('data-drawer-post')) {
             postDraft();
         } else if (hit('data-drawer-discard')) {
@@ -1188,7 +1447,7 @@ function bindDrawer() {
         } else if (hit('data-drawer-reverse')) {
             reverseDocument();
         } else if (hit('data-drawer-print')) {
-            printInvoice(hit('data-drawer-print'));
+            printInvoice(hit('data-drawer-print'), { as: hit('data-drawer-print').dataset.drawerPrint });
         } else if (hit('data-drawer-share')) {
             openShare();
         } else if (hit('data-drawer-correct')) {
@@ -1366,7 +1625,7 @@ export default async function initSales() {
             | here at all.
             */
             if (created?.status === 'posted' && created?.type === 'sale') {
-                openInvoicePreview(created, { onClosed: backToTheForm });
+                openInvoicePreview(created, { onClosed: backToTheForm, onAddCustomer: addCustomerTo });
             }
         },
     });

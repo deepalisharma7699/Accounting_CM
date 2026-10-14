@@ -83,7 +83,7 @@ class ChartOfAccountApiTest extends TestCase
 
         $names = collect($response->json('data'))->pluck('name')->all();
 
-        $this->assertEqualsCanonicalizing(['Sales', 'Service Income'], $names);
+        $this->assertEqualsCanonicalizing(['Sales', 'Service Income', 'Discount Received'], $names);
     }
 
     #[Test]

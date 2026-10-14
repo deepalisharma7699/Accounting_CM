@@ -233,6 +233,47 @@ that refuses unless it has been asked for explicitly, and document the invocatio
 beside it. `database/manual/README.md` is the worked example, and the go-live
 cleanup that prompted the rule sat in the automatic path for two days.
 
+4.6 **The product is live. No change writes to the production schema by
+itself.** From 29 September 2026 this repository does not gain new files in
+`database/migrations` — not for a column, not for an index, not for a backfill.
+A schema change is delivered as **SQL the operator runs on the server**, by hand,
+in a window they chose, against a database they have just backed up.
+
+This is stricter than §4.5 and it replaces it for anything new. §4.5 drew the
+line at *destructive* data operations, on the reasoning that an automatic
+migration cannot know when it is running. On a live installation that reasoning
+covers every migration: `php artisan migrate` is one command that reads a
+directory and applies whatever it finds, so an unrelated file committed weeks ago
+runs during an unrelated deployment, on real books, with no operator deciding
+anything. An `ALTER TABLE` on a table the workshop is billing against is not a
+step in a deployment script.
+
+So, for every change that touches the schema or existing rows:
+
+* **Write the SQL out** — the `ALTER`, the backfill `UPDATE`, the index — as a
+  numbered block the operator can paste, with the `SELECT` that shows it worked
+  and the statement that undoes it. Put it in `database/manual/` beside the
+  worked examples and document it there.
+* **Say what it locks and how long it runs**, measured against the table's real
+  size, not guessed. An operator deciding on a window needs the figure.
+* **Make the code tolerate both shapes** wherever it can, so the deployment
+  order is not a cliff: ship code that works before the SQL is run and after it,
+  and the workshop is never one failed step away from a broken screen.
+* **Prefer a change that needs no SQL at all.** A query rewritten to read what is
+  already stored deploys with the code and has no window, no lock and nothing to
+  undo. That is worth real effort to reach.
+
+4.7 **What is on production is a fact this repository does not hold, so ask.**
+The working tree is not the deployed state: the branch runs ahead, a hotfix may
+have gone out of band, and some of the migrations sitting in this repository were
+written before 4.6 and may or may not have been applied. Before proposing or
+preparing any deployment, **ask the user what is currently live** — which commit,
+which of the pending schema changes have been run, and when the last backup was
+taken. Record the answer in `docs/deployment-log.md` with the date, and keep it
+updated as things go out. Never infer the production state from git history, from
+a migrations table read locally, or from what a previous conversation said was
+planned.
+
 ## 5. Reuse
 
 5.1 Search the project before creating any component, API, service, controller,
@@ -241,7 +282,8 @@ refactor it. Do not add a second implementation.
 
 5.2 Existing shared pieces to reuse rather than rewrite: `ui.js` primitives,
 `components/` (party picker, item picker, payment rows, quick item, quick
-party, badge), `permissions.js` gating, `auth-client.js` for every request.
+party, badge, searchable select), `permissions.js` gating, `auth-client.js` for
+every request.
 
 Writing a counterparty is `components/quick-party.js` and its partial —
 create *and* edit, quick shape *and* full record. It is the form the bill
@@ -257,6 +299,16 @@ authorization on the backend, on every endpoint.
 6.2 Never bypass the existing auth or permission rules. UI gating via
 `data-requires-permission` is presentation only — the grant is checked server
 side too.
+
+6.2.1 **`applyPermissionGates()` runs on what is in the DOM, so markup written
+later is not gated.** It runs once at boot and once per module mount
+([shell.js](resources/js/shell.js)) — anything a page module then writes with
+`innerHTML` arrives after both, and a `data-requires-permission` on it does
+nothing at all. That is not a leak, because §6.2 holds server side; it is the
+screen offering an act and the server refusing it, which reads as a broken
+product rather than a locked one. A module that renders gated controls calls the
+gate again at the end of its own render — the catalogue master is the worked
+example, and it had nineteen such buttons doing nothing.
 
 6.3 Never expose SQL errors, stack traces, internal server detail or sensitive
 data in a response.
@@ -434,6 +486,41 @@ sees of the one list narrows to their own grants for free, because only a card
 the permission pass left visible is ever lifted. See
 [tenancy-module.md](docs/tenancy-module.md).
 
+**Every dropdown is searchable, and that is not a per-form decision either.**
+A workshop with sixty accounts or two hundred units cannot find a row in a native
+`<select>`: it scrolls, its typeahead only matches the first letters, and on a
+phone it is whatever the platform decides to show. So
+[components/searchable-select.js](resources/js/components/searchable-select.js)
+turns every one of them into a type-to-filter list — centrally, from one watch on
+the document, for the reason §3.8 records about the activity bar: converting them
+a screen at a time leaves a control to remember on every new form, and the screen
+that forgets looks fine until somebody with a long list opens it. **Write an
+ordinary `<select>` and it is searchable.** Never hand-build a dropdown beside
+it, and use `data-plain-select` only where a native menu is genuinely the answer.
+
+The `<select>` is not replaced, which is the whole of why this could be applied
+everywhere at once. It is moved into a wrapper, taken off the screen and left in
+the form, so `select.value`, `innerHTML = options`, `form.elements[name]`, the
+`aria-invalid` that `showFormErrors` sets, `form.reset()` and every `change`
+listener keep working untouched. Three directions of change are followed back the
+other way, and each is a screen that would otherwise be wrong with nothing saying
+so: the **options** through a MutationObserver, which fires as a microtask and so
+reads the `select.value = held` that every repaint does afterwards; the
+**selection** through the `value` and `selectedIndex` properties, shadowed on the
+instance because `filter.value = '1'` changes nothing observable; and the
+**chrome** — `disabled`, `aria-invalid`, and the `hidden` class Accounting's view
+switch toggles on the *select*, which without mirroring would hide the filter and
+leave its button standing on the toolbar.
+
+Two smaller decisions. The search box is drawn from eight options up, but the
+input is focused either way and revealed the moment somebody types — so nothing
+is unsearchable and a three-option filter carries no furniture; its `inputMode`
+goes with it, or tapping that filter on a phone would raise the keyboard over a
+list that already fits. And the panel measures the room against **whatever will
+actually clip it** — a drawer's body and a dialog's body both scroll — rather
+than against the viewport, which is how a list opens downwards into two hundred
+pixels of drawer and shows three rows of sixty.
+
 **The topbar's search is a way in, and every module owes it a deep link.**
 [search.js](resources/js/search.js) is the one box that is not over a list: it
 answers the question somebody at the counter actually has, where the caller
@@ -545,6 +632,82 @@ thousandths, because `12.3 - 4.1` is not `8.2` in a float and `decimal:0,3`
 refuses what comes out. Two copies would be two places the sign, `post: true` and
 the `client_ref` are decided, and the sign is the whole meaning of the document.
 
+**A count is not an opening balance, and offering the wrong one costs a
+period's profit.** A product written without its `opening_stock` could not
+acquire one afterwards — the field is on the create form and deliberately off the
+edit — so people reached for "Record a count", which posts template G:
+`Dr Inventory / Cr COGS`, dated today. That credits cost of goods sold, so the
+entire value of the shelf lands in this period's gross profit as though the
+workshop had earned it. Right for shrinkage found at a stock-take; wrong for
+stock the workshop already owned, which is template H —
+`Dr Inventory / Cr Opening Balance Equity`, dated at go-live. The Items drawer
+now offers **Declare opening stock** on a variant whose shelf is empty, and it
+posts one structured row to `POST /opening-balances` rather than reimplementing
+anything (§4.3, §4.4). A row may carry `variant_id`, and then the service matches
+no names at all: two variants of one product share a name, so a fuzzy match is
+the one way that path lands a declaration on the wrong shelf. **Opening stock is
+refused on any variant that has moved** through anything but an opening
+transaction — sold out reads exactly like never entered, and a figure dated at
+go-live beneath a sale leaves that sale's cost of goods wrong for good. In bulk it
+is the Stock card's **Opening-stock template**, a file in the importer's own
+columns uploaded on the Opening balances card; never the Stock export, whose
+report headers that importer reads as other columns. See
+[opening-balances-module.md](docs/opening-balances-module.md).
+
+**A bill line may take several things off the shelf, and that used to be
+impossible.** A rewinding shop sells *winding* — one line, one price per rating —
+and producing it consumes copper, varnish, sleeve and sheet. The catalogue could
+not say so: an item either held stock or held none, and a service that held none
+issued nothing. So the wire was bought, never taken out, and the shelf, the
+Inventory account, cost of goods sold and the margin on the workshop's main trade
+all moved wrong together, in the same direction, with nothing on any screen
+saying so.
+
+`item_components` is what a made thing consumes, hung off the **variant** because
+a 5 HP rewind and a 10 HP rewind are the same service and different amounts of
+copper. Only something that holds no stock of its own may have one: a recipe on a
+stocked parent leaves no good answer to whether billing it issues the parent or
+the parts, and every answer to that is a *kit*, which needs an assembly document
+to put the kit on the shelf — a different feature, deliberately not half-built.
+One level only, and the nesting guard is reachable rather than dead: a product in
+a stock-holding category with `is_stock` off can be given a recipe and have
+`is_stock` turned on afterwards.
+
+**Nothing posted ever reads a recipe again.** It is expanded once, at posting,
+into ordinary `stock_movements` written by the posting engine — same valuation,
+same lock, same table (§4.3) — and those movements *are* the record from then on.
+A reversal mirrors them, a margin sums them, a stock card lists them. So editing a
+recipe next March cannot restate what a bill in September consumed, and there is
+deliberately **no copy of the recipe pinned to the bill line**; do not add one.
+
+**The assumption it broke is that a line has at most one movement**, and that was
+load-bearing in five places — `TransactionLine::stockMovement()` was a `hasOne`,
+`changesByLine()` kept one change per line number, `SaleTemplate::bodyLines()`
+posted one `Dr COGS / Cr Inventory` pair per line, `SalesInsights::lineQuery()`
+joined `stock_movements` raw, and `ReturnService` read a single movement to value
+a credit. Two of those fail silently and are worth knowing. `changesByLine()`
+**overwrote**, so a rewind's ledger pair was derived from the last material alone
+— caught only because `MovesStock` makes the engine compare what the template
+posted against what the movements say, which is the whole reason that assertion
+exists. And `lineQuery()` fans out: five Insights panels sum
+`transaction_lines.taxable_value` across that join, so one line with three
+movements would have counted its **revenue three times**, in every panel at once,
+with every figure still plausible. It joins a derived table of one row per line
+now. Do not put a raw join back.
+
+**A credit note is refused on a made line** (`RETURN_LINE_WAS_MADE_FROM_MATERIALS`)
+rather than approximated: a credit row names one item, one variant and one
+`stock_value`, and there is no honest way to put three materials back through it.
+Reversing is exact and is the answer — and it is the right one for the trade,
+because nobody returns half a winding. A component issue obeys the ordinary
+negative-stock refusal, and the bill preview expands the same recipes through the
+same service so it cannot promise what the post would refuse; the shortfall names
+the **material**, which is the only thing with a shelf to be short of.
+
+The customer sees none of it. `InvoiceDocumentService` builds their copy from its
+own list of fields and has no branch that could reach a component, exactly as it
+has none that could reach a cost. See [recipes.md](docs/recipes.md).
+
 **The catalogue's vocabulary is data, not code.** There is no `ItemType` enum and
 no `UnitOfMeasure` enum. What kinds of product exist, what each one records, whose
 each thing is, and how any of it is counted are rows in `item_categories`,
@@ -586,6 +749,22 @@ blank document, the correction handle being dropped from the autosaved draft, th
 client reference regenerated per attempt instead of per correction, a correction
 allowed to park as a draft — so it must not be forked either.
 
+**A parked bill is finished in the same form, through the same component.** A
+draft's drawer offers **Continue editing**, and `continueDraft()` loads it back
+the way a correction is loaded — but with a `draft` handle, so "Save as a draft"
+rewrites *that* draft with `PATCH /transactions/{id}` and posting rewrites it and
+then calls `/post`. It keeps its id; no second document is ever written. Two
+parts of it are wrong in ways that look right. The PATCH is **a whole
+restatement**: the server merges an edit over the request it stored, so the form
+names `bill_discount`, `bill_discount_percent` and `settle_total` as null unless
+it is sending a figure — a key left out would carry the old discount into the
+posted bill. And a draft's stored request holds ids and figures only, so the
+single-document read resolves each line's name, unit, rate and tax basis once
+(`BillService::draftLinesFor()`, named by `BillLine::describe()`) and a listing
+never does. The edit endpoint accepts the bill's whole vocabulary and refuses it
+on anything that is not a sale or a purchase (`TRANSACTION_BILL_TERMS_NOT_ACCEPTED`).
+See [billing-module.md](docs/billing-module.md).
+
 **A rate can be quoted with the GST already in it, and the line remembers
 which.** A counter prices both ways — "ten thousand plus tax" for a rewind,
 "eleven eight" for a part with the figure on the box — so a bill line carries a
@@ -617,6 +796,18 @@ recipient's evidence for an input tax credit is a row that does not multiply out
 There is deliberately no document-level switch and no category default: one bill
 routinely carries a printed-price part and labour quoted before tax. See
 [inclusive-pricing.md](docs/inclusive-pricing.md).
+
+**Paid in full for less is a discount, and when it was agreed decides the tax.**
+At the counter, a smaller figure typed under "Paid in full" is sent as
+`settle_total`, and `BillTemplate::withBillDiscount()` **searches** for the bill
+discount that lands on it — before tax, so the GST falls with it, and on a
+purchase the stock arrives at the reduced cost. Never invert that arithmetic in
+the browser or in a formula: it is a second copy of the GST rounding. On an
+invoice already posted the GST is declared, so a receipt or payment carries a
+`discount` written off **after** tax to Discount Allowed / Discount Received;
+the settlement's total is what it cleared, and the money lines stay the money.
+Rounding is always **down** and stays its own Round Off line, never a discount.
+See [billing-module.md](docs/billing-module.md).
 
 **A sale is corrected on stricter terms than a purchase**, and the posting engine
 is where that is enforced, never the form. A purchase arrives at its own stated
@@ -662,6 +853,21 @@ preview additionally because the shell caches a module's root detached: declared
 inside a module it would take the document off the page when that module closed.
 The next module to hand a customer a document borrows this drawer; it does not
 build a second one.
+
+**A sale is handed over as an estimate, and the GST invoice is on request.** The
+estimate — the counter's plain receipt — is the `estimate` block of the same
+`InvoiceDocumentService` payload, every figure with the GST in, painted onto the
+**same one sheet** (`renderInvoice(…, { as })`). It is a way of *showing* a posted
+sale, never of recording one: the tax is in the books on every sale, so never add
+a mode that posts a sale without its GST. Share goes with the GST invoice only.
+**Every Print goes through `printInvoice()`**, which reads this device's paper and
+method from [print-settings.js](resources/js/print-settings.js) — per browser, never
+a workshop setting — and sends thermal paper to the print agent
+([tools/print-agent](tools/print-agent/README.md)) as ESC/POS when set to, falling
+back to the dialog. A sale may also **name nobody** if it is paid in full at the
+counter (`TransactionType::admitsWalkIn()`, enforced in the engine); it is
+cancelled rather than returned, and given a customer later by reissuing it. See
+[billing-module.md](docs/billing-module.md) and [sales-module.md](docs/sales-module.md).
 
 Its payload comes from `InvoiceDocumentService`, which builds the customer's
 document from **its own list of fields**. `TransactionResource` carries the cost
@@ -912,7 +1118,7 @@ SVG `viewBox` scales its text and renders microscopic labels on a phone. See
 **What is left — one module, and it is built.** **Items**, **Stock**,
 **Purchase**, **Sales**, **Vendors**, **Customers**, **Users**, **Roles**,
 **Staff**, **Insights**, **Settings** (`workspace`), **Opening balances**
-(`opening`), **Expenses** (`bills`), **Transactions** (`journal`), **Jobs**,
+(`opening`), **Money in & out** (`journal` — Expenses merged in), **Jobs**,
 **Accounting** (`accounts`), **History** (`audit`) and **Workshops** (`tenants`)
 have been converted and are on. The last one — **Uploads** — is
 `'enabled' => false`.
@@ -1014,7 +1220,9 @@ no "save as draft" left anywhere in the product, and there is: the shared bill
 document still offers it, so **Sales and Purchase can still park a bill**.
 Insights' parked-draft worklist is therefore not yet a set that only shrinks.
 Removing the control from those two is a product decision nobody has taken;
-saying it had already happened was a documentation error.
+saying it had already happened was a documentation error. What a parked bill is
+no longer is a dead end: it is continued in its own module's form (above), which
+was the only reason anybody parked one.
 
 One refusal is deliberate and worth knowing before somebody "fixes" it: a
 settlement **cannot be left unallocated while the party has open bills**. An
@@ -1031,6 +1239,33 @@ counterparty, which paints no position line and offers no "+ Add": `outstanding`
 has a receivable half and a payable half and nothing would say which to read, and
 quick-party never asks which role a record is — the module it was opened from
 decides, and a journal has not decided.
+
+**Money in & out is one card, and Expenses is a tab of it.** Transactions
+(`journal`) and Expenses (`bills`) were two cards in one band answering "where did
+the money go", so they were merged: **Expense · Pay a vendor · Receipt · Staff
+advance · Journal voucher · Personal**, six §2A sections on the Staff shape, opening
+on Expense. `bills` is **gone from config/modules.php — do not put it back**;
+`/bills` redirects by hand in web.php and `#bills` is re-pointed by `MOVED` in
+shell.js. Nothing was forked: the expense section is the old card's markup and code
+moved (`partials/expense-section.blade.php`, `pages/journal-expense.js`), and the
+staff advance is **one partial and one component mounted by two cards**
+(`partials/staff-advance-section.blade.php`,
+[components/staff-advance.js](resources/js/components/staff-advance.js)) — Staff's
+Advances tab and this card's Staff advance tab. A tab a person may not use is not
+drawn: Staff advance needs READ:STAFF, Personal needs PERSONAL_EXPENSES.
+
+**Personal is the owner's own pocket, and it is not in the books.** Money the owner
+spent on themselves from their own money never passed through the workshop, so
+`personal_expenses` is a diary beside the books: it posts nothing, no report, Day
+Book or Insights panel reads it, and an entry is edited and deleted rather than
+reversed. **Never route it through the posting engine and never add it to a
+report** — a family's groceries in the shop's P&L understate the profit that tax is
+paid on. PERSONAL_EXPENSES is given to **OWNER only**, for privacy; one diary per
+workshop, shared by every owner. Neither model is `Auditable`, so History never
+shows it, and the topbar search does not reach it. Categories are data
+(`personal_expense_categories`, seeded from `PersonalCategoryDefaults`). The schema
+is `database/manual/sql/2026_10_14_001_personal_expenses.sql`. See
+[personal-expenses.md](docs/personal-expenses.md).
 
 **C2 is done, and what it deleted matters more than what it built.** The Bills
 module was the whole transaction list; it is now **Expenses** and nothing else,
@@ -1075,19 +1310,62 @@ Blade template, which is the failure the catalogue's vocabulary rule already
 records against `ItemType` and against a typed brand. It cost a real workshop
 something every week: a cooler, a table fan or a mixer came in and the only
 fields on offer were two that mean nothing about any of them. Those columns are
-**gone**; a job now carries `category_id`, a **copied** `kind_label` and a
+**gone**; a job now carries `job_kind_id`, a **copied** `kind_label` and a
 `specs` bag keyed by attribute, and the intake form asks what the chosen kind is
 described by. Never put a product type back into this schema, this template or
 `pages/jobs.js`.
 
-The kinds are the **catalogue's own** `item_categories` and `item_attributes` —
-never a `job_categories` table, which would be a second master, a second schema
-resolver and a second admin screen answering one question (§4.4, §5.1). So a
-workshop that starts repairing coolers adds a category from the Items card and
-the bench asks the right questions with no deployment, which is the catalogue
-module's acceptance criterion one module along.
-[components/attribute-fields.js](resources/js/components/attribute-fields.js) is
-the one renderer for both forms; add a third reader, not a third copy.
+**The bench's list is its own, and this paragraph used to say the opposite.** It
+read: the kinds are the catalogue's own `item_categories`, *never* a
+`job_categories` table, which would be a second master, a second schema resolver
+and a second admin screen answering one question. That was wrong, and the way it
+was wrong is worth keeping, because the reasoning is the kind that sounds
+complete.
+
+It treated "one list" and "one implementation" as the same requirement. They are
+not, and the product showed it. A category is filtered for the bench on
+`holds_stock`, on the argument that a category holding no stock is *produced at
+the moment it is sold* and nobody wheels one of those through a door — true, and
+beside the point. `holds_stock` separates **kept on a shelf** from **made when
+sold**, which says nothing about whether a customer brings one in. So the intake
+form offered Part, Bulk material, Bearing, Capacitor and Wire, none of which
+anybody brings in, and offered no cooler, fan, mixer or submersible at all —
+because a repair shop does not stock the things it repairs. The intersection of
+the two lists is Motor and pumps, and even there the questions differ: a motor on
+a price list is identified by its frame and mounting, a motor on a bench by its
+serial number and what is wrong with it. Two lists that only looked alike.
+
+So `job_kinds` and `job_kind_attributes` exist, and the rule that replaces the
+old one is narrower and holds: **separate the list, never the machinery.** What
+is emphatically not duplicated is
+[AttributeDefinition](app/Models/AttributeDefinition.php) — what a field means
+once stored — [DefinesAQuestionSet](app/Models/Concerns/DefinesAQuestionSet.php)
+— the shape a form reads it in —
+[AttributeFieldShape](app/Support/Catalogue/AttributeFieldShape.php) — what may
+be stored — `Catalogue\StoreAttributeRequest`, which validates both masters, and
+[components/attribute-fields.js](resources/js/components/attribute-fields.js),
+which draws both forms. A third *list* over that machinery is cheap and may be
+right; a second copy of any of those five is not (§4.4, §5.1).
+
+`JobKind` is deliberately thinner than `ItemCategory` by everything that
+describes a thing for **sale** — no HSN or SAC, no GST rate, no default unit, no
+`holds_stock` — and by one thing besides: **no parent**. A category tree earns
+its complexity on a catalogue of hundreds of products, where "Submersible Motor"
+inherits a motor's question set and adds Head and Flow Rate. A bench takes in
+eight or ten kinds of thing and a cooler inherits nothing from a fan. That one
+difference is why the shared piece is a trait and not a base class.
+
+The master is a second §2A workspace on the **Jobs** card, on the Staff shape —
+one tab, mounted lazily on first click — and not on the Items card, because the
+vocabulary is the bench's. A workshop that starts repairing sewing machines adds
+the kind and the intake form asks the right questions with no deployment, which
+is the catalogue module's acceptance criterion reached from the other side.
+`JobKindDefaults` seeds eight to start with; they are deliberately **not**
+`is_system`, because a shop that never touches a washing machine should be able
+to delete the row rather than carry it about switched off. The refusal that
+matters is the one on use: a kind a job is filed under, a field a job has
+answered and a dropdown choice a job is filed under are each refused and
+archived instead.
 
 Four parts of it are load-bearing. The list is published by
 **`GET /workshop-jobs/meta`** and not fetched from `/items/meta`: that route is
@@ -1098,9 +1376,9 @@ first — the trap M22's attribution pickers avoid by riding on
 `is_required` says a *product* cannot exist without a rating, and this is a pump
 a driver could not identify that is already on the bench. **The label is copied**
 onto the row like the brand and the model beside it, so a renamed or archived
-category leaves the card still saying what came through the door and
+kind leaves the card still saying what came through the door and
 `search=cooler` finds the coolers without a join. And **the bag reaches no screen
-unresolved** — `{"hp": "7.5"}` needs the category that asked to become "7.5 HP",
+unresolved** — `{"hp": "7.5"}` needs the kind that asked to become "7.5 HP",
 so `JobService` attaches the schema once per page rather than a lookup per row,
 and `equipmentLabel()` prints nothing from it where nobody resolved it. See
 [workshop-module.md](docs/workshop-module.md).

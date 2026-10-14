@@ -27,6 +27,7 @@ use App\Services\Accounting\Posting\StockChange;
 use App\Services\Accounting\Tax\GstBreakdown;
 use App\Services\Accounting\Tax\GstRate;
 use App\Services\Accounting\Tax\PlaceOfSupply;
+use App\Services\Inventory\ItemComponentService;
 use App\Services\Inventory\StockLedgerService;
 use App\Support\Money;
 use App\Support\Quantity;
@@ -99,6 +100,19 @@ abstract class BillTemplate implements CarriesDocumentLines, MovesStock, Posting
      */
     private ?bool $rounds = null;
 
+    /**
+     * What the bill was settled at, where the party paid less than it came to
+     * and the difference was given as a discount — or null.
+     *
+     * Set by {@see withBillDiscount()} as the lines are priced, and read by
+     * {@see roundedTotal()}, so the figure the discount was solved for is the
+     * figure the document states. Memoised with the lines, for their reason.
+     */
+    private ?Money $settledAt = null;
+
+    /** What the bill came to before it was settled short — see {@see totalBeforeSettlement()}. */
+    private ?Money $chargedBeforeSettlement = null;
+
     public function __construct(
         protected readonly ChartOfAccountService $accounts,
         protected readonly StockLedgerService $stock,
@@ -107,6 +121,7 @@ abstract class BillTemplate implements CarriesDocumentLines, MovesStock, Posting
         protected readonly PartyRepositoryInterface $parties,
         protected readonly TenantRepositoryInterface $tenants,
         protected readonly TenantContext $context,
+        protected readonly ItemComponentService $components,
     ) {}
 
     /* ---------------------------------------------------------------------
@@ -169,7 +184,9 @@ abstract class BillTemplate implements CarriesDocumentLines, MovesStock, Posting
      * to describe.
      *
      * @param  array<int, BillLine>  $lines
-     * @param  array<int, StockChange>  $changes  Keyed by line number.
+     * @param  array<int, array<int, StockChange>>  $changes  Grouped by line number: a
+     *                                                       line supplying something made
+     *                                                       carries one per material.
      * @return array<int, PostingLine>
      */
     abstract protected function bodyLines(array $lines, array $changes): array;
@@ -224,7 +241,35 @@ abstract class BillTemplate implements CarriesDocumentLines, MovesStock, Posting
             );
         }
 
+        $this->assertSettledInFull($input);
+
         return array_merge($lines, $this->settlementLines($input, $control));
+    }
+
+    /**
+     * A bill settled short has to have been *paid* at the figure it was settled
+     * at — that is the whole of what "the customer paid ₹1,200 and we called it
+     * square" means.
+     *
+     * Anything else is a discount nobody can account for: settled at ₹1,200 and
+     * paid ₹1,000 would be a bill marked down so that ₹200 could go on credit,
+     * which is an ordinary bill discount and should be given as one.
+     *
+     * @param  array<string, mixed>  $input
+     *
+     * @throws InvalidJournalException
+     */
+    private function assertSettledInFull(array $input): void
+    {
+        if ($this->settledAt === null) {
+            return;
+        }
+
+        $paid = PaymentSplit::total($this->splitsFrom($input));
+
+        if (! $paid->equals($this->settledAt)) {
+            throw InvalidJournalException::settledShortNotPaidInFull($paid->amount(), $this->settledAt->amount());
+        }
     }
 
     /**
@@ -266,13 +311,27 @@ abstract class BillTemplate implements CarriesDocumentLines, MovesStock, Posting
                 $side,
                 $this->accounts->system(SystemAccount::RoundOff)->id,
                 $residue->absolute(),
-                'Rounded to the nearest rupee',
+                'Rounded off',
             ),
         ];
     }
 
-    /** What the party is actually asked for: the exact total, or the nearest rupee. */
+    /**
+     * What the party is actually asked for: the figure the bill was settled at,
+     * or else the exact total — with its paise dropped, where the workshop
+     * rounds.
+     *
+     * A settled bill is not rounded again. Its discount was solved to land on
+     * the settled figure, and the paise the solve could not reach are what the
+     * round-off line books.
+     */
     protected function roundedTotal(Money $exact): Money
+    {
+        return $this->settledAt ?? $this->charge($exact);
+    }
+
+    /** The exact total as the workshop charges it: rounded down, or as it is. */
+    private function charge(Money $exact): Money
     {
         return $this->roundsInvoices() ? RoundOff::applyTo($exact) : $exact;
     }
@@ -376,6 +435,19 @@ abstract class BillTemplate implements CarriesDocumentLines, MovesStock, Posting
         return $this->roundedTotal(BillLine::invoiceTotal($this->documentLinesFrom($input)));
     }
 
+    /**
+     * What the bill came to before it was settled short, or null where it was
+     * not — the "₹1,250" in "paid ₹1,200 of ₹1,250", which the confirmation
+     * states so that a discount given by typing a smaller figure is never given
+     * without anybody reading it.
+     */
+    public function totalBeforeSettlement(array $input): ?Money
+    {
+        $this->documentLinesFrom($input);
+
+        return $this->settledAt === null ? null : $this->chargedBeforeSettlement;
+    }
+
     /* ---------------------------------------------------------------------
      | The document
      |-------------------------------------------------------------------- */
@@ -450,21 +522,88 @@ abstract class BillTemplate implements CarriesDocumentLines, MovesStock, Posting
     {
         $bases = array_map(fn (BillLine $line) => $line->discountBase(), $lines);
 
-        $discount = BillDiscount::resolve(
+        $apply = fn (Money $discount): array => ! $discount->isPositive()
+            ? $lines
+            : array_map(
+                fn (BillLine $line, Money $share) => $line->plusDiscount($share, $place),
+                $lines,
+                BillDiscount::apportion($discount, $bases),
+            );
+
+        $stated = BillDiscount::resolve(
             Money::sum($bases),
             $input['bill_discount'] ?? null,
             $input['bill_discount_percent'] ?? null,
         );
 
-        if (! $discount->isPositive()) {
-            return $lines;
+        $discounted = $apply($stated);
+        $target = Money::ofNullable($input['settle_total'] ?? null);
+
+        if ($target === null) {
+            return $discounted;
         }
 
-        return array_map(
-            fn (BillLine $line, Money $share) => $line->plusDiscount($share, $place),
-            $lines,
-            BillDiscount::apportion($discount, $bases),
-        );
+        $before = $this->charge(BillLine::invoiceTotal($discounted));
+
+        // Settling *up* is a typo — there is no such thing as a customer paying
+        // more than the bill and that being a discount.
+        if ($target->compareTo($before) > 0) {
+            throw InvalidJournalException::settledAboveDocument($target->amount(), $before->amount());
+        }
+
+        // Paid exactly what it came to: nothing was given, and the bill is the
+        // ordinary one.
+        if ($target->equals($before)) {
+            return $discounted;
+        }
+
+        $this->settledAt = $target;
+        $this->chargedBeforeSettlement = $before;
+
+        return $apply(Money::fromMinor($this->discountToReach($target, $stated, $bases, $apply)));
+    }
+
+    /**
+     * The largest bill discount, in paise, under which the bill still comes to
+     * at least the settled figure.
+     *
+     * Searched rather than worked out backwards, and that is the point of it.
+     * The discount comes off *before* tax, is shared across lines taxed at
+     * different rates, and every share and every half of every tax is rounded
+     * to the paisa — so there is no formula that inverts it, and any attempt
+     * would be a second copy of the GST arithmetic that agrees most of the
+     * time. Instead the one real computation is asked, about thirty times: the
+     * total only ever falls as the discount grows, so halving the gap between
+     * "still enough" and "too much" lands on the boundary.
+     *
+     * The bill then comes to the settled figure plus at most a few paise — what
+     * one more paisa of discount would have overshot — and those are booked as
+     * the round-off, never left on the party's account.
+     *
+     * @param  array<int, Money>  $bases
+     * @param  \Closure(Money): array<int, BillLine>  $apply
+     */
+    private function discountToReach(Money $target, Money $stated, array $bases, \Closure $apply): int
+    {
+        $comesTo = fn (int $discount): Money => BillLine::invoiceTotal($apply(Money::fromMinor($discount)));
+
+        // Invariant: the bill under `$enough` still reaches the target and the
+        // bill under `$tooMuch` does not. The whole of every line comes to
+        // nothing, and the target is more than nothing, so both hold at the start.
+        $enough = $stated->minor();
+        $tooMuch = Money::sum($bases)->minor();
+
+        while ($tooMuch - $enough > 1) {
+            $middle = intdiv($enough + $tooMuch, 2);
+
+            if ($comesTo($middle)->compareTo($target) >= 0) {
+                $enough = $middle;
+            } else {
+                $tooMuch = $middle;
+            }
+        }
+
+        return $enough;
     }
 
     /**
@@ -581,22 +720,48 @@ abstract class BillTemplate implements CarriesDocumentLines, MovesStock, Posting
         $changes = [];
 
         foreach ($this->documentLinesFrom($input) as $line) {
-            if (! $line->movesStock || $line->variant === null) {
+            if ($line->variant === null) {
                 continue;
             }
 
-            $changes[] = $this->stockChangeFor($line)->withLineNo($line->lineNo);
+            if ($line->movesStock) {
+                $changes[] = $this->stockChangeFor($line)->withLineNo($line->lineNo);
+
+                continue;
+            }
+
+            /*
+            | A line that supplies something the workshop *makes* rather than
+            | holds: it has no shelf of its own, so it takes nothing off one —
+            | and it consumes whatever its recipe says, one issue per material.
+            |
+            | Every one of them carries this line's number, so all of them point
+            | at the line that caused them and a margin is the sum. See
+            | `TransactionLine::stockMovements()`, which is plural for this.
+            */
+            foreach ($this->recipeChangesFor($line) as $change) {
+                $changes[] = $change->withLineNo($line->lineNo);
+            }
         }
 
         return $this->stockChanges = $changes;
     }
 
     /**
-     * The same changes, keyed by the line that produced them — what
+     * The same changes, grouped by the line that produced them — what
      * {@see bodyLines()} needs to put a cost against a description.
      *
+     * **A list per line, not one change per line.** It was the latter, and a
+     * line supplying something *made* breaks it: a rewind issues copper,
+     * varnish and sleeve against one line number, and the second assignment
+     * overwrote the first — so `build()` derived its Inventory and COGS lines
+     * from the last material alone while the movements carried all three. The
+     * engine refuses that (`MovesStock` makes it compare the two), which is why
+     * it surfaced as a refusal to post rather than as books that were quietly
+     * short by the value of the copper.
+     *
      * @param  array<string, mixed>  $input
-     * @return array<int, StockChange>
+     * @return array<int, array<int, StockChange>>
      */
     private function changesByLine(array $input): array
     {
@@ -604,7 +769,7 @@ abstract class BillTemplate implements CarriesDocumentLines, MovesStock, Posting
 
         foreach ($this->stockChangesFrom($input) as $change) {
             if ($change->lineNo !== null) {
-                $keyed[$change->lineNo] = $change;
+                $keyed[$change->lineNo][] = $change;
             }
         }
 
@@ -615,6 +780,27 @@ abstract class BillTemplate implements CarriesDocumentLines, MovesStock, Posting
      * The quantity one line moves, and what it is worth.
      */
     abstract protected function stockChangeFor(BillLine $line): StockChange;
+
+    /**
+     * The materials a line consumes, where it supplies something made.
+     *
+     * **None, on this side of the family.** A recipe describes what producing
+     * something costs the shelf, and only an outward document produces
+     * anything: buying a service from a subcontractor consumes none of this
+     * workshop's copper, and a purchase that quietly issued stock would take
+     * material off the shelf for a document that put none on it.
+     *
+     * {@see SaleTemplate} overrides it. Left as an answer rather than a branch
+     * on direction inside the loop above, because the loop is shared by four
+     * templates and a condition there is a condition every one of them has to
+     * be read against.
+     *
+     * @return array<int, StockChange>
+     */
+    protected function recipeChangesFor(BillLine $line): array
+    {
+        return [];
+    }
 
     /* ---------------------------------------------------------------------
      | Tax

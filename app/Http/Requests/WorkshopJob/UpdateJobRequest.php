@@ -25,7 +25,7 @@ use Illuminate\Foundation\Http\FormRequest;
  * on the same request as a typo correction would let a mis-click deliver a motor
  * that is still on the bench.
  *
- * One pair is not independent. `category_id` decides which keys `specs` may
+ * One pair is not independent. `job_kind_id` decides which keys `specs` may
  * carry, so sending the kind without the answers clears them — the service says
  * why, and the form always sends both together.
  */
@@ -43,6 +43,7 @@ class UpdateJobRequest extends FormRequest
     {
         return [
             'item_id' => ['sometimes', 'nullable', 'integer', 'min:1'],
+            'job_kind_id' => ['sometimes', 'nullable', 'integer', 'min:1'],
             'category_id' => ['sometimes', 'nullable', 'integer', 'min:1'],
             'specs' => ['sometimes', 'nullable', 'array', 'max:40'],
             'specs.*' => ['nullable', 'string', 'max:120'],
@@ -74,7 +75,7 @@ class UpdateJobRequest extends FormRequest
     public function payload(): array
     {
         $fields = [
-            'item_id', 'category_id', 'specs',
+            'item_id', 'job_kind_id', 'category_id', 'specs',
             'brand', 'model', 'serial_no',
             'complaint', 'promised_date', 'notes',
         ];

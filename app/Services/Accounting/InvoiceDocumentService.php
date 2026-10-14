@@ -6,6 +6,7 @@ use App\Models\Tenant;
 use App\Models\Transaction;
 use App\Models\TransactionLine;
 use App\Repositories\Contracts\TenantRepositoryInterface;
+use App\Services\Accounting\Tax\GstRate;
 use App\Support\AmountInWords;
 use App\Support\Money;
 
@@ -78,12 +79,14 @@ class InvoiceDocumentService
         $tax = $this->bills->taxSummaryFor($transaction);
         $settlement = $this->bills->settlementFor($transaction);
 
+        $totals = $this->totals($transaction, $tax);
+
         return [
             'workshop' => $this->workshop($tenant),
             'document' => $this->document($transaction, $tenant),
             'customer' => $this->customer($transaction),
             'lines' => $this->lines($transaction),
-            'totals' => $this->totals($transaction, $tax),
+            'totals' => $totals,
             'received' => $this->received($transaction),
             'settlement' => $settlement === null ? null : [
                 'paid' => $settlement['paid'],
@@ -94,7 +97,76 @@ class InvoiceDocumentService
                 'status_tone' => $settlement['status']->tone(),
                 'due_date' => $settlement['due_date'],
             ],
+            'estimate' => $this->estimate($transaction, $totals, $settlement),
         ];
+    }
+
+    /* ---------------------------------------------------------------------
+     | The estimate
+     |-------------------------------------------------------------------- */
+
+    /**
+     * The same sale as the counter's plain receipt — the "kacha bill".
+     *
+     * What the customer is handed by default: what they bought and what they
+     * paid, with every figure **including** the GST, so the lines add up to the
+     * total in front of them. No workshop band, no number, no GSTIN, no HSN and
+     * no tax breakup — the GST invoice is the document that carries those, and
+     * it is printed from the same sale whenever somebody asks for it.
+     *
+     * Nothing is recorded differently. The tax is in the books exactly as it is
+     * on the invoice; this is a second way of *showing* one posted sale, built
+     * from its own short list of fields for the reason the class exists.
+     *
+     * The amount column is each line's stored total, which is what the totals
+     * are summed from — so the column always adds up. The rate is the quoted
+     * rate where the line was priced with the tax in it, and the rate plus its
+     * tax where it was not, through {@see GstRate::taxOn()}: the same arithmetic
+     * the posting engine priced the line with. On an awkward quantity it can be
+     * the odd paisa off multiplying into the amount, as the invoice's rate can.
+     *
+     * Null on a credit note, which has no estimate to be.
+     *
+     * @param  array<string, mixed>  $totals
+     * @param  array<string, mixed>|null  $settlement
+     * @return array<string, mixed>|null
+     */
+    private function estimate(Transaction $transaction, array $totals, ?array $settlement): ?array
+    {
+        if ($transaction->type->isReturn()) {
+            return null;
+        }
+
+        $lines = $transaction->lines->map(fn (TransactionLine $line) => [
+            'line_no' => $line->line_no,
+            'description' => $line->description,
+            'memo' => $line->memo,
+            'quantity' => $line->quantityValue()->amount(),
+            'unit_symbol' => $line->unit->symbol(),
+            'rate' => $this->withTax($line, $line->unitPriceMoney())->amount(),
+            'discount' => $this->withTax($line, $line->discountMoney())->amount(),
+            'amount' => $line->totalMoney()->amount(),
+        ])->all();
+
+        return [
+            'date' => $transaction->date->toDateString(),
+            'lines' => $lines,
+            'subtotal' => Money::sum($transaction->lines->map(fn ($line) => $line->totalMoney()))->amount(),
+            'round_off' => $totals['round_off'],
+            'total' => $totals['total'],
+            'in_words' => $totals['in_words'],
+            'paid' => $settlement['paid'] ?? null,
+            'due' => $settlement['due'] ?? null,
+        ];
+    }
+
+    /**
+     * An amount from a line, stated with its GST in — the mirror of
+     * {@see beforeTax()}.
+     */
+    private function withTax(TransactionLine $line, Money $amount): Money
+    {
+        return $line->price_includes_tax ? $amount : $amount->plus($line->rate()->taxOn($amount));
     }
 
     /* ---------------------------------------------------------------------

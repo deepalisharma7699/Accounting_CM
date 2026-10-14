@@ -187,8 +187,11 @@ class BillApiTest extends TestCase
     }
 
     #[Test]
-    public function a_bill_needs_a_party_and_at_least_one_line(): void
+    public function a_bill_needs_at_least_one_line(): void
     {
+        // The party is the engine's question rather than the request's — a sale
+        // may name nobody when it is paid in full (see WalkInSaleTest) — so only
+        // the missing lines are a shape error.
         $this->withHeaders($this->authHeader($this->owner))
             ->postJson('/api/v1/transactions/sale', [
                 'date' => now()->toDateString(),
@@ -196,7 +199,8 @@ class BillApiTest extends TestCase
             ])
             ->assertStatus(422)
             ->assertJsonPath('error.code', 'VALIDATION_FAILED')
-            ->assertJsonStructure(['error' => ['details' => ['fields' => ['party_id', 'items']]]]);
+            ->assertJsonStructure(['error' => ['details' => ['fields' => ['items']]]])
+            ->assertJsonMissingPath('error.details.fields.party_id');
     }
 
     #[Test]

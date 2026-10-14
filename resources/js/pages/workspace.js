@@ -1,4 +1,5 @@
 import auth from '../auth-client';
+import { mountDevicePrinting } from '../components/device-printing';
 import { can } from '../permissions';
 import { clearModuleParams, moduleParams } from '../shell';
 import {
@@ -196,6 +197,11 @@ export default async function initWorkspace() {
 
     listRoot = $('[data-ws-list]', root);
     form = $('#workspace-form', listRoot);
+
+    // This device's printing. Before the fetch and independent of it: it reads
+    // only this browser, so it works for a reader and for a platform account
+    // with no workshop as much as for the owner.
+    mountDevicePrinting($('[data-device-printing]', listRoot));
 
     /*
     | Mounted before the fetch, so the heading is on screen while the record is

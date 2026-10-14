@@ -98,7 +98,7 @@ class OpeningBalanceController extends Controller
 
             'columns' => [
                 'kind', 'name', 'variant', 'type', 'quantity',
-                'unit_cost', 'amount', 'account', 'side', 'gstin', 'reference',
+                'unit_cost', 'amount', 'account', 'side', 'gstin', 'reference', 'variant_id',
             ],
         ]);
     }

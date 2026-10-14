@@ -50,6 +50,7 @@ use Illuminate\Support\Carbon;
  * @property string $job_no
  * @property int $party_id
  * @property int|null $item_id
+ * @property int|null $job_kind_id
  * @property int|null $category_id
  * @property string|null $kind_label
  * @property string|null $brand
@@ -67,7 +68,7 @@ use Illuminate\Support\Carbon;
  * @property int|null $created_by
  */
 #[Fillable([
-    'tenant_id', 'job_no', 'party_id', 'item_id', 'category_id', 'kind_label',
+    'tenant_id', 'job_no', 'party_id', 'item_id', 'category_id', 'job_kind_id', 'kind_label',
     'brand', 'model', 'serial_no', 'specs',
     'complaint', 'received_date', 'promised_date', 'status',
     'estimate_lines', 'estimate_approved_at', 'delivered_at', 'notes', 'created_by',
@@ -164,17 +165,32 @@ class WorkshopJob extends Model
     /**
      * What kind of thing came in — a motor, a cooler, a fan, a pump.
      *
-     * The catalogue's own vocabulary rather than a second list of kinds: a
-     * category already says what a thing of that kind is described by, and
-     * {@see ItemCategory::attributeSchema()} is the question set the intake form
-     * draws. A workshop that starts repairing coolers adds the category from the
-     * Items card and the bench asks the right questions, with no deployment —
-     * which is the acceptance criterion the catalogue module was rebuilt to.
+     * The bench's own list, {@see JobKind}, and **not** the catalogue's
+     * categories, which is what this was until the two were separated. The
+     * reason is written out in full on `JobKind`; the short of it is that the
+     * intersection between what a workshop sells and what a customer wheels
+     * through the door is Motor and pumps, so a list that served both offered
+     * Bearing and Wire to the bench and offered no cooler at all.
      *
      * Nullable, like {@see item()} and for the same reason: a pump wheeled in by
      * a driver who cannot say what it is still has to be bookable. `kind_label`
      * beside it is the name at the moment it arrived, copied — so a renamed or
-     * deleted category leaves the card still saying what came through the door.
+     * deleted kind leaves the card still saying what came through the door.
+     *
+     * @return BelongsTo<JobKind, $this>
+     */
+    public function kind(): BelongsTo
+    {
+        return $this->belongsTo(JobKind::class, 'job_kind_id');
+    }
+
+    /**
+     * The list the bench read before it had one of its own.
+     *
+     * Kept for the window between this code deploying and
+     * `database/manual/sql/2026_09_30_001_job_kinds.sql` being run (§4.6), when
+     * `job_kind_id` does not yet exist and a job's kind is still a category.
+     * Nothing else may reach for it.
      *
      * @return BelongsTo<ItemCategory, $this>
      */

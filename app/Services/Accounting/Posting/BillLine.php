@@ -294,8 +294,11 @@ final class BillLine
     /**
      * A line the customer would recognise: "5 HP / 3 ph / 1440 RPM", or the item
      * name where there is nothing to vary.
+     *
+     * Public so a draft — which has no lines written yet — names its rows with
+     * the words the posted invoice will use, rather than a second rule for it.
      */
-    private static function describe(Item $item, ?ItemVariant $variant): string
+    public static function describe(Item $item, ?ItemVariant $variant): string
     {
         if ($variant === null) {
             return $item->name;

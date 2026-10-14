@@ -79,7 +79,7 @@
                  three permanent selects would crowd out the filters people
                  actually reach for. --}}
             <div class="relative">
-                <button type="button" id="filter-toggle" class="btn btn-secondary btn-sm h-[2.375rem]"
+                <button type="button" id="filter-toggle" class="btn btn-secondary btn-sm h-[var(--control-h)]"
                         aria-expanded="false" aria-haspopup="true">
                     <x-icon name="sliders-horizontal" :size="14" />
                     Filter
@@ -113,7 +113,7 @@
             </div>
 
             <div class="relative">
-                <button type="button" id="sort-toggle" class="btn btn-secondary btn-sm h-[2.375rem]"
+                <button type="button" id="sort-toggle" class="btn btn-secondary btn-sm h-[var(--control-h)]"
                         aria-expanded="false" aria-haspopup="true">
                     <x-icon name="arrow-up-down" :size="14" />
                     Sort
@@ -358,6 +358,89 @@
 @include('partials.stock-adjust')
 
 {{--
+    Declaring what was on the shelf at go-live, for a variant that missed it —
+    level 3, over the drawer.
+
+    This is **not** the dialog above it, and the difference is the whole reason
+    it exists. "Record a count" posts a stock adjustment: `Dr Inventory / Cr
+    COGS`, dated today, which is right for shrinkage found at a stock-take and
+    badly wrong for stock the workshop already owned — it credits cost of goods
+    sold, so the entire value of the shelf lands in this period's gross profit as
+    if it had been earned.
+
+    What this posts instead is an ordinary opening declaration —
+    `POST /opening-balances`, `Dr Inventory / Cr Opening Balance Equity`, dated
+    at the workshop's go-live day. Same endpoint, same service and same
+    duplicate guards as the paste box on the Opening balances card; there is no
+    second writer and no second set of rules (§4.3, §4.4).
+
+    It is offered only while the variant has nothing on its shelf and nothing
+    has ever been declared for it, because that is the only state in which it is
+    the right answer. Once anything has moved, a count is.
+--}}
+{{-- z-55 for the reason partials/stock-adjust.blade.php is: this is level 3 over
+     the item drawer, and the drawer is itself a `modal-backdrop` at z-50. Equal
+     z-index would leave which one is on top decided by document order, which is
+     not something to rely on. `#confirm-modal` sits above both at z-60. --}}
+<div id="opening-stock-modal" class="modal-backdrop hidden" data-modal role="dialog" aria-modal="true"
+     aria-labelledby="opening-stock-title" style="z-index: 55">
+    <div class="modal-panel max-w-md">
+        <form id="opening-stock-form" novalidate>
+            <input type="hidden" name="variant_id">
+
+            <div class="flex items-center justify-between border-b border-muted px-6 py-4">
+                <div class="min-w-0">
+                    <h2 id="opening-stock-title" class="text-base font-bold text-foreground">Opening stock</h2>
+                    <p id="opening-stock-subtitle" class="mt-0.5 truncate text-xs text-muted-foreground"></p>
+                </div>
+                <button type="button" class="btn btn-ghost btn-icon" data-modal-close aria-label="Close">
+                    <x-icon name="x" :size="18" />
+                </button>
+            </div>
+
+            <div class="space-y-4 px-6 py-5">
+                <p class="rounded-[10px] border border-border bg-secondary/40 px-3.5 py-2.5 text-xs text-secondary-foreground">
+                    What was already on the shelf when the books opened — not a correction to a count.
+                    It is posted against the owner's stake and dated at your go-live day, so it never
+                    reaches this period's profit.
+                </p>
+
+                <div class="form-grid">
+                    <div>
+                        <label for="opening-stock-quantity" class="field-label">Quantity</label>
+                        <div class="relative">
+                            <input id="opening-stock-quantity" name="quantity" type="text" inputmode="decimal"
+                                   class="field-input pr-12 text-right font-mono" required autocomplete="off">
+                            <span id="opening-stock-unit"
+                                  class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"></span>
+                        </div>
+                        <p class="field-error hidden" data-error-for="rows.0.quantity"></p>
+                    </div>
+
+                    <div>
+                        <label for="opening-stock-cost" class="field-label">Cost each</label>
+                        <input id="opening-stock-cost" name="unit_cost" type="text" inputmode="decimal"
+                               class="field-input text-right font-mono" required autocomplete="off">
+                        {{-- Refused server-side rather than defaulted: stock
+                             carried at nothing reports a margin of 100% on the
+                             first one sold. --}}
+                        <p class="mt-1.5 text-xs text-muted-foreground">What it cost you, not what you sell it for.</p>
+                        <p class="field-error hidden" data-error-for="rows.0.unit_cost"></p>
+                    </div>
+                </div>
+
+                <p id="opening-stock-total" class="text-[0.8125rem] text-muted-foreground"></p>
+            </div>
+
+            <div class="flex gap-2 border-t border-muted px-6 py-4">
+                <button type="button" class="btn btn-secondary flex-1" data-modal-close>Cancel</button>
+                <button type="submit" class="btn btn-primary flex-1">Declare it</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{{--
     Editing an item family — level 2.
 
     The panel is empty in the markup: `#item-form` below starts life in the
@@ -390,10 +473,11 @@
                 </button>
             </div>
 
-            <div class="space-y-6" data-form-body>
+            <div class="space-y-5" data-form-body>
                 {{-- ── The product ─────────────────────────────────────────── --}}
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <div class="sm:col-span-2">
+                <p class="form-legend">The product</p>
+                <div class="form-grid">
+                    <div class="span-all">
                         <label for="item-name" class="field-label">Product name</label>
                         <input id="item-name" name="name" type="text" class="field-input" required
                                autocomplete="off" placeholder="e.g. Crompton 3-Phase Induction Motor">
@@ -446,7 +530,8 @@
                      Everything here belongs to the *family*: one HSN code, one
                      rate, one unit, however many things are on the shelf under
                      it. What tells those apart is in the variants below. --}}
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <p class="form-legend">Identification and tax</p>
+                <div class="form-grid">
                     <div>
                         <label for="item-code" class="field-label">
                             Product code <span class="font-normal text-muted-foreground">(optional)</span>
@@ -502,7 +587,7 @@
                          invoice. A default for the bill line's toggle and never
                          more than that: the line carries its own copy, so
                          flipping this restates nothing already posted. --}}
-                    <div class="sm:col-span-2">
+                    <div class="span-all">
                         <div class="flex items-start gap-2.5">
                             <input id="item-price-incl" name="price_includes_tax" type="checkbox"
                                    class="mt-0.5 size-4 rounded border-border">
@@ -520,8 +605,14 @@
                 {{-- ── Stock ────────────────────────────────────────────────
                      Hidden wholesale for a category that holds none: an opening
                      quantity of labour would be inventing an asset that does not
-                     exist, and offering the box teaches somebody it is possible. --}}
+                     exist, and offering the box teaches somebody it is possible.
+
+                     The legend is inside the box rather than over it, because the
+                     box is what `applyTypeToForm()` hides: a heading left outside
+                     would stand over nothing for a category that holds no stock. --}}
                 <div id="item-stock-section" class="space-y-4 rounded-[12px] border border-muted p-4">
+                    <p class="form-legend">Stock</p>
+
                     <div class="flex items-start gap-2.5">
                         <input id="item-stock" name="is_stock" type="checkbox"
                                class="mt-0.5 size-4 rounded border-border" checked>
@@ -531,6 +622,11 @@
                         </label>
                     </div>
 
+                    {{-- Where a switch the recipes depend on is refused: a
+                         material a recipe consumes, or a made thing that has
+                         one. --}}
+                    <p class="field-error hidden" data-error-for="is_stock"></p>
+
                     {{-- The day the shelf was counted, and there is one of it
                          however many variants declare a quantity: they post a
                          single stock adjustment between them, and a document has
@@ -539,13 +635,20 @@
                          an edit withholds, because opening stock is a transaction
                          that posted once and is corrected from Stock afterwards.
                          Everything else about a variant is editable. --}}
-                    <div class="max-w-xs" id="item-opening-date-field" data-opening-field>
+                    {{-- A lone field is still a field in a column. Without the
+                         grid it takes the width of the box it is in, and a date
+                         control twelve hundred pixels wide is the failure this
+                         whole scale exists to remove — the same one, one field
+                         at a time instead of all of them. --}}
+                    <div class="form-grid">
+                    <div id="item-opening-date-field" data-opening-field>
                         <label for="item-opening-date" class="field-label">Counted on</label>
                         <input id="item-opening-date" name="opening_date" type="date" class="field-input">
                         <p class="mt-1.5 text-xs text-muted-foreground">
                             The day the shelf was counted. One stock adjustment covers every variant below.
                         </p>
                         <p class="field-error hidden" data-error-for="opening_date"></p>
+                    </div>
                     </div>
                 </div>
 
@@ -655,11 +758,11 @@
                                  Lumens box, with no change to this file. --}}
                             <div class="hidden" data-variant-attributes-section>
                                 <p class="field-label">Specification</p>
-                                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2" data-variant-attributes></div>
+                                <div class="form-grid" data-variant-attributes></div>
                                 <p class="field-error hidden" data-variant-error="attributes"></p>
                             </div>
 
-                            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                            <div class="form-grid">
                                 <div>
                                     <label class="field-label" data-variant-label="sku">
                                         SKU <span class="font-normal text-muted-foreground">(optional)</span>
@@ -757,7 +860,7 @@
                                  greyed while "Keep stock of this" is off — the
                                  checkbox above is what explains why they are
                                  inert, and a box that vanishes reads as a bug. --}}
-                            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2" data-variant-stock>
+                            <div class="form-grid" data-variant-stock>
                                 <div data-opening-field>
                                     <label class="field-label" data-variant-label="opening_stock">
                                         Opening stock <span class="font-normal text-muted-foreground">(optional)</span>
@@ -818,6 +921,63 @@
                                     <p class="mt-1.5 text-xs text-muted-foreground">Never let it fall below this.</p>
                                     <p class="field-error hidden" data-variant-error="min_stock"></p>
                                 </div>
+                            </div>
+
+                            {{-- What one of this consumes.
+
+                                 Shown only for a product the workshop *makes*
+                                 rather than holds — a rewind, a service — because
+                                 a thing that is itself counted on a shelf cannot
+                                 also be made from a recipe (there would be no
+                                 answer to whether billing it issues the parent or
+                                 its parts). `data-variant-recipe` is hidden by
+                                 the same pass that hides the stock boxes, from
+                                 the opposite side of the same question.
+
+                                 Offered on a create as well as an edit. A recipe
+                                 names *other* products — the copper and the
+                                 varnish, which are already on the shelf — so
+                                 nothing about it waits for this one to exist,
+                                 and the rewind is written whole in one save. --}}
+                            <div class="hidden space-y-3 rounded-[10px] border border-dashed border-border p-3.5"
+                                 data-variant-recipe>
+                                <div class="flex flex-wrap items-start justify-between gap-3">
+                                    <div>
+                                        <p class="field-label mb-0">What it consumes</p>
+                                        <p class="mt-0.5 text-xs text-muted-foreground">
+                                            Taken off the shelf every time one of these is billed.
+                                        </p>
+                                    </div>
+                                    <button type="button" class="btn btn-secondary btn-sm" data-recipe-add>
+                                        <x-icon name="plus" :size="14" />
+                                        Add material
+                                    </button>
+                                </div>
+
+                                {{-- The picker, shown only while adding. It is
+                                     the bill counter's own `item-picker`, so the
+                                     badge beside each result is the live position
+                                     and there is no second way to search the
+                                     catalogue (§5.1). --}}
+                                <div class="hidden" data-recipe-picker></div>
+
+                                <div class="space-y-2" data-recipe-rows></div>
+
+                                {{-- Said plainly rather than left as an empty
+                                     box: a product with no recipe bills exactly
+                                     as it did before recipes existed, and that is
+                                     a legitimate state rather than a gap. --}}
+                                <p class="text-xs text-muted-foreground" data-recipe-empty>
+                                    Nothing yet — billing this will move no stock.
+                                </p>
+
+                                {{-- Today's cost, and it says so. What a bill is
+                                     actually charged is the weighted average at
+                                     the moment it posts, which is the only figure
+                                     the books ever use. --}}
+                                <p class="hidden text-[0.8125rem] text-secondary-foreground" data-recipe-cost></p>
+
+                                <p class="field-error hidden" data-variant-error="components"></p>
                             </div>
 
                             {{-- The block's own footer, for a refusal that named

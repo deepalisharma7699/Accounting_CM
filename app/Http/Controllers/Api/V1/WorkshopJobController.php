@@ -13,9 +13,12 @@ use App\Http\Requests\WorkshopJob\UpdateJobRequest;
 use App\Http\Requests\WorkshopJob\UpdateJobStatusRequest;
 use App\Http\Resources\TransactionResource;
 use App\Models\ItemCategory;
+use App\Models\JobKind;
 use App\Repositories\Contracts\ItemCategoryRepositoryInterface;
 use App\Http\Resources\WorkshopJobResource;
 use App\Services\Accounting\BillService;
+use App\Services\Inventory\UnitService;
+use App\Services\Workshop\JobKindService;
 use App\Services\Staff\WorkAttributionService;
 use App\Services\Workshop\JobService;
 use App\Support\ApiResponse;
@@ -43,6 +46,10 @@ class WorkshopJobController extends Controller
 {
     public function __construct(
         private readonly JobService $jobs,
+        private readonly JobKindService $kindMaster,
+        private readonly UnitService $units,
+        // Only for the window before the bench's own kinds exist — see
+        // categoriesAsKinds().
         private readonly ItemCategoryRepositoryInterface $categories,
         private readonly BillService $bills,
         private readonly WorkAttributionService $attribution,
@@ -80,41 +87,83 @@ class WorkshopJobController extends Controller
             // count request per tab — the same shape as `transactions/counts`.
             'counts' => $this->jobs->countsByStatus(),
             'kinds' => $this->kinds(),
+
+            // For the Kind Master's field editor, and only for that: it is what
+            // a unit dropdown offers when somebody says "Tank capacity is in
+            // litres". Published here rather than fetched from `/items/meta`
+            // for the reason the kinds are — that route is behind READ:ITEMS
+            // and this one is not, and the person who maintains the bench's
+            // vocabulary may hold neither grant on the catalogue.
+            'units' => $this->units->selectable()->map(fn ($unit) => [
+                'value' => $unit->code,
+                'code' => $unit->code,
+                'label' => $unit->label,
+                'symbol' => $unit->symbol,
+            ])->values()->all(),
         ]);
     }
 
     /**
-     * What can be booked in, and what to ask about each — the catalogue's own
-     * vocabulary, published where the bench can read it.
+     * What can be booked in, and what to ask about each.
      *
-     * ## Why it is here and not fetched from `GET /items/meta`
+     * ## Why this is not `item_categories` any more
      *
-     * Because that route is behind `READ:ITEMS` and this one is behind
-     * `READ:WORKSHOP_JOBS`, and the person booking a motor in is exactly the
-     * person who may hold the second and not the first. Fetching the intake
-     * form's fields from the items route would 403 the form for its main user —
-     * the same trap M22's attribution pickers avoid by riding on
-     * `GET /transactions/meta` rather than on `/staff`.
+     * It was, filtered on `holds_stock`, and the filter was the bug. It
+     * separates *kept on a shelf* from *made when it is sold*, which says
+     * nothing about whether a customer wheels one through a door — so the
+     * intake form offered Part, Bulk material, Bearing, Capacitor and Wire,
+     * none of which anybody brings in, and offered no cooler, fan, mixer or
+     * submersible at all, because a repair shop does not stock the things it
+     * repairs. {@see \App\Models\JobKind} carries the whole argument.
      *
-     * ## Why the payload is `/items/meta`'s shape
+     * ## Why it is still published here rather than from a kinds route
      *
-     * Because one renderer draws both — `components/attribute-fields.js` — and a
-     * second shape would be a second contract for it to go stale against (§4.4).
+     * Because this route is behind `READ:WORKSHOP_JOBS` and the person booking
+     * a motor in is exactly the person who may hold that and nothing else. The
+     * Kind *master* is a separate group under `MANAGE:WORKSHOP_JOBS`; the
+     * intake form needs the list, not the right to edit it — the same split
+     * M22's attribution pickers make by riding on `/transactions/meta` rather
+     * than on `/staff`.
      *
-     * ## Why `holds_stock` is the filter
+     * ## Why the payload shape did not change
      *
-     * A job is a physical object on a bench. In this application a category that
-     * holds no stock is one whose things are *produced at the moment they are
-     * sold* — an hour of rewinding — and nobody wheels one of those through a
-     * door. That is a property of the category rather than a flag invented for
-     * this module, which is why there is no `repairable` column to keep in step
-     * with it. Everything else a workshop has defined is offered, including
-     * categories it has never stocked a product under: describing what comes in
-     * for repair is exactly what a category is for.
+     * Because one renderer draws both this form and the catalogue's —
+     * `components/attribute-fields.js` — and a second shape would be a second
+     * contract for it to go stale against (§4.4). `value` is the id either way,
+     * so the front end could not tell which list it was given, which is what
+     * made the changeover invisible.
      *
      * @return array<int, array<string, mixed>>
      */
     private function kinds(): array
+    {
+        // §4.6: this code is deployed before the operator runs the schema step,
+        // and in that window the bench falls back to the list it read before —
+        // wrong filter and all, because being wrong in exactly yesterday's way
+        // is the point of a fallback.
+        if (! $this->kindMaster->isInstalled()) {
+            return $this->categoriesAsKinds();
+        }
+
+        return $this->kindMaster->all(['is_active' => true])
+            ->map(fn (JobKind $kind) => [
+                'value' => (string) $kind->id,
+                'id' => (int) $kind->id,
+                'label' => $kind->name,
+                'description' => $kind->description,
+                // Keyed by attribute, with the label, the data type, the fixed
+                // values where a fixed set exists and the unit to print beside
+                // the box.
+                'attributes' => (object) $kind->attributeSchema(),
+            ])->values()->all();
+    }
+
+    /**
+     * The pre-separation list. Reached only in the deployment window above.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function categoriesAsKinds(): array
     {
         return $this->categories->all(['is_active' => true])
             ->filter(fn (ItemCategory $category) => (bool) $category->holds_stock)
@@ -123,10 +172,6 @@ class WorkshopJobController extends Controller
                 'id' => (int) $category->id,
                 'label' => $category->name,
                 'description' => $category->description,
-                // Keyed by attribute, with the label, the data type, the fixed
-                // values where a fixed set exists and the unit to print beside
-                // the box. A subcategory's set already has its parent's folded
-                // in.
                 'attributes' => (object) $category->attributeSchema(),
             ])->values()->all();
     }

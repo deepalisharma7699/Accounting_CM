@@ -66,7 +66,14 @@ class ItemController extends Controller
             // that only wants names never pays for it.
             //
             // An Eloquent collection specifically: a plain one has no load().
-            (new EloquentCollection($page->items()))->load('variants');
+            $items = (new EloquentCollection($page->items()))->load('variants');
+
+            // With their recipes, in one more query for the page. The Items
+            // edit form is opened from this list, and a variant arriving
+            // without its recipe was saved back with an empty one.
+            $this->variants->attachRecipes(
+                new EloquentCollection($items->pluck('variants')->flatten(1)->all()),
+            );
         }
 
         return ApiResponse::paginated($page, ItemResource::class);
@@ -159,9 +166,11 @@ class ItemController extends Controller
      */
     public function show(int $item): JsonResponse
     {
-        return ApiResponse::success(
-            new ItemResource($this->items->findWithVariants($item))
-        );
+        $record = $this->items->findWithVariants($item);
+
+        $this->variants->attachRecipes($record->variants);
+
+        return ApiResponse::success(new ItemResource($record));
     }
 
     /* ---------------------------------------------------------------------
@@ -196,8 +205,12 @@ class ItemController extends Controller
             $this->mayPostTransactions($request),
         );
 
+        $item = $result['item']->load(['variants', 'category']);
+
+        $this->variants->attachRecipes($item->variants);
+
         return ApiResponse::created(
-            new ItemResource($result['item']->load(['variants', 'category'])),
+            new ItemResource($item),
             'Product created.',
             $this->createWarnings($result),
         );

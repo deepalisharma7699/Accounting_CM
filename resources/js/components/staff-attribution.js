@@ -152,7 +152,7 @@ export function mountStaffAttribution(host, {
         host.classList.remove('hidden');
 
         host.innerHTML = `
-            <div class="grid gap-3 sm:grid-cols-2">
+            <div class="form-grid">
                 ${painted.map((slot) => `
                     <label class="field">
                         <span class="field-label">

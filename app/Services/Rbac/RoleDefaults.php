@@ -143,6 +143,12 @@ final class RoleDefaults
             [Action::Write, Resource::Staff],
             [Action::Update, Resource::Staff],
             [Action::Delete, Resource::Staff],
+            // The owner's own pocket — a diary beside the books, never in them.
+            // OWNER only, for privacy; see PermissionResource::PersonalExpenses.
+            [Action::Read, Resource::PersonalExpenses],
+            [Action::Write, Resource::PersonalExpenses],
+            [Action::Update, Resource::PersonalExpenses],
+            [Action::Delete, Resource::PersonalExpenses],
         ];
     }
 

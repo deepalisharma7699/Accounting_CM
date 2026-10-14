@@ -199,6 +199,17 @@ enum PermissionResource: string
     case Staff = 'STAFF';
 
     /**
+     * The owner's personal diary — what they spent out of their own pocket.
+     *
+     * Not the workshop's money and not in its books: nothing here posts, and no
+     * report reads it. Only OWNER is given it, and that is about privacy rather
+     * than authority — a family's grocery bill is nobody else's business on the
+     * shop floor. An owner may still tick it onto a role of their own making;
+     * the diary is one per workshop, shared by everybody who holds this.
+     */
+    case PersonalExpenses = 'PERSONAL_EXPENSES';
+
+    /**
      * @return array<int, string>
      */
     public static function values(): array

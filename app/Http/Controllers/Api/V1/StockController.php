@@ -54,8 +54,17 @@ class StockController extends Controller
         $report = $this->stock->report($request->filters());
         $page = $this->paginate($report['rows'], $request->perPage(), $request);
 
+        // One query for the page rather than one per row.
+        $traded = array_flip($this->stock->tradedVariantIds(
+            array_map(fn (array $row) => (int) $row['variant']->id, $page->items()),
+        ));
+
         $rows = array_map(
-            fn (array $row) => (new StockPositionResource($row['variant'], $row['position']))->resolve($request),
+            fn (array $row) => (new StockPositionResource(
+                $row['variant'],
+                $row['position'],
+                isset($traded[(int) $row['variant']->id]),
+            ))->resolve($request),
             $page->items(),
         );
 
@@ -177,7 +186,11 @@ class StockController extends Controller
         $page = $card['movements'];
 
         return ApiResponse::success([
-            'position' => (new StockPositionResource($record, $this->stock->positionFor($record)))->resolve($request),
+            'position' => (new StockPositionResource(
+                $record,
+                $this->stock->positionFor($record),
+                $this->stock->tradedVariantIds([(int) $record->id]) !== [],
+            ))->resolve($request),
             'opening' => $card['opening']->toArray(),
             'closing' => $card['closing']->toArray(),
             'movements' => $movements,

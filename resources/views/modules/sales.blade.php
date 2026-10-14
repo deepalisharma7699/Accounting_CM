@@ -43,6 +43,11 @@
             came back has to be able to tell at a glance that pressing "Review &
             post" will reverse INV/26-27/1002 rather than write a new invoice —
             which is a materially different act on the same button.
+
+            The same banner says so when a saved draft has been brought back to
+            be finished: both buttons then write to that draft rather than to a
+            new document. `bill-revision.js` shows whichever `data-revise-for`
+            copy is true.
         --}}
         <div data-revise-banner
              class="mb-4 hidden items-start gap-3 rounded-[10px] border border-amber-200 bg-amber-50 px-4 py-3">
@@ -50,15 +55,21 @@
 
             <div class="flex-1 text-[0.8125rem] text-amber-900">
                 <p class="font-semibold" data-revise-title></p>
-                <p class="mt-1">
+                <p class="mt-1" data-revise-for="correct">
                     Posting this reverses the original and issues the corrected invoice in its place. Both
                     documents stay on the record — nothing is erased, the customer's copy of the old one
                     stops opening, and the stock moves by the difference between them.
                 </p>
+                <p class="mt-1 hidden" data-revise-for="draft">
+                    "Save as a draft" saves your changes to this draft, and "Review &amp; post" posts it —
+                    it gets its number then, and only then. Until you do either, the draft stays exactly as
+                    it was last saved.
+                </p>
             </div>
 
             <button type="button" data-revise-cancel class="btn btn-secondary btn-sm shrink-0">
-                Cancel the correction
+                <span data-revise-for="correct">Cancel the correction</span>
+                <span class="hidden" data-revise-for="draft">Stop editing</span>
             </button>
         </div>
 
@@ -114,6 +125,17 @@
                 To
                 <input type="date" data-filter-to class="field-input w-auto" aria-label="To date">
             </label>
+
+            {{-- Off by default, so the list is the working one: a bill
+                 cancelled ten minutes ago is not still taking up two rows on
+                 the screen somebody is trying to read. Both halves come back
+                 together when this is pressed — see the `hide_cancelled` filter
+                 in EloquentTransactionRepository. Nothing is deleted and
+                 nothing is hidden from the books: the pair is on the Day Book
+                 and on the audit trail exactly as it always was. --}}
+            <button type="button" data-filter-cancelled class="pill" aria-pressed="false">
+                Show cancelled
+            </button>
 
             <button type="button" data-filter-outstanding class="pill" aria-pressed="false">
                 Only what is still owed

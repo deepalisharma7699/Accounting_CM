@@ -5,6 +5,7 @@ namespace App\Services\Inventory;
 use App\Enums\TransactionType;
 use App\Exceptions\Accounting\InvalidStockMovementException;
 use App\Exceptions\Accounting\ItemInUseException;
+use App\Exceptions\Accounting\RecipeException;
 use App\Exceptions\ApiException;
 use App\Exceptions\ConflictException;
 use App\Exceptions\ResourceNotFoundException;
@@ -71,6 +72,7 @@ class ItemService
         private readonly ItemVariantService $variants,
         private readonly TransactionService $transactions,
         private readonly UnitRegistry $units,
+        private readonly ItemComponentService $recipes,
     ) {}
 
     /* ---------------------------------------------------------------------
@@ -534,7 +536,7 @@ class ItemService
      */
     private function variantPayload(array $data): array
     {
-        return [
+        $payload = [
             'sku' => $data['sku'] ?? null,
             'barcode' => $data['barcode'] ?? null,
             'label' => $data['variant_label'] ?? null,
@@ -548,6 +550,15 @@ class ItemService
             'min_stock' => $data['min_stock'] ?? null,
             'is_draft' => $data['is_draft'] ?? null,
         ];
+
+        // The recipe, where this variant was given one on the create form. Only
+        // when the key was sent: its absence is "nothing said", and
+        // ItemVariantService::create() syncs only a key that is present.
+        if (array_key_exists('components', $data)) {
+            $payload['components'] = (array) $data['components'];
+        }
+
+        return $payload;
     }
 
     /* ---------------------------------------------------------------------
@@ -685,6 +696,8 @@ class ItemService
         if (array_key_exists('is_stock', $data)) {
             $category = $item->category ?? $this->resolveCategory($item->category_id);
             $attributes['is_stock'] = $this->resolveStockFlag($category, $data['is_stock']);
+
+            $this->assertStockSwitchKeepsRecipesWhole($item, $attributes['is_stock'] && $category->holds_stock);
         }
 
         if (array_key_exists('is_active', $data)) {
@@ -714,6 +727,41 @@ class ItemService
         Log::info('items.updated', ['item_id' => $item->id, 'fields' => array_keys($attributes)]);
 
         return $item;
+    }
+
+    /**
+     * Refuse a stock switch that would leave a recipe meaning something else.
+     *
+     * Either direction changes what billing does without anybody touching the
+     * recipe. Turning stock off on a material leaves every recipe that consumes
+     * it with nothing to issue, so each of those bills is refused at the
+     * counter. Turning stock on for a made thing makes its recipe silently
+     * ignored, and the bill starts issuing the product from an empty shelf
+     * instead. Both are refused here, where somebody can act on them.
+     */
+    private function assertStockSwitchKeepsRecipesWhole(Item $item, bool $willTrack): void
+    {
+        $wasTracking = $item->tracksStock();
+
+        if ($wasTracking === $willTrack) {
+            return;
+        }
+
+        $variantIds = $item->variants()->pluck('id')->map(fn ($id) => (int) $id)->all();
+
+        if ($wasTracking) {
+            $usedBy = $this->recipes->recipesUsing($variantIds);
+
+            if ($usedBy !== []) {
+                throw RecipeException::materialWouldStopHoldingStock($item->name, $usedBy);
+            }
+
+            return;
+        }
+
+        if ($this->recipes->anyHasRecipe($variantIds)) {
+            throw RecipeException::parentWouldHoldStock($item->name);
+        }
     }
 
     /**

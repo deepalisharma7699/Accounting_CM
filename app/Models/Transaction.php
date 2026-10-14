@@ -42,6 +42,7 @@ use Illuminate\Support\Carbon;
  * @property Carbon $date
  * @property string $total
  * @property string|null $notes
+ * @property string|null $vendor_invoice_no
  * @property array<int, array<string, mixed>>|null $draft_lines
  * @property array<int, array<string, mixed>>|null $draft_payments
  * @property array<string, mixed>|null $draft_payload
@@ -55,7 +56,7 @@ use Illuminate\Support\Carbon;
  */
 #[Fillable([
     'tenant_id', 'type', 'status', 'doc_no', 'client_ref', 'source', 'party_id', 'date', 'total',
-    'notes', 'draft_lines', 'draft_payments', 'draft_payload',
+    'notes', 'vendor_invoice_no', 'draft_lines', 'draft_payments', 'draft_payload',
     'created_by', 'posted_at', 'reverses_id', 'against_transaction_id', 'opening_import_id',
     'workshop_job_id', 'employee_id',
 ])]
@@ -134,6 +135,32 @@ class Transaction extends Model
      * @var \Illuminate\Support\Collection<int, TransactionStaff>|null
      */
     public ?\Illuminate\Support\Collection $staffAttribution = null;
+
+    /**
+     * What a draft bill's lines are — name, unit, rate, tax basis — attached on
+     * the single-document read so the draft can be continued in the form.
+     *
+     * A plain property for the reason {@see $settlement} is one. Null wherever
+     * nobody resolved it, which is every listing: see
+     * {@see \App\Services\Accounting\BillService::draftLinesFor()}.
+     *
+     * @var array<int, array<string, mixed>|null>|null
+     */
+    public ?array $draftLineDetails = null;
+
+    /**
+     * Whether `transactions.vendor_invoice_no` exists on this server yet.
+     *
+     * The column arrives by manual SQL (§4.6), so the code ships first and has
+     * to work on both shapes: until it is run the field is accepted and simply
+     * not stored. Memoised per process — PHP-FPM re-asks on every request.
+     */
+    public static function recordsVendorInvoiceNo(): bool
+    {
+        static $installed = null;
+
+        return $installed ??= \Illuminate\Support\Facades\Schema::hasColumn('transactions', 'vendor_invoice_no');
+    }
 
     /**
      * @return array<string, string>

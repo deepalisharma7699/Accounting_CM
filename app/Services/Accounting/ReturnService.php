@@ -164,14 +164,17 @@ class ReturnService
         $totals = [];
 
         foreach ($this->lines->returnedAgainstBill((int) $bill->id) as $row) {
-            $movement = $row->stockMovement;
+            // `cost()` rather than one movement: a credit note line that put a
+            // made thing's materials back has one movement per material, and
+            // reading a single one would leave the rest creditable twice.
+            $credited = $row->cost();
 
-            if ($movement === null) {
+            if ($credited === null) {
                 continue;
             }
 
             $id = (int) $row->against_line_id;
-            $totals[$id] = ($totals[$id] ?? Money::zero())->plus($movement->valueMoney()->absolute());
+            $totals[$id] = ($totals[$id] ?? Money::zero())->plus($credited);
         }
 
         return $totals;
@@ -210,6 +213,25 @@ class ReturnService
             // those two.
             if (! $quantity->isPositive()) {
                 continue;
+            }
+
+            /*
+            | A line that supplied something *made* took several materials off
+            | several shelves, and a credit note row names one item, one variant
+            | and one value. Refused here rather than approximated downstream —
+            | see the exception, which says why every approximation is wrong and
+            | where to go instead.
+            |
+            | Read off what the line actually did rather than off the recipe:
+            | the recipe may have been edited since, and what has to come back is
+            | what went out.
+            */
+            if (! $line->is_stock && $line->stockMovements->isNotEmpty()) {
+                throw InvalidReturnException::lineWasMadeFromMaterials(
+                    $this->describe($bill),
+                    (int) $line->line_no,
+                    $line->description,
+                );
             }
 
             $alreadyQty = $returnedQty[(int) $line->id] ?? Quantity::zero();
@@ -280,14 +302,17 @@ class ReturnService
         Quantity $alreadyReturned,
         Money $alreadyCredited,
     ): Money {
-        $movement = $line->stockMovement;
+        // The whole of what the line took off the shelf — summed, because a line
+        // supplying a made thing issues one movement per material. See
+        // `TransactionLine::stockMovements()`.
+        $issued = $line->cost();
 
-        if ($movement === null) {
+        if ($issued === null) {
             return Money::zero();
         }
 
         $remainingQty = $line->quantityValue()->minus($alreadyReturned);
-        $remainingValue = $movement->valueMoney()->absolute()->minus($alreadyCredited);
+        $remainingValue = $issued->minus($alreadyCredited);
 
         if (! $remainingQty->isPositive() || ! $remainingValue->isPositive()) {
             return Money::zero();
@@ -338,6 +363,15 @@ class ReturnService
         // been cancelled whole — there is nothing left on either to take back.
         if (! $bill->isPosted()) {
             throw InvalidReturnException::notInTheBooks((int) $bill->id, $bill->status->label());
+        }
+
+        // A walk-in sale names nobody, and a credit note is a claim against a
+        // customer's account — there is no account to credit, and the refund
+        // would leave Sundry Debtors negative against nobody. The sale was paid
+        // in full at the counter, so cancelling it is exact: the stock comes
+        // back and the cash goes out the way it came in.
+        if ($bill->party_id === null) {
+            throw InvalidReturnException::walkIn($this->describe($bill));
         }
     }
 

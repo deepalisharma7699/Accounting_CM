@@ -49,13 +49,13 @@
              switch to, and leaving the strip up would offer a jump that silently
              abandoned what was being edited. --}}
         <div class="tab-strip shrink-0 px-6 pt-3" role="tablist" id="catalogue-tabs">
-            <button type="button" class="tab-trigger" role="tab" data-catalogue-tab="categories">Categories</button>
+            <button type="button" class="tab" role="tab" data-catalogue-tab="categories" aria-selected="true">Categories</button>
             {{-- Beside Categories rather than on a screen of its own: brand and
                  category are picked from the same form one field apart, and a
                  shop that learned to add a category one way should not have to
                  learn a second way to add a brand. --}}
-            <button type="button" class="tab-trigger" role="tab" data-catalogue-tab="brands">Brands</button>
-            <button type="button" class="tab-trigger" role="tab" data-catalogue-tab="units">Units</button>
+            <button type="button" class="tab" role="tab" data-catalogue-tab="brands" aria-selected="false">Brands</button>
+            <button type="button" class="tab" role="tab" data-catalogue-tab="units" aria-selected="false">Units</button>
         </div>
 
         <div class="flex-1 overflow-y-auto px-6 py-5" id="catalogue-body"></div>
@@ -110,7 +110,7 @@
                     <p class="field-error hidden" data-error-for="description"></p>
                 </div>
 
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div class="form-grid">
                     <div>
                         <label for="category-unit" class="field-label">Usually counted in</label>
                         <select id="category-unit" name="default_unit_code" class="field-input"></select>
@@ -177,6 +177,25 @@
                         </label>
                     </div>
                 </div>
+
+                {{-- Shown on an edit only, and the answer to a category that
+                     cannot be deleted because products are filed under it.
+                     Archiving takes it off the create form and leaves every
+                     product that already carries it reading exactly as before. --}}
+                <div id="category-active-row" class="hidden border-t border-muted pt-4">
+                    <div class="flex items-start gap-2.5">
+                        <input id="category-active" name="is_active" type="checkbox"
+                               class="mt-0.5 size-4 rounded border-border" checked>
+                        <label for="category-active" class="text-sm text-secondary-foreground">
+                            Offer this category on the create form
+                            <span class="mt-0.5 block text-xs text-muted-foreground">
+                                Turn it off for a kind of thing the shop no longer deals in. Products
+                                already filed under it keep it, and go on being counted and billed.
+                            </span>
+                        </label>
+                    </div>
+                    <p class="field-error hidden" data-error-for="is_active"></p>
+                </div>
             </div>
 
             <div class="flex gap-2 border-t border-muted px-6 py-4">
@@ -223,7 +242,7 @@
                     </p>
                 </div>
 
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div class="form-grid">
                     <div>
                         <label for="attribute-type" class="field-label">Kind of value</label>
                         <select id="attribute-type" name="data_type" class="field-input"></select>
@@ -251,7 +270,7 @@
                     <p class="field-error hidden" data-error-for="options"></p>
                 </div>
 
-                <div data-attribute-range class="hidden grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div data-attribute-range class="hidden form-grid">
                     <div>
                         <label for="attribute-min" class="field-label">
                             Smallest allowed <span class="font-normal text-muted-foreground">(optional)</span>
@@ -270,7 +289,7 @@
                     </div>
                 </div>
 
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div class="form-grid">
                     <div>
                         <label for="attribute-default" class="field-label">
                             Pre-filled with <span class="font-normal text-muted-foreground">(optional)</span>
@@ -302,6 +321,25 @@
                     </label>
                 </div>
                 <p class="field-error hidden" data-error-for="is_required"></p>
+
+                {{-- Shown on an edit only, and the answer to a field that cannot
+                     be deleted because products have answered it. Switching it
+                     off stops the create form asking, and keeps the label that
+                     explains what every stored value means. --}}
+                <div id="attribute-active-row" class="hidden border-t border-muted pt-4">
+                    <div class="flex items-start gap-2.5">
+                        <input id="attribute-active" name="is_active" type="checkbox"
+                               class="mt-0.5 size-4 rounded border-border" checked>
+                        <label for="attribute-active" class="text-sm text-secondary-foreground">
+                            Ask for this field on the create form
+                            <span class="mt-0.5 block text-xs text-muted-foreground">
+                                Turn it off to stop collecting it. Products that already answered it keep
+                                their value, and it goes on being labelled and printed.
+                            </span>
+                        </label>
+                    </div>
+                    <p class="field-error hidden" data-error-for="is_active"></p>
+                </div>
             </div>
 
             <div class="flex gap-2 border-t border-muted px-6 py-4">
@@ -327,7 +365,7 @@
             </div>
 
             <div class="space-y-4 px-6 py-5">
-                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div class="form-grid">
                     <div>
                         <label for="unit-label" class="field-label">Name</label>
                         <input id="unit-label" name="label" type="text" class="field-input" required
@@ -385,6 +423,24 @@
                     <p class="mt-1.5 text-xs text-muted-foreground">
                         Fixed. Every quantity ever recorded in this unit points at it.
                     </p>
+                </div>
+
+                {{-- Shown on an edit only, and the answer to a unit that cannot
+                     be deleted because something is counted in it. The footer
+                     has promised this switch since the master was built. --}}
+                <div id="unit-active-row" class="hidden border-t border-muted pt-4">
+                    <div class="flex items-start gap-2.5">
+                        <input id="unit-active" name="is_active" type="checkbox"
+                               class="mt-0.5 size-4 rounded border-border" checked>
+                        <label for="unit-active" class="text-sm text-secondary-foreground">
+                            Offer this unit on the catalogue's forms
+                            <span class="mt-0.5 block text-xs text-muted-foreground">
+                                Turn it off for a unit the shop has stopped using. Every quantity already
+                                recorded in it is unchanged and goes on reading the same way.
+                            </span>
+                        </label>
+                    </div>
+                    <p class="field-error hidden" data-error-for="is_active"></p>
                 </div>
             </div>
 

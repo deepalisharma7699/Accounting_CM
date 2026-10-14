@@ -154,6 +154,26 @@ final class Quantity implements JsonSerializable, Stringable
         return new self(abs($this->minor));
     }
 
+    /**
+     * This quantity repeated `$times` over — a recipe's material scaled to the
+     * number of things being made.
+     *
+     * 2.5 kg of copper per rewind, three rewinds on one line, is 7.5 kg. In
+     * integer thousandths and rounded once, for the reason {@see costAt()}
+     * gives: `2.5 * 3` in a float is not reliably `7.5`, and `decimal(15,3)`
+     * refuses what comes out of one.
+     *
+     * Both operands are quantities and the result is in *this* one's unit,
+     * which is the only reading that makes sense here — kilograms of copper per
+     * motor, times motors, is kilograms of copper. Multiplying two quantities
+     * that both mean something physical is not otherwise a sensible operation,
+     * so there is no general `times(Quantity)` beyond this one use.
+     */
+    public function times(self $times): self
+    {
+        return self::fromMinor(self::divideRounded($this->minor * $times->minor, self::MINOR_PER_UNIT));
+    }
+
     /* ---------------------------------------------------------------------
      | Valuation
      |-------------------------------------------------------------------- */

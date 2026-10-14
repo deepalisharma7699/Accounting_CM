@@ -92,6 +92,20 @@ final class PostingBatch
          * both set.
          */
         public readonly ?int $againstTransactionId = null,
+        /**
+         * What a receipt or payment let the party off on top of the money —
+         * the ₹50 in "paid ₹1,200 to close a ₹1,250 invoice". Null where it
+         * paid in full, and for everything that is not a settlement.
+         *
+         * Carried so the engine can still say a settlement *is* its split: the
+         * money plus this, and nothing else, makes up its total.
+         */
+        public readonly ?Money $settlementDiscount = null,
+        /**
+         * The number the vendor printed on their own bill — "INV-2291". A
+         * purchase only, optional, and never ours: our number is `doc_no`.
+         */
+        public readonly ?string $vendorInvoiceNo = null,
     ) {}
 
     /**
@@ -114,6 +128,8 @@ final class PostingBatch
         array $documentLines = [],
         ?string $clientRef = null,
         ?int $againstTransactionId = null,
+        ?Money $settlementDiscount = null,
+        ?string $vendorInvoiceNo = null,
     ): self {
         return new self(
             $type,
@@ -129,6 +145,8 @@ final class PostingBatch
             array_values($documentLines),
             $clientRef,
             $againstTransactionId,
+            $settlementDiscount,
+            $vendorInvoiceNo,
         );
     }
 

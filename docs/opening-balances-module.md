@@ -154,6 +154,13 @@ re-keying is where transcription errors come from.
 | `side` | balance only: `debit` or `credit`, defaulting to the account's own |
 | `gstin` | party rows, optional |
 | `reference` | free text, kept as the ledger memo |
+| `variant_id` | stock only: the exact variant — written by the Stock card's template |
+
+`opening_qty`, `opening_quantity` and `opening_stock` are read as `quantity`; they
+are the template's spelling. The file can be **chosen** as well as pasted: "Choose
+a CSV file" reads it in the browser into the same box, so a file and a paste are
+one request, one preview, and the same rule that an edit after a check takes the
+post button away. Its name is copied to the file-name field for the record.
 
 A column this product has no use for is ignored rather than refused. A workshop's
 own spreadsheet has a notes column, and making them delete it before they can go
@@ -220,6 +227,8 @@ that roles never filter a *read* means nothing is hidden if it turns out wrong.
 | Stock with no value | Carried at nothing, it reports a 100% margin on the first one sold — a number nobody would question |
 | A service in stock | An hour is produced at the moment it is sold. There was never any of it on a shelf |
 | Anything dated before `books_start_date` | M2.2's rule, enforced by the engine (`BOOKS_CLOSED`) |
+| Stock for a variant that has already moved | Bought, sold, counted or consumed since go-live, so its history started without this figure. Declared beneath it, the shelf would look right while every sale out of the empty shelf kept a cost of goods taken from nothing. The row says to record a count instead |
+| The same variant twice in one file | The second row names the line of the first. Keep one row with the whole quantity |
 
 ## Authority
 
@@ -269,6 +278,111 @@ is true.
 - [x] Every opening record is scoped to its own workshop, and identical
       declarations in two workshops are not a duplicate
 - [x] An opening balance is dated at go-live, and one dated earlier is refused
+- [x] The Stock card's template declares by `variant_id` and ignores rows left
+      empty; a template with nothing filled in is nothing to import
+- [x] A variant that has already moved is refused and pointed at a count; a
+      reversed opening declaration is not a trading history
+
+## A second way in: one variant, from the Items drawer
+
+The paste box is not the only caller any more. A product written without its
+opening stock had no way to acquire one — `opening_stock` is on the create form
+and deliberately withheld from the edit — and the substitute people reached for,
+Stock's **Record a count**, posts the wrong document:
+
+| | Posting | Dated |
+| --- | --- | --- |
+| Record a count (template G) | `Dr Inventory / **Cr COGS**` | today |
+| Opening declaration (template H) | `Dr Inventory / **Cr Opening Balance Equity**` | go-live |
+
+Crediting COGS puts the whole value of the shelf into the current period's gross
+profit as though the workshop had earned it. That is right for shrinkage found at
+a stock-take and wrong for stock the workshop already owned.
+
+So the Items drawer offers **Declare opening stock** on a variant, and it is not
+a second implementation of anything: it builds one structured `rows[]` entry and
+posts it to `POST /opening-balances`, through the same service, the same
+resolution and the same guards as a pasted file. It is offered only while the
+variant's shelf is empty and it has never moved (`has_trading_history` on the
+Stock row), needs `UPDATE:WORKSPACE` like every other declaration,
+and previews before it posts — because `OPENING_PLAN_HAS_ERRORS` carries a count
+and a sentence about fixing the file, and there is no file.
+
+**A row may name `variant_id`, and then nothing is matched.** The screen knows
+which variant it is looking at, and putting a known id through the name matcher
+would be discarding the one certain thing it has: two variants of one product
+share a name, so a shop with "Bearing 6204" and "Bearing 6204 ZZ" would have a
+near-miss decide which shelf a declaration landed on. An id that does not resolve
+is an error on that row and never a quiet fall back to the name beside it — a
+fall-back is what would turn a stale id in a held page into a declaration against
+the wrong variant. A file without a `variant_id` column behaves exactly as before.
+
+The id is **appended to the fingerprint only when present**, and both halves of
+that matter. Without it, two variants of one product declared at the same
+quantity and cost hashed identically and the second was refused outright as a
+file already imported — a correct figure the product would not accept. Adding an
+empty segment unconditionally would instead rehash every fingerprint already
+stored, and a workshop re-pasting last month's file would stop being told it had
+already been imported. `tests/Unit/OpeningRowTest.php` holds both shut.
+
+## A third way in: the Stock card's template
+
+The drawer is one variant at a time, and a workshop that went live with hundreds
+of products created and no opening stock will not open hundreds of drawers. So the
+Stock card offers **Opening-stock template**: a CSV of the variants its filters
+are showing, to fill in and upload here. Again nothing is reimplemented — it is a
+file written in this importer's own vocabulary.
+
+| Column | |
+| --- | --- |
+| `kind` | `stock` on every row |
+| `variant_id` | resolves the row exactly; no name is matched |
+| `item`, `variant`, `sku`, `unit` | for the person filling it in. `unit` is the base unit the quantity is counted in — there is no conversion |
+| `opening_qty` | **empty** — what was on the shelf at go-live |
+| `unit_cost` | the variant's `purchase_price` where the catalogue has one, blank otherwise. A row still needs a cost or a total to post |
+
+Three decisions in it are load-bearing.
+
+**It is not the Stock export with a column added.** The export's headers are a
+report's, and this importer reads three of them as something else: `Category` is
+an alias for `kind`, so every row would be refused; `Value` is `amount`, which
+overrides quantity × cost, so an out-of-stock row would declare nothing; and
+`Quantity` is the position today, not at go-live.
+
+**Only variants that have never moved are in it, and the server refuses the
+rest.** On a live workshop "out of stock" is as often *sold out* as *never
+entered*. A variant bought and sold back to nought looks exactly like one nobody
+entered, and opening stock on it is stock that was never there. "Never moved"
+means no stock movement outside an `opening` transaction — a reversal keeps the
+original's type, so reversing a declaration does not count as history. The
+template leaves those rows out so nobody counts a shelf only to be told no; the
+refusal in `OpeningBalanceService::resolveStock()` is what holds, whatever file a
+row arrives in. A variant created with opening stock on the Items form posted a
+stock adjustment and so has history, which is right — it was declared.
+
+**A row left without a quantity is dropped, not refused.** Somebody exports five
+hundred variants and counts eighty; making them delete the other four hundred and
+twenty first would be the re-keying this importer exists to prevent. The parser
+drops a row that names a `variant_id` and carries neither a quantity nor an
+amount, the same way it drops a spacer line. A prefilled unit cost does not make a
+row filled.
+
+**A variant named twice in one file is refused on its second row.** The
+per-variant guard reads the ledger, and nothing in a file is posted until every
+row has resolved — so two filtered templates pasted together, or a row copied
+down a spreadsheet, would otherwise declare one shelf twice. The service keeps the
+line each variant was first declared on and refuses the repeat naming it. New
+variants are keyed by their preview placeholder, so the preview catches what the
+commit would double. This holds for name-matched rows as well as template rows.
+
+The template is written from what the Stock card holds, which is at most the first
+2,000 variants; past that the toast says so and asks for a narrower filter rather
+than handing over a file that reads as the whole catalogue.
+
+The button needs the same two grants as the upload — there is no point offering a
+file somebody may not post — and the Stock endpoint carries `has_trading_history`
+and `purchase_price` on every row for it. The history is one query per page,
+`StockLedgerService::tradedVariantIds()`, never one per row.
 
 ## Decisions worth carrying forward
 
@@ -285,3 +399,9 @@ is true.
 | Everything invented is flagged draft | A name and nothing else is not a billable record, and one that looks complete gets billed at 0% GST for a year |
 | CSV only | The one place this product parses user-supplied data deserves the smallest parser that does the job |
 | `UPDATE:WORKSPACE` as well as `WRITE:TRANSACTIONS` | Declaring the workshop's net worth is setup, not the day job |
+| A row may name `variant_id`, and then nothing is matched | The screen knows which variant it is looking at; a fuzzy match on a name two variants share is the one way this path lands on the wrong shelf |
+| The variant id joins the fingerprint only when it is set | Two variants of one product otherwise hash alike and the second is refused; adding it always would rehash every file already imported |
+| One opening figure per variant per file | The ledger guard cannot see rows not yet posted; a repeat would put stock on the shelf twice |
+| Opening stock is refused on a variant that has moved | Sold out and never entered both read as out of stock; an opening figure beneath a sale leaves that sale's cost of goods wrong for good |
+| The template is its own file, not the export | The export's headers mean other things to this importer, and a report is not an input |
+| A template row with no quantity is ignored | Export everything, fill in what was counted, upload as it stands |

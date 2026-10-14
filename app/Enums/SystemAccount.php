@@ -40,12 +40,14 @@ enum SystemAccount: string
     /* Income — 4000-4999 */
     case Sales = 'sales';
     case ServiceIncome = 'service_income';
+    case DiscountReceived = 'discount_received';
 
     /* Expenses — 5000-5999 */
     case Cogs = 'cogs';
     case MiscExpense = 'misc_expense';
     case SalaryExpense = 'salary_expense';
     case RoundOff = 'round_off';
+    case DiscountAllowed = 'discount_allowed';
 
     public function code(): string
     {
@@ -65,6 +67,8 @@ enum SystemAccount: string
 
             self::Sales => '4000',
             self::ServiceIncome => '4100',
+            // The top of the band, for the reason Round Off sits at 5999.
+            self::DiscountReceived => '4999',
 
             self::Cogs => '5000',
             self::MiscExpense => '5100',
@@ -84,6 +88,7 @@ enum SystemAccount: string
             | 5999 is the one number in the band nobody types by choice.
             */
             self::RoundOff => '5999',
+            self::DiscountAllowed => '5998',
         };
     }
 
@@ -110,6 +115,8 @@ enum SystemAccount: string
             self::MiscExpense => 'Misc Expense',
             self::SalaryExpense => 'Salary Expense',
             self::RoundOff => 'Round Off',
+            self::DiscountAllowed => 'Discount Allowed',
+            self::DiscountReceived => 'Discount Received',
         };
     }
 
@@ -130,7 +137,8 @@ enum SystemAccount: string
             self::OpeningBalanceEquity => AccountType::Equity,
 
             self::Sales,
-            self::ServiceIncome => AccountType::Income,
+            self::ServiceIncome,
+            self::DiscountReceived => AccountType::Income,
 
             self::Cogs,
             self::MiscExpense,
@@ -144,7 +152,16 @@ enum SystemAccount: string
             | reader looking for "what did the rounding cost us this year" looks
             | among the expenses.
             */
-            self::RoundOff => AccountType::Expense,
+            self::RoundOff,
+            /*
+            | What a customer was let off *after* their invoice was raised — the
+            | ₹50 a receipt wrote off so ₹1,200 could settle a ₹1,250 bill. The
+            | invoice and its GST stand as issued, so the forgiveness is a cost
+            | of collecting, not a reduction of the sale; one agreed at the
+            | counter comes off the bill before tax instead and never reaches
+            | here. Discount Received is the mirror on a vendor payment.
+            */
+            self::DiscountAllowed => AccountType::Expense,
         };
     }
 
@@ -168,9 +185,11 @@ enum SystemAccount: string
             self::ServiceIncome => 'Revenue from labour: repairs and rewinding.',
 
             self::Cogs => 'Cost of the stock consumed by a sale or a job.',
-            self::RoundOff => 'The paise dropped or added when a bill is taken to the nearest rupee.',
+            self::RoundOff => 'The paise dropped when a bill is taken down to the whole rupee.',
             self::MiscExpense => 'Day-to-day running costs.',
             self::SalaryExpense => 'Staff salaries.',
+            self::DiscountAllowed => 'Balances customers were let off when they settled an invoice for less.',
+            self::DiscountReceived => 'Balances suppliers let the workshop off when it settled a bill for less.',
         };
     }
 

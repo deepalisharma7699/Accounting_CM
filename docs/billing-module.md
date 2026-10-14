@@ -215,10 +215,16 @@ over-discount must report what actually came off.
 
 An 18% bill lands on ₹6,701.10 and a counter holding a five-hundred-rupee note
 does not find ten paise. A workshop that has switched this on charges ₹6,701 and
-books the difference to **Round Off** (`5999`). Off by default: a rounding policy
-changes what a customer is charged, and switching one on underneath a workshop
-that never asked for it is a surprise on their next invoice rather than a
-default. Posted documents are untouched either way.
+books the difference to **Round Off** (`5999`).
+
+**Always down.** ₹1,250.80 is billed as ₹1,250, never ₹1,251 — that is how a
+counter quotes, and a bill asking for the extra paise gets argued down at the till
+anyway. Until October 2026 it was the nearest rupee, so a document posted before
+then may carry a round-off of up to +50 paise; nothing re-reads it.
+
+**On for a workshop provisioned from October 2026, never switched on underneath
+an older one.** A rounding policy changes what a customer is charged; an existing
+workshop turns it on in Settings. Posted documents are untouched either way.
 
 ### The lines never move — only the party's side
 
@@ -235,9 +241,8 @@ Dr Sundry Debtors    6,701.00      ← rounded: what the customer is asked for
 Dr Round Off             0.10      ← the paise the workshop gave up
 ```
 
-Rounded up, the residue is a credit instead. On a purchase both sides flip: the
-workshop owing ten paise less than the invoice adds up to has *gained* them, so
-Round Off is credited. Getting that direction backwards would double the error
+On a purchase both sides flip: the workshop owing ten paise less than the
+invoice adds up to has *gained* them, so Round Off is credited. Getting that direction backwards would double the error
 rather than cancel it — and the voucher would still balance, which is why
 `BillTemplate::roundingLines()` spells it out rather than leaving it to a sign.
 
@@ -248,11 +253,10 @@ handed over ₹6,701 for an invoice reading ₹6,701 would still owe ten paise �
 statement, in an ageing report, and in the list of who to chase, forever. Once
 the receivable moves, the books need the residue booked or they do not balance.
 
-Round Off is an **expense** that spends much of its life with a credit balance,
-which is correct rather than odd: rounding up gains paise and rounding down loses
-them, in roughly equal measure, and the account is the running net. Filing it
-under income would be worse — nobody earned it, and a reader asking "what did the
-rounding cost us this year" looks among the expenses.
+Round Off is an **expense**: sales lose the paise and purchases gain them, and
+the account is the running net. Filing it under income would be worse — nobody
+earned it, and a reader asking "what did the rounding cost us this year" looks
+among the expenses.
 
 ### Why 5999 and not 5300
 
@@ -281,19 +285,90 @@ A credit note is priced from the same lines, so it reaches the same unrounded
 figure and rounds the same way. **A full return therefore nets the customer to
 nothing**, which is only true because both documents round.
 
-**Two part returns of the same invoice may not.** ₹500.25 × 2 is charged as
-₹1,001; each half returned on its own is ₹500.25 rounded down to ₹500; ₹1,001
+**Two part returns of the same invoice may not.** ₹500.60 × 2 is charged as
+₹1,001; each half returned on its own is ₹500.60 rounded down to ₹500; ₹1,001
 charged against ₹1,000 credited leaves the customer owing a rupee on an invoice
 they returned in full. Every document rounded correctly and on its own, which is
 exactly the problem — nothing is tracking what the original rounding did.
 
-It is bounded (under fifty paise per credit note), it lands on the **party's
+It is bounded (under a rupee per credit note), it lands on the **party's
 balance** where a workshop can see it and write it off rather than silently in an
 account nobody reads, and the alternatives are worse: not rounding credit notes
 gives a note reading ₹500.25 among documents that are all whole rupees, and
 making each note depend on what earlier ones did gives a total that changes with
 the order the goods came back in. Asserted in `RoundOffTest` rather than left to
 be discovered.
+
+## Paid in full, for less — settling short
+
+"₹1,250, they gave ₹1,200, mark it paid." The fifty rupees is a discount, and
+there are two cases, decided by whether the invoice exists yet.
+
+### At the counter: before tax, on the bill — `settle_total`
+
+On the bill form, under **Paid in full**, the amount box is typed rather than
+locked. A figure below the total is sent as `settle_total`, and
+`BillTemplate::withBillDiscount()` takes the difference off as a **bill discount
+before tax**: agreed at the moment of sale and on the invoice, which is exactly
+when GST follows a discount. The taxable value and the GST both fall, the lines
+carry the discount (so a credit note pro-rates it), and on a purchase the stock
+arrives at the reduced cost.
+
+How large a discount that takes is **searched, not inverted**. The discount is
+shared across lines at different rates and every share and every tax half is
+rounded to the paisa, so no formula undoes it; a second copy of the GST
+arithmetic would be the wrong answer some of the time. The total only ever falls
+as the discount grows, so a binary search over whole paise (about thirty asks of
+the one real computation) finds the largest discount under which the bill still
+reaches the figure. The bill is then *charged* the settled figure, and the few
+paise one more paisa of discount would have overshot are booked to Round Off.
+
+The preview reports `before_settlement` — what the bill came to without it — so
+the panel and the confirmation can say "₹50 given as discount: collected ₹1,200
+for a ₹1,250 bill". The customer's estimate shows the rate with tax, the discount
+and ₹1,200. Two refusals, both on the template:
+
+* `SETTLED_ABOVE_DOCUMENT` — a figure above what the bill comes to is a typo;
+* `SETTLED_SHORT_NOT_PAID_IN_FULL` — the payments must come to the settled
+  figure. Settled at ₹1,200 and paid ₹1,000 is a markdown with a balance left
+  owing, which is an ordinary bill discount.
+
+The form drops the settled figure the moment anything that changes the bill is
+touched — a line, a rate, a discount, the party, the direction. ₹1,200 agreed
+against ₹1,250 is not ₹1,200 agreed against the ₹1,900 the bill becomes.
+
+### Afterwards: after tax, on the receipt — `discount`
+
+An invoice already posted has had its GST declared, so what a customer is let off
+when they pay it cannot come off the sale. A receipt (or a vendor payment) takes
+an optional `discount`: the control account is cleared by the money **plus** the
+discount, and the discount is its own line to **Discount Allowed** (`5998`,
+expense) on a receipt or **Discount Received** (`4999`, income) on a payment. The
+money lines stay exactly the money, so the cash book never sees it.
+
+```
+Dr Cash in Hand        1,200.00
+Dr Discount Allowed       50.00   ← "Settled for less"
+  Cr Sundry Debtors    1,250.00   ← what it cleared, and what M16 allocates
+```
+
+The settlement's `total` is therefore what it cleared, and its `discount` on the
+resource is `total` less the split. The engine's "a settlement is its split" check
+reads `PostingBatch::$settlementDiscount`, and a reversal derives it from the
+original the same way, so both the money and the write-off come back. It is
+offered from the Sales and Purchase drawers (**Paid in full** at a smaller figure,
+`components/payment-rows.js`'s `settleAgainst()`), and as an optional box on the
+Receipt and Payment forms in Transactions.
+
+Refused, before anything is posted, when the money and the discount together come
+to more than is owing on the bills it settles (`DISCOUNT_EXCEEDS_DUE`): forgiving a
+balance nobody has would leave the party in credit by money they never paid. And
+refused on a draft — a parked write-off is a balance forgiven on paper that the
+books do not know about.
+
+Existing workshops get the two accounts from `php artisan accounts:seed`, which
+creates only what a chart is missing. A workshop that already has a 4999 or 5998
+of its own needs it renumbered first.
 
 ## The customer's copy — M20
 
@@ -335,7 +410,7 @@ column somebody has to read past.
 ### There is one sheet, and the preview borrows it
 
 Sales opens the customer's copy over the form as soon as a sale posts
-(`#invoice-preview`, level 2, with Print and Share). That drawer renders **no
+(`#invoice-preview`, level 2, opening on the estimate — see below). That drawer renders **no
 invoice markup**: `components/invoice-delivery.js` moves the single `[data-invoice-document]`
 node out of `#invoice-print` while it is open and hands it back before anything
 prints.
@@ -477,6 +552,72 @@ clerk who raised the bill holds, because sending the customer their invoice is t
 last step of raising it. READ would let everybody who may read the day book publish
 any invoice on it.
 
+### The estimate first, the GST invoice on request
+
+A sale is handed over as an **estimate** — the counter's plain receipt, the
+"kacha bill" — and the GST invoice is printed only when somebody asks for one.
+Both are the same posted sale, and nothing is recorded differently: the tax is in
+the books on every sale, exactly as on the invoice. The estimate is a second way
+of *showing* it, not a second way of recording it, so the GST return is the same
+whichever piece of paper the customer walked away with.
+
+It is the `estimate` block of the same `InvoiceDocumentService` payload, built from
+its own short list of fields for the reason the class exists: the date, the
+customer if their details were taken, and each line's quantity, rate, discount and
+amount **with the GST in**. No workshop band, no number, no GSTIN, no HSN and no tax
+column, and the foot says "Estimate — not a tax invoice".
+
+Three parts of it are load-bearing.
+
+* **The amount column is each line's stored total**, which is what the totals are
+  summed from — so the column always adds up to the total under it. The rate is
+  the quoted rate where the line was priced with the tax in, and the rate plus
+  `GstRate::taxOn()` where it was not — the arithmetic the posting engine priced
+  it with. Nothing in the browser adds tax to anything.
+* **It is one sheet.** `renderInvoice(root, invoice, { as })` paints either
+  document onto the single `[data-invoice-document]` node and sets `data-as`, so
+  the one-sheet print rule above holds unchanged. Switching between them on the
+  preview is a repaint, never a request.
+* **Sharing goes with the GST invoice only.** The link at `/i/{token}` always opens
+  the tax invoice, so the preview offers Share only once the GST invoice is on it.
+  A credit note has no estimate (`estimate: null`) and always prints as itself.
+
+The preview opens on the estimate for **every** sale — Sales and Jobs alike — with
+Print and **Get GST invoice**; the GST invoice offers Print, Share and **←
+Estimate**. A sale's drawer prints either directly: **Print estimate** and **Print
+GST invoice**.
+
+### Printing on this device
+
+Which paper each document goes on — A4, thermal 80 mm or 58 mm — and whether a
+thermal printer is driven directly, is **per device**, set from the Settings card's
+"Printing on this device" section and kept in that browser
+([print-settings.js](../resources/js/print-settings.js)). The counter PC has the
+thermal printer and the office PC has the A4, and they print the same sale; a
+workshop setting would be wrong on one of them every time. So it never reaches
+the server and needs no grant.
+
+Every Print button goes through `printInvoice(button, { as })` in
+`invoice-delivery.js`, which is the only reader of those settings. Through the
+dialog, it sets `data-paper` on the sheet and rewrites one `@page` rule: A4 names
+its size, thermal names none and no margin, because a roll has no page length and
+naming one feeds blank paper to the end of it. The thermal layout in `app.css` is
+print-only, one column, pure black, and drops the per-line tax columns — the tax
+is still in the rate and in full in the totals, and the A4 copy carries every
+column. A 58 mm roll also drops the line number and the HSN.
+
+**Direct thermal printing goes through the print agent** —
+[tools/print-agent](../tools/print-agent/README.md), a small program on the
+counter PC that forwards ESC/POS bytes to the printer and cuts the paper.
+[receipt-escpos.js](../resources/js/components/receipt-escpos.js) lays the roll out
+from the same payload, 48 or 32 columns, ASCII only ("Rs." for ₹), and states
+every figure as the server did; the agent knows nothing about invoices, so a layout
+change never needs a new agent. It is called with plain `fetch`, never
+`auth.call()`, which would send the session's token to another origin. If the
+agent does not answer within four seconds, the same document goes through the
+dialog and the toast says why: a customer at the counter is never left without a
+receipt.
+
 ## `transaction_lines`
 
 The document, as distinct from its accounting. A bill's ledger lines say "credit
@@ -562,6 +703,46 @@ draft after a delivery at a higher price and asserts it costs at today's average
 
 A draft's `items` are echoed back **unpriced and untaxed** — `taxable_value: null`
 rather than `"0.00"`, because a zero would be read as "no tax".
+
+### Continuing one
+
+A draft is finished in the form it was written in: the drawer's **Continue
+editing** loads it back (`bill-revision.js`'s `continueDraft()`), "Save as a
+draft" rewrites it with `PATCH`, and posting rewrites it and then calls `/post`.
+Three things in the server half are load-bearing.
+
+* **The edit merges over the stored request**, so a key the PATCH leaves out is
+  kept. That is right for an API caller moving only the date, and wrong for a form
+  — so the form sends a whole restatement, naming `bill_discount`,
+  `bill_discount_percent` and `settle_total` as null unless it has a figure. The
+  bill discount is also replaced **as a pair** on the server: an edit naming one
+  unit nulls the other, so ₹100 off edited to 10% cannot carry both.
+* **The single read names the lines; a listing never does.** The stored request
+  holds ids and figures only. `BillService::draftLinesFor()` resolves each line's
+  name (through `BillLine::describe()`, so it reads as the invoice will), unit,
+  current GST rate and tax basis — the line's own flag, or the item's where it
+  gave none, the rule `BillTemplate::lineFrom()` applies at posting — in one query
+  for the variants, attached to the model as `draftLineDetails`. A page of drafts
+  would otherwise pay the catalogue lookup per row.
+* **A bill's terms are refused on a draft that is not a bill**
+  (`TRANSACTION_BILL_TERMS_NOT_ACCEPTED`), and the vendor's number on anything but
+  a purchase, for the reason every other vocabulary mismatch is: stored on the
+  draft, they would be read by no template and the edit would report success.
+
+Who did the work is synced in the same database transaction as the rewrite,
+whenever the PATCH names `staff` — an empty list included, because on a draft
+being finished "nobody any more" is an edit like any other.
+`DraftBillContinuationTest` covers all of it, including that the inclusive-of-tax
+flag and a percentage discount survive an edit through to the posted figures and
+the stock.
+
+The drawer can still post or discard a draft directly, including one that is open
+in the form at that moment. When it does, `release()` takes the draft off the form
+and the toast says so; otherwise the form would go on saying "Continuing" a document
+that no longer accepts edits, and the next Save would be the first anybody heard
+of it. A draft posted from the drawer shows the same `meta.warnings` (below cost,
+short stock) as one posted from the form, because `/post` now returns them for
+any bill.
 
 ## Reversal
 
@@ -786,7 +967,9 @@ nothing else: a receipt has no payment status, because it *is* the payment.
 | `POST /transactions/purchase` | Template C |
 | `POST /transactions/expense` | Template F |
 | `GET /transactions/{id}` | The document, its tax summary, its margin and its warnings |
-| `PATCH /transactions/{id}` | Drafts only — `items` for a bill, refused for anything else |
+| `GET /transactions/{id}` on a **draft** | Also each line's `description`, `unit_symbol`, `gst_rate`, `price_includes_tax` and `discount_percent`, and the bill's `bill_terms` — what the form needs to continue it |
+| `PATCH /transactions/{id}` | Drafts only — `items` and the bill's terms (`bill_discount`/`_percent`, `settle_total`, `vendor_invoice_no`, `staff`) for a bill, refused for anything else. UPDATE |
+| `POST /transactions/{id}/post` | Authorise a draft. A bill comes back with the same `meta.warnings` a bill posted outright does. UPDATE |
 | `GET /transactions/{id}/invoice` | **M20** — the customer's copy, for printing. READ |
 | `POST /transactions/{id}/share` | **M20** — publish it; idempotent, returns the live link. WRITE |
 | `DELETE /transactions/{id}/share` | **M20** — stop the link, permanently. WRITE |

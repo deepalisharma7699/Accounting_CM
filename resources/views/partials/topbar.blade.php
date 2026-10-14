@@ -9,7 +9,7 @@
     The breadcrumb has two faces and shows exactly one of them:
 
         level 0   Choudhary Motors
-        level 1   ◂ Home › Items
+        level 1   ◂ ⌂ › Items
 
     Two separate elements rather than one whose text is rewritten, so
     `data-workspace-name` stays where resources/js/app.js paints it from
@@ -28,7 +28,15 @@
             <x-icon name="chevron-left" :size="18" />
         </button>
 
-        <button type="button" class="crumb-home" data-crumb-home hidden>Home</button>
+        {{-- The root of the crumb is a glyph, not the word "Home": beside a module
+             name set at 1.125rem/700 the word read as a footnote to it, which is
+             the wrong way round — it is the one step back and the only other place
+             to go. The icon is sized to that title rather than to the word it
+             replaced, and carries the label for anyone not reading the glyph. --}}
+        <button type="button" class="crumb-home" data-crumb-home hidden
+                aria-label="Home" title="Home">
+            <x-icon name="home" :size="20" />
+        </button>
 
         <span class="crumb-sep" data-crumb-sep hidden aria-hidden="true">
             <x-icon name="chevron-right" :size="14" />

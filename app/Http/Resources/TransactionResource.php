@@ -45,6 +45,33 @@ class TransactionResource extends JsonResource
             'date' => $this->date->toDateString(),
             'total' => Money::of($this->total)->amount(),
             'notes' => $this->notes,
+            // The vendor's own number for a purchase bill. Null where none was
+            // given, and on a server the manual SQL has not reached yet — except
+            // on a draft, whose stored request carries it either way, so a draft
+            // continued in the form does not lose a number it was saved with.
+            'vendor_invoice_no' => $this->vendor_invoice_no
+                ?? ($this->isDraft() ? ($this->draft_payload['vendor_invoice_no'] ?? null) : null),
+
+            /*
+            | A draft bill's terms, as they were saved: the discount on the whole
+            | bill, in whichever unit it was typed, and the figure "paid in full"
+            | was settled at where that was less than the bill.
+            |
+            | A draft only. On a posted bill each is already inside the lines and
+            | the total, and echoing the request beside them would be a second
+            | account of the same money that could disagree with the first.
+            */
+            'bill_terms' => $this->when(
+                $this->isDraft() && $this->type->isBillable(),
+                fn () => array_map(
+                    fn ($value) => $value === null || $value === '' ? null : (string) $value,
+                    [
+                        'bill_discount' => $this->draft_payload['bill_discount'] ?? null,
+                        'bill_discount_percent' => $this->draft_payload['bill_discount_percent'] ?? null,
+                        'settle_total' => $this->draft_payload['settle_total'] ?? null,
+                    ],
+                ),
+            ),
 
             /*
             | What was settled on this document, and what is left on it — M16.
@@ -218,6 +245,16 @@ class TransactionResource extends JsonResource
                 fn () => $this->settlementSplit(),
             ),
 
+            // What a receipt or payment let the party off on top of the money —
+            // its total less its split, because the total is what it cleared.
+            // Posted only: a draft settlement carries no discount.
+            'discount' => $this->when(
+                $this->type->isSettlement() && $this->relationLoaded('payments') && ! $this->isDraft(),
+                fn () => Money::of($this->total)->minus(Money::sum(
+                    $this->payments->map(fn ($payment) => $payment->amountMoney())->all(),
+                ))->amount(),
+            ),
+
             // The document itself — M9. What was billed, as distinct from what it
             // did to the books, and the only place the CGST/SGST/IGST split
             // exists: Phase 1 has one GST account, so the ledger carries the
@@ -266,19 +303,42 @@ class TransactionResource extends JsonResource
     private function documentLines(): array
     {
         if ($this->isDraft()) {
-            return array_map(fn (array $line, int $index) => [
-                'line_no' => $index + 1,
-                'item_id' => $line['item_id'] ?? null,
-                'variant_id' => $line['variant_id'] ?? null,
-                'quantity' => (string) ($line['quantity'] ?? '0'),
-                'unit_price' => Money::of($line['unit_price'] ?? 0)->amount(),
-                'discount_amount' => Money::of($line['discount'] ?? 0)->amount(),
-                'memo' => $line['memo'] ?? null,
-                // Not yet computed, and saying so beats sending a zero that would
-                // be read as "no tax".
-                'taxable_value' => null,
-                'line_total' => null,
-            ], $this->draft_payload['items'] ?? [], array_keys($this->draft_payload['items'] ?? []));
+            $items = array_values((array) ($this->draft_payload['items'] ?? []));
+
+            return array_map(function (array $line, int $index) {
+                // Present only where the single-document read resolved it —
+                // see Transaction::$draftLineDetails.
+                $detail = $this->draftLineDetails[$index] ?? null;
+
+                return [
+                    'line_no' => $index + 1,
+                    'item_id' => $line['item_id'] ?? $detail['item_id'] ?? null,
+                    'variant_id' => $line['variant_id'] ?? null,
+                    'description' => $detail['description'] ?? null,
+                    'unit' => $detail['unit'] ?? null,
+                    'unit_symbol' => $detail['unit_symbol'] ?? null,
+                    'gst_rate' => $detail['gst_rate'] ?? null,
+                    'quantity' => (string) ($line['quantity'] ?? '0'),
+                    'unit_price' => Money::of($line['unit_price'] ?? 0)->amount(),
+                    'discount_amount' => Money::of($line['discount'] ?? 0)->amount(),
+                    // The percentage as it was typed, where the line was
+                    // discounted that way: resolving it to rupees here would
+                    // freeze a figure the server works out again at posting.
+                    'discount_percent' => isset($line['discount_percent']) && $line['discount_percent'] !== null
+                        ? (string) $line['discount_percent']
+                        : null,
+                    // The stored answer, or the item's where the line gave none
+                    // and somebody resolved it. Null means neither is known.
+                    'price_includes_tax' => isset($line['price_includes_tax']) && $line['price_includes_tax'] !== null
+                        ? (bool) $line['price_includes_tax']
+                        : ($detail['price_includes_tax'] ?? null),
+                    'memo' => $line['memo'] ?? null,
+                    // Not yet computed, and saying so beats sending a zero that would
+                    // be read as "no tax".
+                    'taxable_value' => null,
+                    'line_total' => null,
+                ];
+            }, $items, array_keys($items));
         }
 
         return $this->lines->map(fn ($line) => [

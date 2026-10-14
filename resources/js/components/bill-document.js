@@ -57,7 +57,7 @@ import { mountStaffAttribution } from './staff-attribution';
 import { initQuickItem, openQuickItem } from './quick-item';
 import { initQuickParty, openQuickParty } from './quick-party';
 import {
-    $, $$, clearFormErrors, debounce, esc, formatMoney, hideModal, isZeroAmount,
+    $, $$, clearFormErrors, debounce, esc, formatDate, formatMoney, hideModal, isZeroAmount,
     showFormErrors, showModal, toast,
 } from '../ui';
 
@@ -108,6 +108,10 @@ export async function mountBillDocument(root, {
 
     const state = {
         direction,
+        // The document being corrected, so the duplicate check does not find
+        // the very bill it is about to replace. Null for a new one.
+        vendorInvoiceOwnId: null,
+        vendorInvoiceAsk: 0,
         lines: [],
         lineSeq: 0,
         paymentModes: [],
@@ -133,6 +137,9 @@ export async function mountBillDocument(root, {
         // Lines the operator has agreed are as large as they look — see
         // LARGE_LINE_AMOUNT.
         acknowledgedLarge: false,
+        // A sale to nobody that is not yet paid in full — set by the
+        // confirmation, which is where the figure is current.
+        blockedWalkIn: false,
         /*
         | Whether the bill-level discount box is rupees or a percentage.
         |
@@ -142,6 +149,17 @@ export async function mountBillDocument(root, {
         | does that, against the same lines it is about to tax. See BillDiscount.
         */
         billDiscountMode: 'amount',
+        /*
+        | What the party actually paid, where "Paid in full" was typed at less
+        | than the bill came to — or null.
+        |
+        | Sent as `settle_total`, and the server takes the difference off as a
+        | discount before tax. Dropped the moment anything that changes the bill
+        | is touched (see `unsettle`): ₹1,200 agreed against ₹1,250 is not
+        | ₹1,200 agreed against the ₹1,900 the bill becomes when a line is added,
+        | and carrying it over would hand the customer a discount nobody gave.
+        */
+        settleAt: null,
         /*
         | The trades this workshop records on a sale, from `/transactions/meta`.
         |
@@ -193,6 +211,11 @@ export async function mountBillDocument(root, {
     /** Scoped, so two documents could coexist and neither reaches into the other. */
     const el = (selector) => $(selector, root);
 
+    /** Forget a short settlement — the bill it was agreed against has changed. */
+    const unsettle = () => {
+        state.settleAt = null;
+    };
+
     /* ---------------------------------------------------------------------
      | Lines
      | ------------------------------------------------------------------ */
@@ -211,6 +234,7 @@ export async function mountBillDocument(root, {
         // Whatever was missing when somebody last pressed post, this is part of
         // the answer — the notice goes as soon as they start filling it in.
         state.emptyAttempt = false;
+        unsettle();
 
         const existing = state.lines.find((line) => line.key === choice.key);
 
@@ -285,6 +309,7 @@ export async function mountBillDocument(root, {
 
     function removeLine(id) {
         state.lines = state.lines.filter((line) => line.id !== Number(id));
+        unsettle();
         renderLines();
     }
 
@@ -514,6 +539,70 @@ export async function mountBillDocument(root, {
         }
     }
 
+    /**
+     * What each line will take off the shelf, under the line.
+     *
+     * A rewind is one line at one price and several quantities of stock, and
+     * this is the only place anybody sees which — the customer's invoice shows
+     * the service and nothing else, deliberately, and after posting the only
+     * evidence is a shortage at a stock take months later. The operator who
+     * priced the job is the one person who would notice the recipe is wrong.
+     *
+     * Painted in place from the preview, for the reason {@link paintLineStock}
+     * is: re-rendering the table would take the caret out of the box being
+     * typed in, and this arrives on a debounce while somebody is typing.
+     *
+     * Empty for every ordinary line, which is almost all of them — a stocked
+     * line already says what it takes, beside the quantity.
+     */
+    function paintConsumption() {
+        const priced = new Map(
+            (state.preview?.lines ?? []).map((row) => [Number(row.line_no), row.consumes ?? []]),
+        );
+
+        // Keyed by position among the lines that were *sent*, which is how the
+        // server numbered them — not by position in the table, which counts the
+        // half-typed rows the request left out.
+        const sent = sendableLines();
+        const lineNoOf = new Map(sent.map((line, index) => [line.id, index + 1]));
+
+        /*
+        | Materials that are also on the bill as lines of their own. Usually the
+        | same copper written twice — once by hand, often off a job card's parts
+        | list, and once through the recipe — and both are taken off the shelf.
+        | Said rather than refused: a job that really did use extra records the
+        | extra as a part, and that is a legitimate bill.
+        */
+        const billedDirectly = new Set(
+            sent.filter((line) => line.variant_id).map((line) => Number(line.variant_id)),
+        );
+
+        state.lines.forEach((line) => {
+            // Scoped to `root`: on a module showing its list the form is
+            // detached (§2A.2), and the figures still have to be right for when
+            // it comes back.
+            const row = $(`[data-line="${line.id}"]`, root);
+            const slot = row ? $('[data-line-consumes]', row) : null;
+
+            if (!slot) return;
+
+            const consumes = priced.get(lineNoOf.get(line.id)) ?? [];
+
+            slot.classList.toggle('hidden', consumes.length === 0);
+            const doubled = consumes.filter((part) => billedDirectly.has(Number(part.variant_id)));
+
+            slot.classList.toggle('text-amber-700', doubled.length > 0);
+            slot.classList.toggle('text-muted-foreground', doubled.length === 0);
+
+            slot.textContent = consumes.length === 0
+                ? ''
+                : `Consumes ${consumes.map((part) => `${part.quantity} ${part.unit_symbol} ${part.item_name ?? part.label}`).join(' · ')}`
+                    + (doubled.length === 0
+                        ? ''
+                        : ` — ${doubled.map((part) => part.item_name ?? part.label).join(', ')} ${doubled.length === 1 ? 'is' : 'are'} also billed as ${doubled.length === 1 ? 'a line' : 'lines'} of ${doubled.length === 1 ? 'its' : 'their'} own, and both are taken off the shelf. Keep ${doubled.length === 1 ? 'that line' : 'those lines'} only for what was used beyond the recipe.`);
+        });
+    }
+
     function paintLineProblem(row, problem) {
         const input = $('input[name="quantity"]', row);
         const note = $('[data-line-problem]', row);
@@ -588,6 +677,8 @@ export async function mountBillDocument(root, {
                         </span>
                         <span class="mt-1 block text-xs font-medium text-rose-600 ${isShort(line) ? '' : 'hidden'}"
                               data-line-short>${shortText(line)}</span>
+                        
+                        <span class="mt-1 block text-xs text-muted-foreground hidden" data-line-consumes></span>
                     </td>
 
                     <td class="px-2 py-2">
@@ -610,7 +701,7 @@ export async function mountBillDocument(root, {
                                    name="unit_price" value="${esc(line.unit_price)}" placeholder="0.00"
                                    aria-label="Rate for ${esc(line.label)}">
                             <button type="button" data-tax-mode
-                                    class="h-[2.625rem] w-12 shrink-0 rounded-[10px] border text-[11px] font-semibold
+                                    class="h-[var(--control-h)] w-12 shrink-0 rounded-[10px] border text-[11px] font-semibold
                                            ${line.price_includes_tax
                                                ? 'border-sky-300 bg-sky-50 text-sky-700 hover:bg-sky-100'
                                                : 'border-border bg-card text-muted-foreground hover:bg-secondary hover:text-foreground'}"
@@ -631,7 +722,7 @@ export async function mountBillDocument(root, {
                                        line.discount_mode === 'percent' ? ', as a percentage' : ', in rupees'
                                    }">
                             <button type="button" data-discount-mode
-                                    class="h-[2.625rem] w-9 shrink-0 rounded-[10px] border border-border bg-card
+                                    class="h-[var(--control-h)] w-9 shrink-0 rounded-[10px] border border-border bg-card
                                            text-sm font-semibold text-muted-foreground
                                            hover:bg-secondary hover:text-foreground"
                                     aria-label="${line.discount_mode === 'percent'
@@ -657,6 +748,11 @@ export async function mountBillDocument(root, {
             : `<tr><td colspan="6" class="px-2 py-8 text-center text-sm text-muted-foreground">
                    Nothing on this bill yet. Search above — every result shows what is on the shelf.
                </td></tr>`;
+
+        // Put back what the last preview already knew, so a row rebuilt for an
+        // unrelated reason does not blank its materials for the length of a
+        // debounce and then blink them back.
+        paintConsumption();
 
         refreshPreview();
         save();
@@ -723,6 +819,22 @@ export async function mountBillDocument(root, {
      | The running total — the server's arithmetic, not ours
      | ------------------------------------------------------------------ */
 
+    /**
+     * The lines the preview and the post are actually given, in order.
+     *
+     * Extracted because the answer is needed **twice** and the two must agree:
+     * `itemsPayload()` builds the request from it, and {@link paintConsumption}
+     * pairs the priced rows back onto the table by position. The server numbers
+     * its lines 1..n over what it was sent, so a second, slightly different
+     * filter here would put one line's materials under another line — silently,
+     * and only on documents where something was mid-typing.
+     */
+    function sendableLines() {
+        return state.lines.filter(
+            (line) => String(line.quantity ?? '').trim() !== '' && lineProblem(line) === null,
+        );
+    }
+
     function itemsPayload() {
         /*
         | A line still being typed into is skipped; a line that is *wrong* is
@@ -732,8 +844,7 @@ export async function mountBillDocument(root, {
         | now holds those back before the request is built and says why on the
         | row, so this only ever sends lines the server can price.
         */
-        return state.lines
-            .filter((line) => String(line.quantity ?? '').trim() !== '' && lineProblem(line) === null)
+        return sendableLines()
             .map((line) => ({
                 item_id: line.item_id,
                 variant_id: line.variant_id,
@@ -777,6 +888,17 @@ export async function mountBillDocument(root, {
             'bill_discount',
             'bill_discount_percent',
         );
+    }
+
+    /**
+     * The settled figure, where "Paid in full" was typed at less than the bill —
+     * and only then. A bill switched to part paid or on credit has no
+     * settlement, whatever was typed before.
+     */
+    function settlePayload() {
+        return state.settleAt !== null && payments?.state() === 'full'
+            ? { settle_total: state.settleAt }
+            : {};
     }
 
     /** Say which unit the two bill-discount controls are currently in. */
@@ -847,6 +969,7 @@ export async function mountBillDocument(root, {
                     // Priced through the same BillTemplate the posting uses, so
                     // the discount on the panel is the discount on the invoice.
                     ...billDiscountPayload(),
+                    ...settlePayload(),
                 },
                 /*
                 | Debounced against typing — see `quiet` in auth-client.
@@ -866,6 +989,8 @@ export async function mountBillDocument(root, {
 
             state.previewError = null;
             state.preview = data;
+
+            paintConsumption();
         } catch (error) {
             /*
             | A failed preview must not block the bill — the server prices it
@@ -1008,6 +1133,8 @@ export async function mountBillDocument(root, {
                 </div>
             </dl>
 
+            ${settledNote(totals, 'mt-3')}
+
             ${shortfalls.length ? `
                 <div class="mt-3 rounded-[10px] border border-amber-200 bg-amber-50/60 px-3 py-2.5 text-xs
                             text-amber-900">
@@ -1033,6 +1160,29 @@ export async function mountBillDocument(root, {
             </p>`;
 
         payments?.repaint();
+    }
+
+    /**
+     * What a short settlement gave away, said in the terms it was given in —
+     * "paid ₹1,200 for a ₹1,250 bill" — or nothing.
+     *
+     * The discount itself is already among the figures above, before tax and
+     * spread over the lines, which is correct and is also not how anybody at a
+     * counter thinks about it. This is the sentence they would say.
+     */
+    function settledNote(totals, spacing) {
+        if (!totals.before_settlement) return '';
+
+        const given = (Number(totals.before_settlement) - Number(totals.total)).toFixed(2);
+
+        return `
+            <p class="${spacing} rounded-[10px] border border-amber-200 bg-amber-50/60 px-3 py-2.5 text-xs
+                      text-amber-900">
+                <span class="block font-semibold">₹${esc(formatMoney(given))} given as discount</span>
+                ${isPurchase() ? 'Paid' : 'Collected'} ₹${esc(formatMoney(totals.total))} for a
+                ₹${esc(formatMoney(totals.before_settlement))} bill. It comes off before tax, so the GST falls
+                with it.
+            </p>`;
     }
 
     /**
@@ -1062,14 +1212,30 @@ export async function mountBillDocument(root, {
             .filter((line) => Number(line.line_total) > LARGE_LINE_AMOUNT);
     }
 
+    /**
+     * A sale with nobody named — the customer would not give a name or a number.
+     *
+     * Allowed on a sale only, and only paid in full at the counter: the server
+     * refuses anything less (`WALK_IN_NOT_PAID_IN_FULL`), because a balance owed
+     * by nobody can never be collected. The confirmation says so before anybody
+     * presses Post rather than after.
+     */
+    const isWalkIn = () => !isPurchase() && !partyPicker?.id();
+
+    /** Whether what is collected falls short of the total, compared in paise. */
+    function shortOf(settled, total) {
+        return Math.round(Number(settled) * 100) < Math.round(Number(total) * 100);
+    }
+
     /** What an empty document still needs, named rather than implied. */
     function whatIsMissing() {
-        const needsParty = !partyPicker?.id();
+        // A sale can go out to nobody; a purchase cannot.
+        const needsParty = isPurchase() && !partyPicker?.id();
         const needsLines = state.lines.length === 0;
         const noun = partyRole();
 
         if (needsParty && needsLines) return `Add a ${noun} and at least one item.`;
-        if (needsLines) return 'Add at least one item.';
+        if (needsLines || !needsParty) return 'Add at least one item.';
 
         return `Choose a ${noun}.`;
     }
@@ -1145,12 +1311,32 @@ export async function mountBillDocument(root, {
             return;
         }
 
+        /*
+        | The split is checked against the total the server just gave, before
+        | the dialog opens — a part payment of the whole bill, or a cheque with
+        | no number, is something to fix on the form rather than discover as a
+        | refusal after pressing Post.
+        */
+        const paymentProblem = payments.problem();
+
+        if (paymentProblem) {
+            toast(paymentProblem, 'error');
+            payments.focus();
+
+            return;
+        }
+
         const party = partyPicker.value();
         const split = payments.value();
         const settled = split.reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
 
+        const walkIn = isWalkIn();
+        const unpaidWalkIn = walkIn && shortOf(settled, totals.total);
+
+        state.blockedWalkIn = unpaidWalkIn;
+
         $('[data-confirm-subtitle]').textContent =
-            `${party?.name ?? 'No party chosen'} · ${el('[data-bill-date]').value}`;
+            `${party?.name ?? (walkIn ? 'Walk-in customer' : 'No party chosen')} · ${el('[data-bill-date]').value}`;
 
         /*
         | Asked inside the confirmation, not in a dialog over it — §2.2 allows
@@ -1168,6 +1354,8 @@ export async function mountBillDocument(root, {
         state.acknowledgedLarge = false;
 
         $('[data-confirm-body]').innerHTML = `
+            ${settledNote(totals, 'mb-3')}
+
             ${oversized.length === 0 ? '' : `
                 <label class="mb-3 flex items-start gap-2.5 rounded-[10px] border border-amber-300 bg-amber-50
                               px-3.5 py-2.5 text-[0.8125rem] text-amber-900">
@@ -1186,10 +1374,25 @@ export async function mountBillDocument(root, {
                     </span>
                 </label>`}
 
-            ${party ? '' : `
+            ${party || walkIn ? '' : `
                 <p class="mb-3 rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-[0.8125rem]
                           text-rose-700">
-                    Nobody has been chosen for this bill. An invoice made out to nobody cannot be collected.
+                    Nobody has been chosen for this bill. A purchase has to name the vendor it is owed to.
+                </p>`}
+
+            ${!walkIn ? '' : unpaidWalkIn ? `
+                <p class="mb-3 rounded-[10px] border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-[0.8125rem]
+                          text-rose-700">
+                    <span class="block font-semibold">Walk-in sale — no customer details.</span>
+                    It has to be paid in full now: ₹${esc(formatMoney(settled.toFixed(2)))} of
+                    ₹${esc(formatMoney(totals.total))} is collected. Go back and collect the rest, or choose the
+                    customer so the balance is owed by somebody.
+                </p>` : `
+                <p class="mb-3 rounded-[10px] border border-border bg-secondary/40 px-3.5 py-2.5 text-[0.8125rem]
+                          text-secondary-foreground">
+                    <span class="block font-semibold text-foreground">Walk-in sale — no customer details.</span>
+                    Paid in full now. A customer can still be added later if they ask for a GST invoice in
+                    their name.
                 </p>`}
 
             <table class="w-full border-collapse text-[0.8125rem]">
@@ -1263,9 +1466,19 @@ export async function mountBillDocument(root, {
                 </div>
             </dl>`;
 
-        $('[data-confirm-post]').disabled = !party || oversized.length > 0;
+        $('[data-confirm-post]').disabled = !canConfirm() || oversized.length > 0;
 
         showModal('#confirm-bill-modal');
+    }
+
+    /**
+     * Whether the confirmation may post: a party named, or a sale to nobody that
+     * is paid in full. Decided once, for the two places the button is enabled.
+     */
+    function canConfirm() {
+        if (partyPicker?.id()) return true;
+
+        return isWalkIn() && !state.blockedWalkIn;
     }
 
     /* ---------------------------------------------------------------------
@@ -1284,11 +1497,16 @@ export async function mountBillDocument(root, {
             party_id: partyPicker.id(),
             items: itemsPayload(),
             ...billDiscountPayload(),
+            ...settlePayload(),
             payments: payments.value(),
             // Who did the work — M22. Absent on a purchase, where the server
             // refuses it: sending an empty array there would be the form asking
             // a question it has already been told is meaningless.
             ...(staff === null ? {} : { staff: staff.value() }),
+            // The vendor's own bill number — a purchase's only.
+            ...(isPurchase()
+                ? { vendor_invoice_no: el('[data-bill-vendor-invoice]').value.trim() || null }
+                : {}),
         };
     }
 
@@ -1368,10 +1586,16 @@ export async function mountBillDocument(root, {
                 partyId: partyPicker?.id() ?? null,
                 date: el('[data-bill-date]')?.value ?? '',
                 notes: el('[data-bill-notes]')?.value ?? '',
+                vendorInvoiceNo: el('[data-bill-vendor-invoice]')?.value ?? '',
                 lines: state.lines,
                 billDiscount: el('[data-bill-discount]')?.value ?? '',
                 billDiscountMode: state.billDiscountMode,
                 payments: payments?.value() ?? [],
+                // Which of on credit / part paid / paid in full was chosen. The
+                // rows alone cannot say: an empty split is credit or a bill with
+                // no lines yet, and a full one is re-measured against the total.
+                settlement: payments?.state() ?? null,
+                settleAt: state.settleAt,
                 // §26. A bill restored from a closed tab keeps the two names
                 // that were picked — retyping the lines and forgetting the
                 // fitter is the version of this bug nobody notices until the
@@ -1392,6 +1616,32 @@ export async function mountBillDocument(root, {
         } catch {
             // As above.
         }
+    }
+
+    /**
+     * Put a document's terms back: the bill discount and its unit, the payment
+     * split and which of credit / part / full it was, and the figure "paid in
+     * full" was settled at where that was short.
+     *
+     * One function for the two callers that have a document to restore — the
+     * autosave below and a host continuing a draft the server holds — because
+     * the order is the part that goes wrong. The split goes back before the
+     * settled figure, and both after the party and the lines, since naming a
+     * party and adding a line each forget a short settlement (`unsettle`): the
+     * agreed figure was agreed against *this* bill, and it is this bill now.
+     *
+     * Paints nothing beyond the controls it sets; a caller that is already live
+     * asks for the price and the save itself.
+     */
+    function putTerms({
+        billDiscount = '', billDiscountMode = 'amount', payments: splits = [], settlement = null, settleAt = null,
+    }) {
+        el('[data-bill-discount]').value = billDiscount ?? '';
+        state.billDiscountMode = billDiscountMode === 'percent' ? 'percent' : 'amount';
+        paintBillDiscountMode();
+
+        payments.set(splits ?? [], settlement ?? null);
+        state.settleAt = settleAt ?? null;
     }
 
     /**
@@ -1434,16 +1684,13 @@ export async function mountBillDocument(root, {
 
         if (saved.date) el('[data-bill-date]').value = saved.date;
         if (saved.notes) el('[data-bill-notes]').value = saved.notes;
-
-        // A draft written before this existed has neither, and lands on rupees
-        // and an empty box — which is what it meant.
-        el('[data-bill-discount]').value = saved.billDiscount ?? '';
-        state.billDiscountMode = saved.billDiscountMode === 'percent' ? 'percent' : 'amount';
-        paintBillDiscountMode();
+        if (saved.vendorInvoiceNo && isPurchase()) el('[data-bill-vendor-invoice]').value = saved.vendorInvoiceNo;
 
         if (saved.partyId) await partyPicker.load(saved.partyId);
 
-        payments.set(saved.payments);
+        // A draft written before these existed has none of them, and lands on
+        // rupees, an empty box and the default split — which is what it meant.
+        putTerms(saved);
 
         /*
         | A draft written before this existed carries no `staff` key at all, and
@@ -1464,11 +1711,28 @@ export async function mountBillDocument(root, {
     function mountParty() {
         partyPicker = mountPartyPicker(el('[data-party-host]'), {
             role: partyRole(),
+            /*
+            | A sale may name nobody (`TransactionType::admitsWalkIn()`), on the
+            | condition the engine enforces: paid in full now. Said on the box,
+            | before the lines go on, rather than first at the confirmation.
+            */
+            blank: isPurchase() ? null : {
+                empty: 'Leave blank for a walk-in sale — it must be paid in full now. '
+                    + 'Choose a customer to sell on credit or to put their name on the GST invoice.',
+                typed: 'No customer picked yet — choose one from the list, '
+                    + 'or this sale goes out as a walk-in with no name on it.',
+            },
             onSelect: () => {
+                // Naming a customer is what lets a sale go on credit, and
+                // clearing one takes that away again — said at once, not when
+                // the preview comes back.
+                payments?.repaint();
                 // The party's state code decides CGST+SGST against IGST, so
                 // choosing one changes the total.
+                unsettle();
                 refreshPreview();
                 save();
+                checkVendorInvoice();
             },
         });
 
@@ -1486,6 +1750,7 @@ export async function mountBillDocument(root, {
             name: typed,
             onSaved: (party) => {
                 partyPicker.set(party);
+                unsettle();
                 refreshPreview();
                 save();
             },
@@ -1525,6 +1790,76 @@ export async function mountBillDocument(root, {
                 save();
             },
         });
+    }
+
+    /*
+    | The vendor's own bill number — a purchase's only. Emptied, not merely
+    | hidden, on a sale, for the reason the staff host is: a hidden box still
+    | holding a number would send it with the next document.
+    */
+    function mountVendorInvoice() {
+        const field = el('[data-bill-vendor-invoice-field]');
+
+        if (!field) return;
+
+        field.classList.toggle('hidden', !isPurchase());
+
+        if (!isPurchase()) el('[data-bill-vendor-invoice]').value = '';
+        checkVendorInvoice();
+    }
+
+    /*
+    | Is this vendor's bill already in the books? Asked when the number is
+    | left (change, not every keystroke) and when the vendor changes, and only
+    | ever a warning: vendors reuse numbers across years, so nothing is refused.
+    | Cancelled bills are left out — a corrected bill was reversed, and the
+    | correction rightly carries the same number.
+    */
+    async function checkVendorInvoice() {
+        const warning = el('[data-bill-vendor-invoice-warning]');
+
+        if (!warning) return;
+
+        const ask = ++state.vendorInvoiceAsk;
+        const number = el('[data-bill-vendor-invoice]').value.trim();
+        const partyId = partyPicker?.id();
+        const hide = () => {
+            warning.classList.add('hidden');
+            warning.textContent = '';
+        };
+
+        if (!isPurchase() || !number || !partyId) return hide();
+
+        const query = new URLSearchParams({
+            type: 'purchase',
+            party_id: partyId,
+            vendor_invoice_no: number,
+            hide_cancelled: '1',
+            per_page: '5',
+        });
+
+        try {
+            const { data } = await auth.call(`/transactions?${query}`);
+
+            // A slower answer to an earlier question must not overwrite this one.
+            if (ask !== state.vendorInvoiceAsk) return;
+
+            const matches = (data ?? []).filter((row) => row.id !== state.vendorInvoiceOwnId);
+
+            if (matches.length === 0) return hide();
+
+            const where = matches
+                .map((row) => `${row.doc_no ?? 'a draft'} (${formatDate(row.date)})`)
+                .join(', ');
+
+            warning.textContent = `This vendor's invoice ${number} is already entered on ${where}. `
+                + 'Check it is not the same bill before saving.';
+            warning.classList.remove('hidden');
+            warning.classList.add('block');
+        } catch {
+            // Advisory only — the save itself answers the same question.
+            if (ask === state.vendorInvoiceAsk) hide();
+        }
     }
 
     /* ---------------------------------------------------------------------
@@ -1605,6 +1940,7 @@ export async function mountBillDocument(root, {
     }
 
     mountStaff();
+    mountVendorInvoice();
 
     payments = mountPaymentRows(el('[data-payments-host]'), {
         modes: state.paymentModes,
@@ -1621,6 +1957,31 @@ export async function mountBillDocument(root, {
         | expense both record money that has already moved — see `canCredit`.
         */
         canCredit: true,
+        /*
+        | A purchase is normally on a vendor's terms; a sale at the counter is
+        | normally paid there and then — and a sale with nobody named *must* be
+        | (`assertWalkInSettled`), so the form starts in the state that posts.
+        */
+        initial: () => (isPurchase() ? 'credit' : 'full'),
+        mustSettle: isWalkIn,
+        mustSettleReason: 'No customer chosen, so this is a walk-in sale and has to be paid in full. '
+            + 'Choose a customer to sell on credit or take part payment.',
+        /*
+        | Paid in full at less than the bill — "₹1,250, they gave ₹1,200, call
+        | it square". The figure is handed to the server, which solves the
+        | discount before tax; the panel and the confirmation then say how much
+        | was given.
+        */
+        settleShort: {
+            before: () => state.preview?.totals?.before_settlement ?? null,
+            onSettle: (amount) => {
+                if (amount === state.settleAt) return;
+
+                state.settleAt = amount;
+                refreshPreview();
+                save();
+            },
+        },
     });
 
     /* --- events --------------------------------------------------------- */
@@ -1657,6 +2018,7 @@ export async function mountBillDocument(root, {
         // table, which is the one moment it is least useful.
         paintLineStock(row, line);
 
+        unsettle();
         refreshPreview();
         save();
     });
@@ -1678,6 +2040,7 @@ export async function mountBillDocument(root, {
             if (!line) return;
 
             line.price_includes_tax = !line.price_includes_tax;
+            unsettle();
 
             // This one changes what the bill comes to, unlike the discount toggle
             // below — the same ₹118 is a different taxable value on each side of
@@ -1700,6 +2063,7 @@ export async function mountBillDocument(root, {
         if (!line) return;
 
         line.discount_mode = line.discount_mode === 'percent' ? 'amount' : 'percent';
+        unsettle();
 
         // The typed figure is kept. "10" meaning ₹10 and "10" meaning 10% are
         // both things somebody meant to type, and clearing the box on a switch
@@ -1736,14 +2100,18 @@ export async function mountBillDocument(root, {
     });
 
     el('[data-bill-notes]').addEventListener('input', save);
+    el('[data-bill-vendor-invoice]').addEventListener('input', save);
+    el('[data-bill-vendor-invoice]').addEventListener('change', checkVendorInvoice);
 
     el('[data-bill-discount]').addEventListener('input', () => {
+        unsettle();
         refreshPreview();
         save();
     });
 
     el('[data-bill-discount-mode]').addEventListener('click', () => {
         state.billDiscountMode = state.billDiscountMode === 'percent' ? 'amount' : 'percent';
+        unsettle();
 
         paintBillDiscountMode();
         el('[data-bill-discount]').focus();
@@ -1781,7 +2149,7 @@ export async function mountBillDocument(root, {
         if (!event.target.closest('[data-confirm-large]')) return;
 
         state.acknowledgedLarge = event.target.checked;
-        $('[data-confirm-post]').disabled = !state.acknowledgedLarge || !partyPicker?.id();
+        $('[data-confirm-post]').disabled = !state.acknowledgedLarge || !canConfirm();
     });
 
     $('[data-confirm-post]').addEventListener('click', () => submit(true));
@@ -1802,6 +2170,7 @@ export async function mountBillDocument(root, {
 
         state.lines = [];
         state.lineSeq = 0;
+        unsettle();
         // A fresh document deserves a fresh reference, or the abandoned bill's
         // idempotency key would follow the next one in and the server would
         // answer with the first bill instead of writing the second.
@@ -1817,6 +2186,9 @@ export async function mountBillDocument(root, {
         staff?.clear();
 
         el('[data-bill-notes]').value = '';
+        el('[data-bill-vendor-invoice]').value = '';
+        state.vendorInvoiceOwnId = null;
+        checkVendorInvoice();
         el('[data-bill-discount]').value = '';
         state.billDiscountMode = 'amount';
         paintBillDiscountMode();
@@ -1867,10 +2239,12 @@ export async function mountBillDocument(root, {
          *  shape of bug that bills the wrong party. */
         setDirection(next) {
             state.direction = next;
+            unsettle();
             mountParty();
             // Who did the work is a sale's question only, so the section arrives
             // and leaves with the direction.
             mountStaff();
+            mountVendorInvoice();
             renderLines();
             // The payment section names a party and an act, and the item hint
             // says where a rate comes from. All three just changed. Repainted
@@ -1888,12 +2262,44 @@ export async function mountBillDocument(root, {
 
         clearLines() {
             state.lines = [];
+            unsettle();
             state.lineSeq = 0;
             renderLines();
         },
 
         repaint: renderLines,
         reset,
+
+        /**
+         * The vendor invoice number, set by a host loading a document into the
+         * form. `ownId` is the document being corrected, which the duplicate
+         * check must not report against itself; null for a new document.
+         */
+        setVendorInvoice(number, ownId = null) {
+            el('[data-bill-vendor-invoice]').value = number ?? '';
+            state.vendorInvoiceOwnId = ownId;
+            save();
+            checkVendorInvoice();
+        },
+
+        /**
+         * Put a document's terms back — see `putTerms`. For a host loading a
+         * document into the form, and called after its party and its lines for
+         * the reason given there. Priced and saved here, because unlike the
+         * autosave restore the document is already live.
+         */
+        setTerms(terms) {
+            putTerms(terms);
+            refreshPreview();
+            save();
+        },
+
+        /**
+         * Bring every line's "on hand" figure up to date. For a host that loaded
+         * lines it did not pick — their figures are whatever it supplied, which
+         * for a document read back from the server is nothing at all.
+         */
+        refreshAvailability,
 
         /** The ways money can move, fetched once at mount. Shared so a host does
          *  not make a second request for the four rows it already has. */

@@ -50,13 +50,13 @@
     <form id="workspace-form" novalidate class="space-y-4">
 
         {{-- Identity --}}
-        <section class="surface p-5 sm:p-6">
+        <section class="surface form-card">
             <h3 class="text-sm font-bold text-foreground">Identity</h3>
             <p class="mt-1 text-[0.8125rem] text-muted-foreground">
                 How the workshop appears on documents.
             </p>
 
-            <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div class="mt-4 form-grid">
                 <div>
                     <label for="ws-name" class="field-label">Workshop name</label>
                     <input id="ws-name" name="name" type="text" class="field-input" required autocomplete="organization">
@@ -65,15 +65,13 @@
 
                 <div>
                     <span class="field-label">Handle</span>
-                    <div class="flex h-[2.625rem] items-center rounded-[10px] border border-border bg-muted px-3
+                    <div class="flex h-[var(--control-h)] items-center rounded-[10px] border border-border bg-muted px-3
                                 font-mono text-[0.8125rem] text-muted-foreground">
                         <span data-ws-slug>—</span>
                     </div>
                     <p class="mt-1.5 text-xs text-muted-foreground">Fixed. Renaming leaves it unchanged.</p>
                 </div>
-            </div>
-
-            <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            
                 <div>
                     <label for="ws-gstin" class="field-label">GSTIN</label>
                     <input id="ws-gstin" name="gstin" type="text" maxlength="15"
@@ -101,13 +99,13 @@
         </section>
 
         {{-- Books --}}
-        <section class="surface p-5 sm:p-6">
+        <section class="surface form-card">
             <h3 class="text-sm font-bold text-foreground">Books</h3>
             <p class="mt-1 text-[0.8125rem] text-muted-foreground">
                 These decide which period a report covers and how far back entries may be dated.
             </p>
 
-            <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div class="mt-4 form-grid">
                 <div>
                     <label for="ws-fy" class="field-label">Financial year starts in</label>
                     <select id="ws-fy" name="financial_year_start_month" class="field-input">
@@ -129,9 +127,7 @@
                     <p class="mt-1.5 text-xs text-muted-foreground">Used for transaction dates and the day book.</p>
                     <p class="field-error hidden" data-error-for="timezone"></p>
                 </div>
-            </div>
-
-            <div class="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+            
                 <div>
                     <label for="ws-books-start" class="field-label">Books start date</label>
                     <input id="ws-books-start" name="books_start_date" type="date" class="field-input">
@@ -144,7 +140,7 @@
 
                 <div>
                     <span class="field-label">Currency</span>
-                    <div class="flex h-[2.625rem] items-center rounded-[10px] border border-border bg-muted px-3
+                    <div class="flex h-[var(--control-h)] items-center rounded-[10px] border border-border bg-muted px-3
                                 text-[0.8125rem] text-muted-foreground">
                         <span data-ws-currency>INR</span>
                     </div>
@@ -160,30 +156,42 @@
              The three settings the API has always accepted and no screen had
              ever offered. Each changes what the application refuses or how it
              reports; none of them restates a figure that is already posted. --}}
-        <section class="surface p-5 sm:p-6">
+        <section class="surface form-card">
             <h3 class="text-sm font-bold text-foreground">Rules</h3>
             <p class="mt-1 text-[0.8125rem] text-muted-foreground">
                 What the application refuses, and what it reports. Changing one of these never restates
                 anything already in the books.
             </p>
 
+            {{-- In a column like every other field: the `max-w-[16rem]` this
+                 used to carry was one form answering the width question for
+                 itself, which is what `--field-min` now answers for all of them. --}}
             <div class="mt-4">
-                <label for="ws-due-days" class="field-label">
-                    Payment terms <span class="font-normal text-muted-foreground">(optional)</span>
-                </label>
-                <div class="relative max-w-[16rem]">
-                    <input id="ws-due-days" name="payment_due_days" type="text" inputmode="numeric"
-                           class="field-input pr-14 font-mono" autocomplete="off" placeholder="30">
-                    <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
-                        days
-                    </span>
+                <div class="form-grid">
+                    <div>
+                        <label for="ws-due-days" class="field-label">
+                            Payment terms <span class="font-normal text-muted-foreground">(optional)</span>
+                        </label>
+                        <div class="relative">
+                            <input id="ws-due-days" name="payment_due_days" type="text" inputmode="numeric"
+                                   class="field-input pr-14 font-mono" autocomplete="off" placeholder="30">
+                            <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
+                                days
+                            </span>
+                        </div>
+                        <p class="field-error hidden" data-error-for="payment_due_days"></p>
+                    </div>
                 </div>
+
+                {{-- Under the grid rather than in the column with the field: a
+                     paragraph this long in a 15rem column is five lines of grey.
+                     A hint of a few words belongs beside its field; one that
+                     explains a policy belongs under the row. --}}
                 <p class="mt-1.5 text-xs text-muted-foreground">
                     How long a bill may go unsettled before it is reported overdue. Leave it empty if you settle at
                     the counter: the money-owed ageing then measures from the invoice date, and says on the panel
                     that it has no agreed terms to measure against.
                 </p>
-                <p class="field-error hidden" data-error-for="payment_due_days"></p>
             </div>
 
             <div class="mt-4 border-t border-border pt-4">
@@ -207,10 +215,10 @@
                     <input id="ws-round-off" name="round_off_invoices" type="checkbox"
                            class="mt-0.5 size-4 rounded border-border">
                     <label for="ws-round-off" class="text-sm text-secondary-foreground">
-                        Round a bill to the nearest rupee
+                        Round a bill down to the whole rupee
                         <span class="mt-0.5 block text-xs text-muted-foreground">
-                            This changes the total a customer pays. The paise are booked to Round Off, so the books
-                            still balance to the last paisa.
+                            This changes the total a customer pays: ₹1,250.80 is billed as ₹1,250. The paise are
+                            booked to Round Off, so the books still balance to the last paisa.
                         </span>
                     </label>
                 </div>
@@ -230,6 +238,16 @@
             You have read-only access to these settings.
         </p>
     </form>
+
+    {{-- This device's printing — outside the form on purpose.
+
+         Saved in this browser, never sent to the server: the counter PC has the
+         thermal printer and the office PC has an A4, and they print the same
+         sale. So it needs no grant and is open to anybody who can reach this
+         screen, a reader of the workshop settings included. The choices are
+         painted by components/device-printing.js from print-settings.js, the
+         one reader of them. --}}
+    @include('partials.device-printing')
 
     </div>{{-- /data-ws-list --}}
 </div>

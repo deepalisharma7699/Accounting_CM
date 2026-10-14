@@ -26,6 +26,7 @@
  */
 
 import auth from '../auth-client';
+import { applyPermissionGates } from '../permissions';
 import {
     $, $$, clearFormErrors, confirmAction, esc, hideModal,
     setSubmitting, showFormErrors, showModal, toast,
@@ -41,6 +42,12 @@ const state = {
     tab: 'categories',
     // The category being drilled into, or null at the master list.
     open: null,
+
+    // What each tab's list is narrowed to. Held here rather than read off the
+    // input, because the body is repainted on every tab switch, drill-down and
+    // write, and coming back should find the list still narrowed to where
+    // somebody was looking (§3.6).
+    queries: { categories: '', brands: '', units: '' },
 
     // Called after any write, so the Items form's own vocabulary is refreshed
     // rather than left describing a category that has since changed. It is told
@@ -106,6 +113,7 @@ async function loadMeta() {
 export async function openCatalogueMaster({ tab = 'categories', categoryId = null, onChange = null } = {}) {
     state.tab = tab;
     state.open = null;
+    state.queries = { categories: '', brands: '', units: '' };
     state.onChange = onChange;
 
     showModal('#catalogue-drawer');
@@ -128,18 +136,36 @@ function renderLoading() {
     $('#catalogue-foot').innerHTML = '';
 }
 
+/**
+ * Paint the tab that is open, then gate what was just painted.
+ *
+ * The gating pass runs **here** rather than once at mount, because everything
+ * this file draws is written with `innerHTML` after the module's fragment was
+ * gated — `applyPermissionGates()` runs on boot and on
+ * [shell.js](../shell.js)'s mount, and every row and footer below arrives long
+ * after both. Left out, `data-requires-permission` on a button this file writes
+ * does nothing at all, and a clerk holding WRITE:ITEMS but not UPDATE:ITEMS is
+ * shown Edit and Delete on every category, field, brand and unit — then refused
+ * by the server, which is §3.4's "never left unsure" failing in the one
+ * direction that looks like a broken product rather than a locked one.
+ *
+ * Presentation only, exactly as §6.2 says: the grant is checked server-side on
+ * every one of these endpoints whatever the button does.
+ */
 function render() {
     syncTabs();
 
-    if (state.open) {
-        renderCategoryFields();
-
-        return;
-    }
-
-    if (state.tab === 'units') renderUnits();
+    if (state.open) renderCategoryFields();
+    else if (state.tab === 'units') renderUnits();
     else if (state.tab === 'brands') renderBrands();
     else renderCategories();
+
+    // Guarded, because `applyPermissionGates` defaults to the document only when
+    // the argument is *absent* — handed an explicit null it throws on the first
+    // `querySelectorAll` and takes the render down with it.
+    const drawer = $('#catalogue-drawer');
+
+    if (drawer) applyPermissionGates(drawer);
 }
 
 const SUBTITLES = {
@@ -157,8 +183,9 @@ function syncTabs() {
     $('#catalogue-tabs').classList.toggle('hidden', drilled);
     $('#catalogue-back').classList.toggle('hidden', !drilled);
 
+    // The `tab` utility styles the open one off `aria-selected`, so this is the
+    // only thing to keep in step.
     $$('[data-catalogue-tab]').forEach((button) => {
-        button.classList.toggle('is-active', button.dataset.catalogueTab === state.tab);
         button.setAttribute('aria-selected', String(button.dataset.catalogueTab === state.tab));
     });
 
@@ -172,12 +199,87 @@ function syncTabs() {
  | Categories
  | ---------------------------------------------------------------------- */
 
-function renderCategories() {
-    const rows = state.categories.map((category) => {
+/**
+ * Whether a row answers its tab's search box: every word typed must appear
+ * somewhere in what the row says about itself. Filtered in the browser — the
+ * drawer already holds the whole of each list, so a request per keystroke would
+ * fetch nothing new.
+ */
+function matchesQuery(tab, parts) {
+    const terms = state.queries[tab].trim().toLowerCase().split(/\s+/).filter(Boolean);
+
+    if (!terms.length) return true;
+
+    const haystack = parts.filter(Boolean).join(' ').toLowerCase();
+
+    return terms.every((term) => haystack.includes(term));
+}
+
+function noMatch(tab) {
+    return `<p class="py-8 text-center text-sm text-muted-foreground">
+                Nothing matches “${esc(state.queries[tab].trim())}”.
+            </p>`;
+}
+
+/**
+ * The search box over a tab's list. Drawn only when there is a list to search.
+ */
+function searchBox(tab, placeholder) {
+    return `
+        <div class="search-pill mb-3">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 aria-hidden="true">
+                <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+            </svg>
+            <input type="search" class="w-full" data-catalogue-search autocomplete="off"
+                   value="${esc(state.queries[tab])}" placeholder="${esc(placeholder)}"
+                   aria-label="${esc(placeholder)}">
+        </div>`;
+}
+
+/**
+ * Repaint the open tab's rows alone, leaving the search box where it is —
+ * repainting the whole body would take the caret out of the input on every
+ * keystroke.
+ */
+function paintRows() {
+    const list = $('#catalogue-rows');
+
+    if (!list) return;
+
+    list.innerHTML = ROWS[state.tab]();
+
+    const drawer = $('#catalogue-drawer');
+
+    if (drawer) applyPermissionGates(drawer);
+}
+
+function parentOf(category) {
+    return category.parent_id
+        ? state.categories.find((candidate) => candidate.id === category.parent_id) ?? null
+        : null;
+}
+
+function categoryRows() {
+    if (!state.categories.length) {
+        return '<p class="py-8 text-center text-sm text-muted-foreground">No categories yet.</p>';
+    }
+
+    // Matched on the parent's name and the field labels as well, so "motor"
+    // finds the subcategories filed under Motor and "frame" finds what asks for
+    // a frame size.
+    const matches = state.categories.filter((category) => matchesQuery('categories', [
+        category.name,
+        parentOf(category)?.name,
+        category.description,
+        ...Object.values(category.schema ?? {}).map((field) => field.label),
+    ]));
+
+    if (!matches.length) return noMatch('categories');
+
+    return matches.map((category) => {
         const fields = Object.keys(category.schema ?? {});
-        const parent = category.parent_id
-            ? state.categories.find((candidate) => candidate.id === category.parent_id)
-            : null;
+        const parent = parentOf(category);
 
         return `
             <button type="button" data-open-category="${category.id}"
@@ -204,11 +306,12 @@ function renderCategories() {
                 </div>
             </button>`;
     }).join('');
+}
 
+function renderCategories() {
     $('#catalogue-body').innerHTML = `
-        <div class="space-y-2">
-            ${rows || '<p class="py-8 text-center text-sm text-muted-foreground">No categories yet.</p>'}
-        </div>
+        ${state.categories.length ? searchBox('categories', 'Search categories, fields…') : ''}
+        <div class="space-y-2" id="catalogue-rows">${categoryRows()}</div>
         ${renderTemplates()}`;
 
     $('#catalogue-foot').innerHTML = `
@@ -362,9 +465,18 @@ function renderFieldRow(field, index, all) {
  * carry it, and it is what decides whether delete is offered at all — a brand
  * products carry is archived, never deleted.
  */
+function brandRows() {
+    const matches = state.brands.filter((brand) => matchesQuery('brands', [
+        brand.name, brand.code, brand.description,
+    ]));
+
+    return matches.length ? matches.map(renderBrandRow).join('') : noMatch('brands');
+}
+
 function renderBrands() {
     $('#catalogue-body').innerHTML = state.brands.length
-        ? `<div class="space-y-1.5">${state.brands.map(renderBrandRow).join('')}</div>`
+        ? `${searchBox('brands', 'Search brands…')}
+           <div class="space-y-1.5" id="catalogue-rows">${brandRows()}</div>`
         : `<p class="rounded-[10px] border border-dashed border-border px-3.5 py-8 text-center text-sm text-muted-foreground">
                No brands yet. Add one and the create form will offer it.
            </p>`;
@@ -410,24 +522,42 @@ function renderBrandRow(brand) {
  | Units
  | ---------------------------------------------------------------------- */
 
-function renderUnits() {
+const UNIT_KINDS = {
+    count: 'Counted', weight: 'Weight', length: 'Length', volume: 'Volume',
+    time: 'Time', electrical: 'Electrical', other: 'Other',
+};
+
+/**
+ * Grouped by kind after filtering, so a group with nothing matching takes its
+ * heading with it. The kind's name is searchable too: "weight" lists them all.
+ */
+function unitRows() {
     const groups = {};
 
-    state.units.forEach((unit) => {
-        (groups[unit.kind] ??= []).push(unit);
-    });
+    state.units
+        .filter((unit) => matchesQuery('units', [
+            unit.label, unit.symbol, unit.code, UNIT_KINDS[unit.kind] ?? unit.kind,
+        ]))
+        .forEach((unit) => {
+            (groups[unit.kind] ??= []).push(unit);
+        });
 
-    const labels = {
-        count: 'Counted', weight: 'Weight', length: 'Length', volume: 'Volume',
-        time: 'Time', electrical: 'Electrical', other: 'Other',
-    };
+    const kinds = Object.keys(groups);
 
-    $('#catalogue-body').innerHTML = Object.keys(groups).map((kind) => `
-        <p class="field-label ${kind === Object.keys(groups)[0] ? '' : 'mt-5'}">${esc(labels[kind] ?? kind)}</p>
+    if (!kinds.length) return noMatch('units');
+
+    return kinds.map((kind, index) => `
+        <p class="field-label ${index ? 'mt-5' : ''}">${esc(UNIT_KINDS[kind] ?? kind)}</p>
         <div class="space-y-1.5">
             ${groups[kind].map(renderUnitRow).join('')}
-        </div>`).join('')
-        || '<p class="py-8 text-center text-sm text-muted-foreground">No units yet.</p>';
+        </div>`).join('');
+}
+
+function renderUnits() {
+    $('#catalogue-body').innerHTML = state.units.length
+        ? `${searchBox('units', 'Search units…')}
+           <div id="catalogue-rows">${unitRows()}</div>`
+        : '<p class="py-8 text-center text-sm text-muted-foreground">No units yet.</p>';
 
     $('#catalogue-foot').innerHTML = `
         <button type="button" class="btn btn-primary btn-sm" data-new-unit
@@ -467,6 +597,9 @@ function renderUnitRow(unit) {
         </div>`;
 }
 
+// Which rows the search box repaints, per tab.
+const ROWS = { categories: categoryRows, brands: brandRows, units: unitRows };
+
 /* -------------------------------------------------------------------------
  | Forms
  | ---------------------------------------------------------------------- */
@@ -481,6 +614,10 @@ function openCategoryForm(category = null) {
 
     $('#category-modal-title').textContent = editing ? `Edit ${category.name}` : 'New category';
     form.elements.id.value = editing ? category.id : '';
+
+    // On an edit only, for the reason openBrandForm() records: a category being
+    // created is by definition one the shop wants offered.
+    $('#category-active-row').classList.toggle('hidden', !editing);
 
     // The parent picker cannot offer the category itself or anything under it —
     // the server refuses the cycle, and offering it would be offering a choice
@@ -510,6 +647,7 @@ function openCategoryForm(category = null) {
         $('#category-hsn').value = category.default_hsn_sac ?? '';
         $('#category-holds-stock').checked = category.holds_stock;
         $('#category-sac').checked = category.uses_sac_code;
+        $('#category-active').checked = category.is_active;
     }
 
     showModal('#category-modal');
@@ -552,6 +690,10 @@ async function submitCategory(event) {
         holds_stock: $('#category-holds-stock').checked,
         uses_sac_code: $('#category-sac').checked,
     };
+
+    // Only on an edit — see openCategoryForm(). Sending it on a create would be
+    // sending the default back as though somebody had chosen it.
+    if (id) body.is_active = $('#category-active').checked;
 
     setSubmitting(form, true);
 
@@ -600,6 +742,7 @@ function openAttributeForm(field = null) {
             .join('')}`;
 
     $('#attribute-key-row').classList.toggle('hidden', !editing);
+    $('#attribute-active-row').classList.toggle('hidden', !editing);
 
     if (editing) {
         $('#attribute-key').value = field.key;
@@ -612,6 +755,7 @@ function openAttributeForm(field = null) {
         $('#attribute-default').value = field.default_value ?? '';
         $('#attribute-help').value = field.help_text ?? '';
         $('#attribute-required').checked = field.is_required;
+        $('#attribute-active').checked = field.is_active;
     }
 
     applyAttributeType();
@@ -635,9 +779,11 @@ function applyAttributeType() {
     $('#attribute-type-hint').textContent = meta.hint;
     $$('[data-attribute-options]').forEach((node) => node.classList.toggle('hidden', !meta.has_options));
     $$('[data-attribute-unit]').forEach((node) => node.classList.toggle('hidden', !meta.accepts_unit));
+    // The layout class comes off with `hidden`, because `hidden` does not win
+    // against it — see showFamilyFields() in components/quick-item.js.
     $$('[data-attribute-range]').forEach((node) => {
         node.classList.toggle('hidden', !meta.accepts_range);
-        node.classList.toggle('grid', meta.accepts_range);
+        node.classList.toggle('form-grid', meta.accepts_range);
     });
 }
 
@@ -661,6 +807,9 @@ async function submitAttribute(event) {
         help_text: $('#attribute-help').value.trim() || null,
         is_required: $('#attribute-required').checked,
     };
+
+    // Only on an edit — see openCategoryForm().
+    if (id) body.is_active = $('#attribute-active').checked;
 
     setSubmitting(form, true);
 
@@ -770,6 +919,7 @@ function openUnitForm(unit = null) {
     $('#unit-modal-title').textContent = editing ? `Edit ${unit.label}` : 'New unit';
     form.elements.id.value = editing ? unit.id : '';
     $('#unit-code-row').classList.toggle('hidden', !editing);
+    $('#unit-active-row').classList.toggle('hidden', !editing);
 
     if (editing) {
         $('#unit-code').value = unit.code;
@@ -777,6 +927,7 @@ function openUnitForm(unit = null) {
         $('#unit-symbol').value = unit.symbol;
         $('#unit-kind').value = unit.kind;
         $('#unit-decimals').value = String(unit.decimals);
+        $('#unit-active').checked = unit.is_active;
     }
 
     showModal('#unit-modal');
@@ -797,6 +948,9 @@ async function submitUnit(event) {
         kind: $('#unit-kind').value,
         decimals: Number($('#unit-decimals').value),
     };
+
+    // Only on an edit — see openCategoryForm().
+    if (id) body.is_active = $('#unit-active').checked;
 
     setSubmitting(form, true);
 
@@ -1074,6 +1228,27 @@ export function initCatalogueMaster() {
         }
 
         return undefined;
+    });
+
+    drawer.addEventListener('input', (event) => {
+        if (!event.target.matches('[data-catalogue-search]')) return;
+
+        state.queries[state.tab] = event.target.value;
+        paintRows();
+    });
+
+    // Escape in a box with something typed clears it, rather than closing the
+    // drawer out from under the list somebody was narrowing (§2A.9: one level
+    // per press, and a typed search is the nearest level).
+    drawer.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape' || !event.target.matches('[data-catalogue-search]')) return;
+        if (!event.target.value) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+        event.target.value = '';
+        state.queries[state.tab] = '';
+        paintRows();
     });
 
     $('#category-form').addEventListener('submit', submitCategory);
