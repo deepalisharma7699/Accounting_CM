@@ -21,7 +21,7 @@ Newest first.
 | --- | --- |
 | Code live on the server | The complete working tree as of 14 October 2026 (everything up to this date). This includes the 13 October recipe fixes below. |
 | SQL run | `2026_10_14_001_personal_expenses.sql`, `2026_10_13_001_vendor_invoice_no.sql`, `2026_09_30_001_job_kinds.sql` — all three. No schema step is pending. |
-| `php artisan workshop:seed-kinds` | _Not stated. Without it the Kind dropdown on the Jobs card is empty._ |
+| `php artisan workshop:seed-kinds` | Run. |
 | Last backup | _Not stated._ |
 
 ---
