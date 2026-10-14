@@ -57,7 +57,7 @@ import { mountStaffAttribution } from './staff-attribution';
 import { initQuickItem, openQuickItem } from './quick-item';
 import { initQuickParty, openQuickParty } from './quick-party';
 import {
-    $, $$, clearFormErrors, debounce, esc, formatMoney, hideModal, isZeroAmount,
+    $, $$, clearFormErrors, debounce, esc, formatDate, formatMoney, hideModal, isZeroAmount,
     showFormErrors, showModal, toast,
 } from '../ui';
 
@@ -108,6 +108,10 @@ export async function mountBillDocument(root, {
 
     const state = {
         direction,
+        // The document being corrected, so the duplicate check does not find
+        // the very bill it is about to replace. Null for a new one.
+        vendorInvoiceOwnId: null,
+        vendorInvoiceAsk: 0,
         lines: [],
         lineSeq: 0,
         paymentModes: [],
@@ -562,6 +566,17 @@ export async function mountBillDocument(root, {
         const sent = sendableLines();
         const lineNoOf = new Map(sent.map((line, index) => [line.id, index + 1]));
 
+        /*
+        | Materials that are also on the bill as lines of their own. Usually the
+        | same copper written twice — once by hand, often off a job card's parts
+        | list, and once through the recipe — and both are taken off the shelf.
+        | Said rather than refused: a job that really did use extra records the
+        | extra as a part, and that is a legitimate bill.
+        */
+        const billedDirectly = new Set(
+            sent.filter((line) => line.variant_id).map((line) => Number(line.variant_id)),
+        );
+
         state.lines.forEach((line) => {
             // Scoped to `root`: on a module showing its list the form is
             // detached (§2A.2), and the figures still have to be right for when
@@ -574,9 +589,17 @@ export async function mountBillDocument(root, {
             const consumes = priced.get(lineNoOf.get(line.id)) ?? [];
 
             slot.classList.toggle('hidden', consumes.length === 0);
+            const doubled = consumes.filter((part) => billedDirectly.has(Number(part.variant_id)));
+
+            slot.classList.toggle('text-amber-700', doubled.length > 0);
+            slot.classList.toggle('text-muted-foreground', doubled.length === 0);
+
             slot.textContent = consumes.length === 0
                 ? ''
-                : `Consumes ${consumes.map((part) => `${part.quantity} ${part.unit_symbol} ${part.item_name ?? part.label}`).join(' · ')}`;
+                : `Consumes ${consumes.map((part) => `${part.quantity} ${part.unit_symbol} ${part.item_name ?? part.label}`).join(' · ')}`
+                    + (doubled.length === 0
+                        ? ''
+                        : ` — ${doubled.map((part) => part.item_name ?? part.label).join(', ')} ${doubled.length === 1 ? 'is' : 'are'} also billed as ${doubled.length === 1 ? 'a line' : 'lines'} of ${doubled.length === 1 ? 'its' : 'their'} own, and both are taken off the shelf. Keep ${doubled.length === 1 ? 'that line' : 'those lines'} only for what was used beyond the recipe.`);
         });
     }
 
@@ -1480,6 +1503,10 @@ export async function mountBillDocument(root, {
             // refuses it: sending an empty array there would be the form asking
             // a question it has already been told is meaningless.
             ...(staff === null ? {} : { staff: staff.value() }),
+            // The vendor's own bill number — a purchase's only.
+            ...(isPurchase()
+                ? { vendor_invoice_no: el('[data-bill-vendor-invoice]').value.trim() || null }
+                : {}),
         };
     }
 
@@ -1559,6 +1586,7 @@ export async function mountBillDocument(root, {
                 partyId: partyPicker?.id() ?? null,
                 date: el('[data-bill-date]')?.value ?? '',
                 notes: el('[data-bill-notes]')?.value ?? '',
+                vendorInvoiceNo: el('[data-bill-vendor-invoice]')?.value ?? '',
                 lines: state.lines,
                 billDiscount: el('[data-bill-discount]')?.value ?? '',
                 billDiscountMode: state.billDiscountMode,
@@ -1588,6 +1616,32 @@ export async function mountBillDocument(root, {
         } catch {
             // As above.
         }
+    }
+
+    /**
+     * Put a document's terms back: the bill discount and its unit, the payment
+     * split and which of credit / part / full it was, and the figure "paid in
+     * full" was settled at where that was short.
+     *
+     * One function for the two callers that have a document to restore — the
+     * autosave below and a host continuing a draft the server holds — because
+     * the order is the part that goes wrong. The split goes back before the
+     * settled figure, and both after the party and the lines, since naming a
+     * party and adding a line each forget a short settlement (`unsettle`): the
+     * agreed figure was agreed against *this* bill, and it is this bill now.
+     *
+     * Paints nothing beyond the controls it sets; a caller that is already live
+     * asks for the price and the save itself.
+     */
+    function putTerms({
+        billDiscount = '', billDiscountMode = 'amount', payments: splits = [], settlement = null, settleAt = null,
+    }) {
+        el('[data-bill-discount]').value = billDiscount ?? '';
+        state.billDiscountMode = billDiscountMode === 'percent' ? 'percent' : 'amount';
+        paintBillDiscountMode();
+
+        payments.set(splits ?? [], settlement ?? null);
+        state.settleAt = settleAt ?? null;
     }
 
     /**
@@ -1630,17 +1684,13 @@ export async function mountBillDocument(root, {
 
         if (saved.date) el('[data-bill-date]').value = saved.date;
         if (saved.notes) el('[data-bill-notes]').value = saved.notes;
-
-        // A draft written before this existed has neither, and lands on rupees
-        // and an empty box — which is what it meant.
-        el('[data-bill-discount]').value = saved.billDiscount ?? '';
-        state.billDiscountMode = saved.billDiscountMode === 'percent' ? 'percent' : 'amount';
-        paintBillDiscountMode();
+        if (saved.vendorInvoiceNo && isPurchase()) el('[data-bill-vendor-invoice]').value = saved.vendorInvoiceNo;
 
         if (saved.partyId) await partyPicker.load(saved.partyId);
 
-        payments.set(saved.payments, saved.settlement ?? null);
-        state.settleAt = saved.settleAt ?? null;
+        // A draft written before these existed has none of them, and lands on
+        // rupees, an empty box and the default split — which is what it meant.
+        putTerms(saved);
 
         /*
         | A draft written before this existed carries no `staff` key at all, and
@@ -1682,6 +1732,7 @@ export async function mountBillDocument(root, {
                 unsettle();
                 refreshPreview();
                 save();
+                checkVendorInvoice();
             },
         });
 
@@ -1739,6 +1790,76 @@ export async function mountBillDocument(root, {
                 save();
             },
         });
+    }
+
+    /*
+    | The vendor's own bill number — a purchase's only. Emptied, not merely
+    | hidden, on a sale, for the reason the staff host is: a hidden box still
+    | holding a number would send it with the next document.
+    */
+    function mountVendorInvoice() {
+        const field = el('[data-bill-vendor-invoice-field]');
+
+        if (!field) return;
+
+        field.classList.toggle('hidden', !isPurchase());
+
+        if (!isPurchase()) el('[data-bill-vendor-invoice]').value = '';
+        checkVendorInvoice();
+    }
+
+    /*
+    | Is this vendor's bill already in the books? Asked when the number is
+    | left (change, not every keystroke) and when the vendor changes, and only
+    | ever a warning: vendors reuse numbers across years, so nothing is refused.
+    | Cancelled bills are left out — a corrected bill was reversed, and the
+    | correction rightly carries the same number.
+    */
+    async function checkVendorInvoice() {
+        const warning = el('[data-bill-vendor-invoice-warning]');
+
+        if (!warning) return;
+
+        const ask = ++state.vendorInvoiceAsk;
+        const number = el('[data-bill-vendor-invoice]').value.trim();
+        const partyId = partyPicker?.id();
+        const hide = () => {
+            warning.classList.add('hidden');
+            warning.textContent = '';
+        };
+
+        if (!isPurchase() || !number || !partyId) return hide();
+
+        const query = new URLSearchParams({
+            type: 'purchase',
+            party_id: partyId,
+            vendor_invoice_no: number,
+            hide_cancelled: '1',
+            per_page: '5',
+        });
+
+        try {
+            const { data } = await auth.call(`/transactions?${query}`);
+
+            // A slower answer to an earlier question must not overwrite this one.
+            if (ask !== state.vendorInvoiceAsk) return;
+
+            const matches = (data ?? []).filter((row) => row.id !== state.vendorInvoiceOwnId);
+
+            if (matches.length === 0) return hide();
+
+            const where = matches
+                .map((row) => `${row.doc_no ?? 'a draft'} (${formatDate(row.date)})`)
+                .join(', ');
+
+            warning.textContent = `This vendor's invoice ${number} is already entered on ${where}. `
+                + 'Check it is not the same bill before saving.';
+            warning.classList.remove('hidden');
+            warning.classList.add('block');
+        } catch {
+            // Advisory only — the save itself answers the same question.
+            if (ask === state.vendorInvoiceAsk) hide();
+        }
     }
 
     /* ---------------------------------------------------------------------
@@ -1819,6 +1940,7 @@ export async function mountBillDocument(root, {
     }
 
     mountStaff();
+    mountVendorInvoice();
 
     payments = mountPaymentRows(el('[data-payments-host]'), {
         modes: state.paymentModes,
@@ -1978,6 +2100,8 @@ export async function mountBillDocument(root, {
     });
 
     el('[data-bill-notes]').addEventListener('input', save);
+    el('[data-bill-vendor-invoice]').addEventListener('input', save);
+    el('[data-bill-vendor-invoice]').addEventListener('change', checkVendorInvoice);
 
     el('[data-bill-discount]').addEventListener('input', () => {
         unsettle();
@@ -2062,6 +2186,9 @@ export async function mountBillDocument(root, {
         staff?.clear();
 
         el('[data-bill-notes]').value = '';
+        el('[data-bill-vendor-invoice]').value = '';
+        state.vendorInvoiceOwnId = null;
+        checkVendorInvoice();
         el('[data-bill-discount]').value = '';
         state.billDiscountMode = 'amount';
         paintBillDiscountMode();
@@ -2117,6 +2244,7 @@ export async function mountBillDocument(root, {
             // Who did the work is a sale's question only, so the section arrives
             // and leaves with the direction.
             mountStaff();
+            mountVendorInvoice();
             renderLines();
             // The payment section names a party and an act, and the item hint
             // says where a rate comes from. All three just changed. Repainted
@@ -2141,6 +2269,37 @@ export async function mountBillDocument(root, {
 
         repaint: renderLines,
         reset,
+
+        /**
+         * The vendor invoice number, set by a host loading a document into the
+         * form. `ownId` is the document being corrected, which the duplicate
+         * check must not report against itself; null for a new document.
+         */
+        setVendorInvoice(number, ownId = null) {
+            el('[data-bill-vendor-invoice]').value = number ?? '';
+            state.vendorInvoiceOwnId = ownId;
+            save();
+            checkVendorInvoice();
+        },
+
+        /**
+         * Put a document's terms back — see `putTerms`. For a host loading a
+         * document into the form, and called after its party and its lines for
+         * the reason given there. Priced and saved here, because unlike the
+         * autosave restore the document is already live.
+         */
+        setTerms(terms) {
+            putTerms(terms);
+            refreshPreview();
+            save();
+        },
+
+        /**
+         * Bring every line's "on hand" figure up to date. For a host that loaded
+         * lines it did not pick — their figures are whatever it supplied, which
+         * for a document read back from the server is nothing at all.
+         */
+        refreshAvailability,
 
         /** The ways money can move, fetched once at mount. Shared so a host does
          *  not make a second request for the four rows it already has. */

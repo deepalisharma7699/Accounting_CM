@@ -154,7 +154,32 @@ class PostingEngine
             settlementDiscount: $template instanceof SettlementTemplate
                 ? $template->discountFrom($input)
                 : null,
+            // The vendor's own bill number. A purchase's alone — on anything
+            // else it would be a number nobody issued.
+            vendorInvoiceNo: $type === TransactionType::Purchase
+                ? $this->trimmedOrNull($input['vendor_invoice_no'] ?? null)
+                : null,
         );
+    }
+
+    /**
+     * The vendor's bill number as a column write — or nothing, on a server
+     * where the manual SQL has not been run yet. Spread into the row.
+     *
+     * @return array<string, string|null>
+     */
+    private function vendorInvoiceNoOf(PostingBatch $batch): array
+    {
+        return Transaction::recordsVendorInvoiceNo()
+            ? ['vendor_invoice_no' => $batch->vendorInvoiceNo]
+            : [];
+    }
+
+    private function trimmedOrNull(mixed $value): ?string
+    {
+        $value = trim((string) $value);
+
+        return $value === '' ? null : $value;
     }
 
     /**
@@ -248,6 +273,7 @@ class PostingEngine
                 'date' => $batch->date,
                 'total' => $batch->total()->amount(),
                 'notes' => $batch->notes,
+                ...$this->vendorInvoiceNoOf($batch),
                 'draft_lines' => null,
                 'draft_payments' => null,
                 'draft_payload' => null,
@@ -301,6 +327,7 @@ class PostingEngine
             'date' => $batch->date,
             'total' => $batch->total()->amount(),
             'notes' => $batch->notes,
+            ...$this->vendorInvoiceNoOf($batch),
             'draft_lines' => $batch->toArray(),
             // Held on the row rather than in transaction_payments, exactly as
             // the intended lines are held out of the ledger: nothing reading
@@ -334,6 +361,7 @@ class PostingEngine
             'date' => $batch->date,
             'total' => $batch->total()->amount(),
             'notes' => $batch->notes,
+            ...$this->vendorInvoiceNoOf($batch),
             'draft_lines' => $batch->toArray(),
             'draft_payments' => $batch->hasPayments() ? $batch->paymentsToArray() : null,
             'draft_payload' => $batch->payload,
@@ -377,6 +405,7 @@ class PostingEngine
                 // somebody discarded the draft — M16.
                 'doc_no' => $this->numbers->assign($draft->type, $draft->date),
                 'total' => $batch->total()->amount(),
+                ...$this->vendorInvoiceNoOf($batch),
                 'draft_lines' => null,
                 'draft_payments' => null,
                 'draft_payload' => null,

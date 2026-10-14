@@ -13,6 +13,7 @@ use App\Repositories\Contracts\TenantRepositoryInterface;
 use App\Repositories\Contracts\UserRepositoryInterface;
 use App\Services\Accounting\ChartOfAccountProvisioner;
 use App\Services\Inventory\CatalogueProvisioner;
+use App\Services\Personal\PersonalCategoryProvisioner;
 use App\Services\Workshop\JobKindProvisioner;
 use App\Services\Rbac\RoleProvisioner;
 use App\Services\Auth\TokenService;
@@ -40,6 +41,7 @@ class TenantService
         private readonly ChartOfAccountProvisioner $chartOfAccounts,
         private readonly CatalogueProvisioner $catalogue,
         private readonly JobKindProvisioner $jobKinds,
+        private readonly PersonalCategoryProvisioner $personalCategories,
         private readonly RoleProvisioner $roles,
     ) {}
 
@@ -356,6 +358,10 @@ class TenantService
         // before it, because a kind's fields carry units — 'hp', 'mm', 'µF' —
         // and a unit the workshop does not have yet is dropped on the way in.
         $this->jobKinds->seedFor($tenant);
+
+        // And the owner's personal diary categories. Skipped quietly where the
+        // manual schema step has not been run — see the provisioner.
+        $this->personalCategories->seedFor($tenant);
 
         // And its roles — OWNER, MANAGER, ACCOUNTANT, DATA_ENTRY — which are
         // this workshop's own rows and nobody else's. Same breath again, and

@@ -80,14 +80,14 @@ const DOCUMENT_MODULE = {
     sales_return: 'sales',
     purchase: 'purchase',
     purchase_return: 'purchase',
-    expense: 'bills',
+    expense: 'journal',
     receipt: 'journal',
     payment: 'journal',
     journal: 'journal',
 };
 
-/** Transactions lands on a tab, so a document says which one it is on. */
-const JOURNAL_TABS = ['receipt', 'payment', 'journal'];
+/** Money in & out lands on a tab, so a document says which one it is on. */
+const JOURNAL_TABS = ['expense', 'receipt', 'payment', 'journal'];
 
 function documentLink(doc) {
     const tab = JOURNAL_TABS.includes(doc.type) ? `tab=${doc.type}&` : '';

@@ -92,6 +92,25 @@ class TransactionPayloadMismatchException extends ApiException
     }
 
     /**
+     * A bill's terms — its discount, its settled figure, the vendor's number —
+     * sent for a draft whose template does not read them.
+     */
+    public static function billTermsNotAccepted(TransactionType $type, string $field): self
+    {
+        return new self(
+            message: sprintf(
+                'A %s does not carry `%s`. Send `%s` instead.',
+                strtolower($type->label()),
+                $field,
+                self::vocabularyOf($type),
+            ),
+            status: 422,
+            errorCode: 'TRANSACTION_BILL_TERMS_NOT_ACCEPTED',
+            details: ['field' => $field, 'type' => $type->value, 'expected' => self::vocabularyOf($type)],
+        );
+    }
+
+    /**
      * Correcting a document that is not a purchase bill.
      *
      * Reverse-and-repost is a repair whose correctness depends on the type: a

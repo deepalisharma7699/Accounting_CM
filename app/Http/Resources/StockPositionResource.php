@@ -26,12 +26,18 @@ use Illuminate\Http\Resources\Json\JsonResource;
  * verdicts** rather than one status the client has to unpick. Neither is
  * recomputed client-side: the levels are on the variant and the arithmetic that
  * compares them is {@see StockPosition}'s, once.
+ *
+ * `has_trading_history` is whether the variant has moved through anything but
+ * an opening declaration — the server's own answer to "may opening stock still
+ * be declared here", so the Stock card's template and the Items drawer offer
+ * exactly what the import would accept. Null where the caller did not ask.
  */
 class StockPositionResource extends JsonResource
 {
     public function __construct(
         private readonly ItemVariant $variant,
         private readonly StockPosition $position,
+        private readonly ?bool $hasTradingHistory = null,
     ) {
         parent::__construct($variant);
     }
@@ -75,6 +81,10 @@ class StockPositionResource extends JsonResource
             'reorder_level' => $this->position->reorderLevel?->amount(),
             'min_stock' => $this->position->minStock?->amount(),
             'sell_price' => $this->variant->sell_price === null ? null : (string) $this->variant->sell_price,
+            // What the workshop expects to pay — the starting figure the
+            // opening-stock template writes into its unit cost column.
+            'purchase_price' => $this->variant->purchase_price === null ? null : (string) $this->variant->purchase_price,
+            'has_trading_history' => $this->hasTradingHistory,
 
             'has_stock' => $this->position->hasStock(),
             'is_low' => $this->position->isLow(),

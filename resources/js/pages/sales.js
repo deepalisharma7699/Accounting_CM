@@ -1099,8 +1099,21 @@ function paintActions() {
     | document.
     */
     if (bill.status === 'draft') {
+        /*
+        | Finishing it is why it was saved, so that comes first. Rewriting a
+        | draft is UPDATE on the server, like authorising one — and it is done
+        | in the create form, which only somebody holding WRITE has: without it
+        | the form would open with no way back to the list.
+        */
+        const continues = can('UPDATE', 'TRANSACTIONS') && can('WRITE', 'TRANSACTIONS');
+
+        if (continues) {
+            buttons.push('<button type="button" class="btn btn-primary btn-sm" data-drawer-continue>Continue editing</button>');
+        }
+
         if (can('UPDATE', 'TRANSACTIONS')) {
-            buttons.push('<button type="button" class="btn btn-primary btn-sm" data-drawer-post>Post it</button>');
+            buttons.push(`<button type="button" class="btn ${continues ? 'btn-secondary' : 'btn-primary'} btn-sm" `
+                + 'data-drawer-post>Post it</button>');
         }
 
         if (can('DELETE', 'TRANSACTIONS')) {
@@ -1200,11 +1213,27 @@ function paintActions() {
         + '<button type="button" class="btn btn-secondary btn-sm ml-auto" data-modal-close>Close</button>';
 }
 
+/**
+ * Put the draft back in the create form to finish it — `bill-revision.js`, the
+ * component that already loads a posted document there to correct it. The
+ * drawer closes only once the form has it: a "replace what is on the form?"
+ * answered no leaves the draft open where it was.
+ */
+async function continueDraft() {
+    if (await revision.continueDraft(drawer.bill)) hideModal('#sales-drawer');
+}
+
 async function postDraft() {
     await run('[data-drawer-post]', 'Posting…', async () => {
         const response = await auth.call(`/transactions/${drawer.id}/post`, { method: 'POST' });
 
-        toast(response.message ?? 'Invoice posted.');
+        toast(revision.release(drawer.id)
+            ? 'Invoice posted. The form that was continuing it has been cleared.'
+            : (response.message ?? 'Invoice posted.'));
+
+        // What the form's own post shows, shown here too: the invoice did post,
+        // and somebody still needs to look at it.
+        (response.meta?.warnings ?? []).forEach((warning) => toast(warning.message, 'error'));
 
         await loadDocument();
         await refreshList();
@@ -1224,7 +1253,9 @@ async function discardDraft() {
     await run(null, null, async () => {
         await auth.call(`/transactions/${drawer.id}`, { method: 'DELETE' });
 
-        toast('Draft discarded.');
+        toast(revision.release(drawer.id)
+            ? 'Draft discarded, and taken off the form that was continuing it.'
+            : 'Draft discarded.');
 
         hideModal('#sales-drawer');
         await refreshList();
@@ -1407,6 +1438,8 @@ function bindDrawer() {
             if (drawer.mode === 'pay') submitReceipt();
             else if (drawer.mode === 'customer') submitCustomer();
             else submitReturn();
+        } else if (hit('data-drawer-continue')) {
+            continueDraft();
         } else if (hit('data-drawer-post')) {
             postDraft();
         } else if (hit('data-drawer-discard')) {

@@ -4,6 +4,7 @@ import {
     averageCostOf, positionStatus, rollUpPositions, statusOfRow, STOCK_STATUS, stockStatusBadge,
 } from '../components/stock-position';
 import { initStockAdjust, openStockAdjust } from '../components/stock-adjust';
+import { can } from '../permissions';
 import {
     $, $$, debounce, downloadCsv, esc, formatDate, formatMoney,
     showModal, tableMessage, toast,
@@ -701,6 +702,64 @@ function exportCsv() {
     toast(`Exported ${rows.length} variant${rows.length === 1 ? '' : 's'}.`);
 }
 
+/**
+ * A file to fill in: what was on the shelf at go-live, for the variants that
+ * missed it.
+ *
+ * Not the export with a column added. The export's headers are a report's —
+ * "Category", "Quantity", "Value" — and the opening import reads all three as
+ * something else, so a stock report uploaded as it stands would be refused on
+ * every row or declared at nothing. This file is written in the import's own
+ * vocabulary and nothing in it needs renaming.
+ *
+ * **Only variants that have never moved.** On a live workshop "out of stock" is
+ * as often *sold out* as *never entered*, and an opening figure put beneath a
+ * shelf that has been sold from is stock that was never there. The server
+ * refuses those rows whatever file they arrive in; leaving them out here is so
+ * nobody fills in a row only to be told so.
+ *
+ * `variant_id` resolves each row exactly, the item and variant columns are for
+ * the person filling it in, and `unit_cost` starts at the purchase price where
+ * the catalogue has one. A row left without an `opening_qty` is ignored on
+ * upload, so there is nothing to delete first.
+ */
+function downloadOpeningTemplate() {
+    const rows = visibleGroups().flatMap((group) => group.variants.map((row) => ({ group, row })));
+    const eligible = rows.filter(({ row }) => row.is_active && row.has_trading_history === false);
+    const moved = rows.filter(({ row }) => row.has_trading_history).length;
+
+    if (!eligible.length) {
+        toast(moved
+            ? `All ${moved} variant${moved === 1 ? ' shown has' : 's shown have'} already been bought, sold or counted. Record a count for those instead.`
+            : 'Nothing to put in a template with these filters.', 'info');
+
+        return;
+    }
+
+    downloadCsv(`opening-stock-${new Date().toISOString().slice(0, 10)}.csv`, [
+        ['kind', 'variant_id', 'item', 'variant', 'sku', 'unit', 'opening_qty', 'unit_cost'],
+        ...eligible.map(({ group, row }) => [
+            'stock',
+            row.variant_id,
+            group.item?.name ?? '',
+            row.display_label,
+            row.sku ?? '',
+            group.item?.base_uom_symbol ?? '',
+            '',
+            row.purchase_price ?? '',
+        ]),
+    ]);
+
+    toast([
+        `${eligible.length} variant${eligible.length === 1 ? '' : 's'} in the template.`,
+        moved ? `${moved} left out: already bought, sold or counted.` : null,
+        // The screen holds the first MAX_PAGES pages only, and a template that
+        // stopped there without saying so would read as the whole catalogue.
+        state.truncated ? `Only the first ${(FETCH_SIZE * MAX_PAGES).toLocaleString('en-IN')} variants are loaded — narrow the search or category for the rest.` : null,
+        'Fill in opening_qty and upload it on the Opening balances card.',
+    ].filter(Boolean).join(' '), state.truncated ? 'info' : undefined);
+}
+
 /* -------------------------------------------------------------------------
  | Recording a count
  | ---------------------------------------------------------------------- */
@@ -941,6 +1000,13 @@ export default async function initStock() {
     /* --- export and the count ------------------------------------------- */
 
     $('#export-csv').addEventListener('click', exportCsv);
+
+    // The two grants the opening import asks for, so nobody downloads a file
+    // they could not upload.
+    if (can('UPDATE', 'WORKSPACE') && can('WRITE', 'TRANSACTIONS')) {
+        $('#opening-template').classList.remove('hidden');
+        $('#opening-template').addEventListener('click', downloadOpeningTemplate);
+    }
 
     initStockAdjust();
     $('#new-adjustment').addEventListener('click', openAdjustment);

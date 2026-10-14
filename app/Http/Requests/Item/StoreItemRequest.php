@@ -181,6 +181,15 @@ class StoreItemRequest extends FormRequest
             'variants.*.min_stock' => ['nullable', 'numeric', 'decimal:0,3', 'min:0'],
             'variants.*.opening_stock' => ['nullable', 'numeric', 'decimal:0,3', 'min:0'],
             'variants.*.opening_cost' => ['nullable', 'numeric', 'decimal:0,2', 'min:0', 'max:'.self::MAX_AMOUNT],
+
+            // What one of each variant consumes, for a product the workshop
+            // makes rather than holds — the same rows, and the same shape-only
+            // rules, as StoreVariantRequest. Whether a recipe is allowed at all
+            // is ItemComponentService's to decide, inside the same transaction
+            // that creates the product, so a refusal leaves neither behind.
+            'variants.*.components' => ['nullable', 'array', 'max:60'],
+            'variants.*.components.*.component_variant_id' => ['required', 'integer', 'min:1'],
+            'variants.*.components.*.quantity' => ['required', 'numeric', 'decimal:0,3', 'gt:0'],
         ];
     }
 
@@ -194,6 +203,10 @@ class StoreItemRequest extends FormRequest
             'hsn_sac.regex' => 'An HSN or SAC code is 4 to 8 digits.',
             'gst_rate.between' => 'A GST rate is a percentage between 0 and 100 — 18, not 0.18.',
             'variants.max' => 'That is more variants than one product is added with. Save these, then add the rest from the product itself.',
+            'variants.*.components.*.component_variant_id.required' => 'Choose the material this consumes.',
+            'variants.*.components.*.quantity.required' => 'How much of it does one of these consume?',
+            'variants.*.components.*.quantity.gt' => 'How much of it does one of these consume?',
+            'variants.*.components.*.quantity.decimal' => 'Quantities go to three decimal places at most.',
         ];
     }
 
@@ -284,7 +297,7 @@ class StoreItemRequest extends FormRequest
                 return $given === null || $given === '' ? null : trim((string) $given);
             };
 
-            return [
+            $spec = [
                 'sku' => $value('sku'),
                 'barcode' => $value('barcode'),
                 'variant_label' => $value('variant_label'),
@@ -297,6 +310,21 @@ class StoreItemRequest extends FormRequest
                 'opening_stock' => $value('opening_stock'),
                 'opening_cost' => $value('opening_cost'),
             ];
+
+            // Carried only when the entry has a recipe to say. An absent key is
+            // what keeps every caller that predates recipes — the importer
+            // included — exactly as it was.
+            if (is_array($variant['components'] ?? null)) {
+                $spec['components'] = array_values(array_map(
+                    static fn ($row) => [
+                        'component_variant_id' => (int) (is_array($row) ? ($row['component_variant_id'] ?? 0) : 0),
+                        'quantity' => is_array($row) ? ($row['quantity'] ?? 0) : 0,
+                    ],
+                    $variant['components'],
+                ));
+            }
+
+            return $spec;
         }, array_values($given));
     }
 }

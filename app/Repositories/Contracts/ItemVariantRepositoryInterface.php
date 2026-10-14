@@ -17,6 +17,16 @@ interface ItemVariantRepositoryInterface
      */
     public function findWithItem(int $id): ?ItemVariant;
 
+    /**
+     * Several variants with their items, keyed by id — {@see findWithItem()} for
+     * a whole document at once, so naming a draft's lines is one query rather
+     * than one per line. Ids that resolve to nothing are simply absent.
+     *
+     * @param  array<int, int>  $ids
+     * @return Collection<int, ItemVariant>
+     */
+    public function findManyWithItems(array $ids): Collection;
+
     public function skuExists(string $sku, ?int $exceptId = null): bool;
 
     /**

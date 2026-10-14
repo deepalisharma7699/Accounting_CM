@@ -90,6 +90,17 @@
                 Export
             </button>
 
+            {{-- A file to fill in rather than a report: the variants the filters
+                 show that have never moved, with a column for what was on the
+                 shelf at go-live. Uploaded on the Opening balances card. Starts
+                 hidden and is revealed by stock.js, because it needs two grants
+                 and data-requires-permission names one. --}}
+            <button type="button" id="opening-template" class="btn btn-secondary btn-sm hidden h-[var(--control-h)]"
+                    title="Download the variants shown that have never moved, to fill in their opening stock">
+                <x-icon name="file-plus" :size="14" />
+                Opening-stock template
+            </button>
+
             {{-- The only way stock changes. There is deliberately no "edit
                  quantity" control beside it: a screen that could change a
                  position without writing a transaction would be a second write

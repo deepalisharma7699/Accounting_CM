@@ -97,6 +97,26 @@ opening kinds and their question sets, and adds nothing on a second run. A
 workshop provisioned after this deployment gets them at provisioning time and
 does not need the command.
 
+### `2026_10_14_001_personal_expenses.sql` — the owner's personal diary
+
+Creates `personal_expense_categories` and `personal_expenses`, gives every
+existing workshop its twelve opening categories, adds the `PERSONAL_EXPENSES`
+permission and grants it to every `OWNER` role (each workshop's own and the old
+shared row) and to no other role.
+
+Two new tables and inserts into `permissions`, `role_permission` and the new
+category table. No existing table is altered and no existing row is written.
+Safe during trading hours. Idempotent: run twice, it adds nothing the second
+time.
+
+**The code works before it is run and after** (§4.6). Before it, nobody holds
+the grant, so the Personal tab is not drawn, and the API answers
+`PERSONAL_EXPENSES_NOT_INSTALLED` if reached. **Afterwards, run
+`php artisan cache:clear`**: role grants are cached for up to an hour, and owners
+will not see the tab until theirs expires.
+
+See [docs/personal-expenses.md](../../docs/personal-expenses.md).
+
 ---
 
 

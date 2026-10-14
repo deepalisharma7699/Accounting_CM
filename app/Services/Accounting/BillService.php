@@ -7,9 +7,12 @@ use App\Enums\TransactionStatus;
 use App\Enums\TransactionType;
 use App\Models\Tenant;
 use App\Models\Transaction;
+use App\Repositories\Contracts\ItemRepositoryInterface;
+use App\Repositories\Contracts\ItemVariantRepositoryInterface;
 use App\Repositories\Contracts\TenantRepositoryInterface;
 use App\Repositories\Contracts\TransactionAllocationRepositoryInterface;
 use App\Repositories\Contracts\TransactionLineRepositoryInterface;
+use App\Services\Accounting\Posting\BillLine;
 use App\Services\Accounting\Tax\GstBreakdown;
 use App\Services\Inventory\StockLedgerService;
 use App\Support\Money;
@@ -52,6 +55,8 @@ class BillService
         private readonly TransactionAllocationRepositoryInterface $allocations,
         private readonly TenantRepositoryInterface $tenantRepository,
         private readonly StockLedgerService $stock,
+        private readonly ItemVariantRepositoryInterface $variants,
+        private readonly ItemRepositoryInterface $items,
     ) {}
 
     /* ---------------------------------------------------------------------
@@ -323,6 +328,66 @@ class BillService
     }
 
     /**
+     * What a draft's lines are, for the one screen that puts them back in front
+     * of somebody to finish — one entry per stored line, in order, or null where
+     * the product behind it has since gone.
+     *
+     * A draft keeps the *request*: ids, quantities and prices, nothing derived
+     * (see the Drafts section of billing-module.md). Continuing one needs what the
+     * form had when the line was picked — its name, its unit, its rate and which
+     * basis that rate was struck on — and those are read from the catalogue as it
+     * stands now, because that is what the draft will be taxed and described by
+     * when it posts. The name comes from {@see BillLine::describe()}, so the row
+     * reads exactly as it will on the invoice.
+     *
+     * Asked only by the single-document read, never by a listing: a page of
+     * drafts needs a count of their lines, not the catalogue behind every one.
+     *
+     * @return array<int, array{item_id: int, description: string, unit: string, unit_symbol: string, gst_rate: string, price_includes_tax: bool}|null>
+     */
+    public function draftLinesFor(Transaction $draft): array
+    {
+        $rows = array_values((array) ($draft->draft_payload['items'] ?? []));
+
+        $variants = $this->variants->findManyWithItems(array_values(array_unique(array_filter(array_map(
+            fn (array $row) => isset($row['variant_id']) && $row['variant_id'] !== '' ? (int) $row['variant_id'] : null,
+            $rows,
+        )))));
+
+        // A line naming only an item is a service with nothing to vary; there are
+        // few of them, and each is asked once however often it appears.
+        $items = [];
+
+        return array_map(function (array $row) use ($variants, &$items) {
+            $variant = isset($row['variant_id']) && $row['variant_id'] !== ''
+                ? $variants->get((int) $row['variant_id'])
+                : null;
+
+            $itemId = (int) ($row['item_id'] ?? 0);
+            $item = $variant?->item
+                ?? ($itemId > 0 ? ($items[$itemId] ??= $this->items->findById($itemId)) : null);
+
+            if ($item === null) {
+                return null;
+            }
+
+            return [
+                'item_id' => (int) $item->id,
+                'description' => BillLine::describe($item, $variant),
+                'unit' => $item->base_uom->value,
+                'unit_symbol' => $item->base_uom->symbol(),
+                'gst_rate' => (string) $item->gst_rate,
+                // What the line will actually be taxed on: its own answer where
+                // the form gave one, the item's where it did not — the rule
+                // BillTemplate::lineFrom() applies at posting.
+                'price_includes_tax' => array_key_exists('price_includes_tax', $row) && $row['price_includes_tax'] !== null
+                    ? (bool) $row['price_includes_tax']
+                    : (bool) $item->price_includes_tax,
+            ];
+        }, $rows);
+    }
+
+    /**
      * The invoice footer: taxable value, the tax split three ways, and the total.
      *
      * Summed from the lines rather than recomputed on the total, and the two are
@@ -460,7 +525,55 @@ class BillService
             }
         }
 
+        if (($duplicate = $this->duplicateVendorInvoiceWarning($transaction)) !== null) {
+            $warnings[] = $duplicate;
+        }
+
         return $warnings;
+    }
+
+    /**
+     * The same vendor's same bill number already in the books — the commonest
+     * way one purchase gets entered twice. A warning, never a refusal: vendors
+     * do reuse numbers across financial years. The form asks the same question
+     * before saving; this is the answer for whoever saved anyway.
+     *
+     * @return array{code: string, line: null, message: string}|null
+     */
+    private function duplicateVendorInvoiceWarning(Transaction $transaction): ?array
+    {
+        if ($transaction->type !== TransactionType::Purchase
+            || $transaction->party_id === null
+            || blank($transaction->vendor_invoice_no ?? null)) {
+            return null;
+        }
+
+        $others = Transaction::query()
+            ->where('type', TransactionType::Purchase->value)
+            ->where('party_id', $transaction->party_id)
+            ->where('vendor_invoice_no', $transaction->vendor_invoice_no)
+            ->where('status', '!=', TransactionStatus::Reversed->value)
+            ->whereKeyNot($transaction->id)
+            ->orderBy('date')
+            ->get(['id', 'doc_no', 'date']);
+
+        if ($others->isEmpty()) {
+            return null;
+        }
+
+        return [
+            'code' => 'DUPLICATE_VENDOR_INVOICE',
+            'line' => null,
+            'message' => sprintf(
+                'Vendor invoice %s from this vendor is also on %s. If it is the same bill, reverse one of them.',
+                $transaction->vendor_invoice_no,
+                $others->map(fn (Transaction $other) => sprintf(
+                    '%s (%s)',
+                    $other->doc_no ?? 'a draft',
+                    $other->date->format('d M Y'),
+                ))->implode(', '),
+            ),
+        ];
     }
 
     /**

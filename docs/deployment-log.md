@@ -13,6 +13,45 @@ Newest first.
 
 ---
 
+## 14 October 2026 — whole working tree, plus personal expenses
+
+**Stated by the operator on 14 October 2026:**
+
+| Question | Answer |
+| --- | --- |
+| Code live on the server | The complete working tree as of 14 October 2026 (everything up to this date). This includes the 13 October recipe fixes below. |
+| SQL run | `2026_10_14_001_personal_expenses.sql`, `2026_10_13_001_vendor_invoice_no.sql`, `2026_09_30_001_job_kinds.sql` — all three. No schema step is pending. |
+| `php artisan workshop:seed-kinds` | _Not stated. Without it the Kind dropdown on the Jobs card is empty._ |
+| Last backup | _Not stated._ |
+
+---
+
+## 13 October 2026 — recipe fixes (pending)
+
+**Read from the server by the operator on 13 October 2026**, in phpMyAdmin
+against `db_accounting_crm`:
+
+| Question | Answer |
+| --- | --- |
+| `item_components` exists | Yes — the queries below ran against it. |
+| Recipes on the server | None: `COUNT(*)` = 0, distinct parents = 0. |
+| Rows the new recipe rules would refuse | None (the diagnostic query returned no rows). |
+| Commit live on the server | Unchanged since 29 September: `73d7fc3` plus that day's uncommitted working tree. Nothing has gone out since (stated 13 October 2026). |
+| Last backup | _Not yet stated._ |
+
+**What goes out.** The recipe fixes: the catalogue list and product carry each
+variant's recipe (the edit form had been wiping it on save), recipes on create,
+the refusals made when a recipe is written rather than at the counter, audited
+diffs instead of delete-and-recreate, and the bill's double-count note. See
+[recipes.md](recipes.md).
+
+**Schema step.** None. The table was already there and no column changes.
+
+**Nothing to repair.** With no recipe rows on the server, the edit-form bug
+never had a recipe to wipe.
+
+---
+
 ## 29 September 2026 — recipes (`item_components`)
 
 **Stated by the operator on 29 September 2026, before the window opened:**

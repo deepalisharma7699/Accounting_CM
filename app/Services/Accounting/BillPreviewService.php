@@ -86,12 +86,12 @@ class BillPreviewService
         // that it deliberately does *not* build the ledger lines: those need the
         // cost of goods sold, which needs a lock, which a preview must not take.
         $lines = $template->documentLinesFrom($input);
-        $shortfalls = $this->shortfallsIn($lines, $type);
 
         /*
         | Every recipe on the document, in one query rather than one per line.
         | This method runs on a debounce as somebody types at the counter, so a
-        | query per line is a query per line per keystroke (§7.2).
+        | query per line is a query per line per keystroke (§7.2). Fetched before
+        | the shortfalls, which expand the same recipes.
         */
         $recipes = $this->components->forVariants(array_values(array_filter(array_map(
             fn (BillLine $line) => $line->movesStock || $line->variant === null
@@ -99,6 +99,8 @@ class BillPreviewService
                 : (int) $line->variant->id,
             $lines,
         ))));
+
+        $shortfalls = $this->shortfallsIn($lines, $type, $recipes);
 
         return [
             'type' => $type->value,
@@ -234,6 +236,10 @@ class BillPreviewService
             */
             'consumes' => array_map(
                 fn ($component) => [
+                    // So the form can tell when a material is also billed as a
+                    // line of its own — usually somebody recording the copper
+                    // twice, once by hand and once through the recipe.
+                    'variant_id' => (int) $component->component_variant_id,
                     'label' => $component->componentVariant?->displayLabel(),
                     'item_name' => $component->componentVariant?->item?->name,
                     'quantity' => $component->quantityFor($line->quantity)->trimmed(),
@@ -256,9 +262,10 @@ class BillPreviewService
      * having enough room.
      *
      * @param  array<int, BillLine>  $lines
+     * @param  array<int, Collection<int, \App\Models\ItemComponent>>  $recipes
      * @return array<int, array<string, mixed>>
      */
-    private function shortfallsIn(array $lines, TransactionType $type): array
+    private function shortfallsIn(array $lines, TransactionType $type, array $recipes): array
     {
         if ($type !== TransactionType::Sale) {
             return [];
@@ -281,7 +288,7 @@ class BillPreviewService
             | standing there, is the failure this panel exists to prevent, and it
             | would be the one shape of document it could not see coming.
             */
-            foreach ($this->consumptionOf($line) as [$variant, $quantity]) {
+            foreach ($this->consumptionOf($line, $recipes) as [$variant, $quantity]) {
                 $id = (int) $variant->id;
 
                 // Summed per variant, not per line. Two lines of three bearings
@@ -333,9 +340,10 @@ class BillPreviewService
      * when it posts — asked of the same service, so a preview cannot promise
      * something the post then refuses.
      *
+     * @param  array<int, Collection<int, \App\Models\ItemComponent>>  $recipes
      * @return array<int, array{0: ItemVariant, 1: Quantity}>
      */
-    private function consumptionOf(BillLine $line): array
+    private function consumptionOf(BillLine $line, array $recipes): array
     {
         if ($line->movesStock) {
             return [[$line->variant, $line->quantity]];
@@ -343,7 +351,7 @@ class BillPreviewService
 
         $drawn = [];
 
-        foreach ($this->components->forVariant((int) $line->variant->id) as $component) {
+        foreach (($recipes[(int) $line->variant->id] ?? []) as $component) {
             $material = $component->componentVariant;
 
             if ($material !== null) {

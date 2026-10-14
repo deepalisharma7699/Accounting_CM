@@ -188,6 +188,25 @@ class ItemVariant extends Model
      * different sequences read identically — the same reason a party's roles are
      * stored in enum order.
      */
+    /**
+     * The variant with its product: "Copper Winding Wire · 18 SWG".
+     *
+     * Just the product where the variant has no name of its own — its label
+     * then *is* the product's name, and printing it twice read as
+     * "Motor Rewinding · Motor Rewinding".
+     */
+    public function fullLabel(): string
+    {
+        $family = $this->item?->name;
+        $label = $this->displayLabel();
+
+        if ($family === null || $family === '' || $label === $family) {
+            return $label;
+        }
+
+        return $family.' · '.$label;
+    }
+
     public function derivedLabel(): ?string
     {
         $category = $this->item?->category;

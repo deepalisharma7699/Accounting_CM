@@ -23,6 +23,20 @@ class EloquentItemVariantRepository implements ItemVariantRepositoryInterface
         return ItemVariant::with(['item.category.fields', 'item.category.parent.fields'])->find($id);
     }
 
+    public function findManyWithItems(array $ids): Collection
+    {
+        if ($ids === []) {
+            return new Collection;
+        }
+
+        // The same relations as findWithItem(), for the same reason: the label a
+        // line is described by is derived from the category's attribute schema.
+        return ItemVariant::with(['item.category.fields', 'item.category.parent.fields'])
+            ->whereKey($ids)
+            ->get()
+            ->keyBy('id');
+    }
+
     public function skuExists(string $sku, ?int $exceptId = null): bool
     {
         return ItemVariant::where('sku', $sku)

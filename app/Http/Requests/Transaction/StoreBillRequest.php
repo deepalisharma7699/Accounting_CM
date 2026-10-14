@@ -45,6 +45,10 @@ class StoreBillRequest extends FormRequest
             'date' => ['required', 'date_format:Y-m-d'],
             'notes' => ['nullable', 'string', 'max:500'],
 
+            // The number on the vendor's own bill, where they gave one. A
+            // purchase's only; the engine drops it from anything else.
+            'vendor_invoice_no' => ['nullable', 'string', 'max:50'],
+
             // Explicit, and never defaulted to true — the same rule as every
             // other transaction.
             'post' => ['required', 'boolean'],
@@ -190,17 +194,21 @@ class StoreBillRequest extends FormRequest
             'bill_discount_percent.prohibits' => 'Give the bill discount in rupees or as a percentage, not both.',
             'bill_discount_percent.max' => 'A discount cannot be more than 100% of the bill.',
             'date.date_format' => 'Give the bill date as YYYY-MM-DD.',
+            'vendor_invoice_no.max' => 'The vendor invoice number can be at most 50 characters.',
         ];
     }
 
     /**
-     * @return array{date: string, notes: string|null, post: bool, party_id: int|null, bill_discount: mixed, bill_discount_percent: mixed, settle_total: string|null, items: array<int, array<string, mixed>>, staff: array<int, array<string, mixed>>, payments: array<int, array<string, mixed>>}
+     * @return array{date: string, notes: string|null, vendor_invoice_no: string|null, post: bool, party_id: int|null, bill_discount: mixed, bill_discount_percent: mixed, settle_total: string|null, items: array<int, array<string, mixed>>, staff: array<int, array<string, mixed>>, payments: array<int, array<string, mixed>>}
      */
     public function payload(): array
     {
         return [
             'date' => (string) $this->string('date'),
             'notes' => $this->filled('notes') ? trim((string) $this->string('notes')) : null,
+            'vendor_invoice_no' => $this->filled('vendor_invoice_no')
+                ? trim((string) $this->string('vendor_invoice_no'))
+                : null,
             'post' => $this->boolean('post'),
             'client_ref' => $this->clientRef(),
             'party_id' => $this->filled('party_id') ? (int) $this->input('party_id') : null,

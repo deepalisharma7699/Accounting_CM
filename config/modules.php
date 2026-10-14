@@ -150,40 +150,6 @@ return [
     ],
 
     /*
-    | Expenses — what it costs the workshop to be open. C2.
-    |
-    | **This module lost everything except one thing, and kept the one that
-    | mattered.** It was "Bills": a transaction list spanning sales,
-    | purchases, expenses and both kinds of note. Purchases left when
-    | Purchase was converted, sales when Sales was, and the list itself is
-    | now answered three times over — Sales lists invoices and credit notes,
-    | Purchase lists bills and debit notes, and Insights' Day Book lists
-    | every posted document, including the journals neither of those shows.
-    | Rebuilding any of that here would have been §5.1's mistake.
-    |
-    | What was only ever here is **writing an expense**. An expense is not a
-    | purchase — it is what it costs to be open rather than what was bought
-    | to sell — and keeping the two apart is the only reason a P&L can
-    | separate gross margin from overheads. `/transactions/expense` has
-    | exactly one caller in the front end and it is this module.
-    |
-    | The **key stays `bills`** while the label says Expenses. The key is the
-    | module's address — the fragment route, the shell's lazy-import table
-    | and the `#bills` URL — and renaming an address to match a label breaks
-    | bookmarks to buy nothing.
-    */
-    'bills' => [
-        'label' => 'Expenses',
-        'description' => 'Rent, power and what it costs to be open',
-        'icon' => 'receipt',
-        'tone' => 'tone-violet',
-        'permission' => 'READ:TRANSACTIONS',
-        'workspace' => true,
-        'group' => 'money',
-        'enabled' => true,
-    ],
-
-    /*
     | The bench — M19, converted at C4. Gated on WORKSHOP_JOBS rather than on
     | TRANSACTIONS, because a job has nothing in the books until somebody
     | bills it. The split is what keeps "record the day's work" and "post to
@@ -208,43 +174,39 @@ return [
     ],
 
     /*
-    | Transactions — money that arrives or leaves without a document, and the
-    | books' own correction mechanism. C3.
+    | Money in & out — every way money leaves or arrives without an invoice,
+    | and the books' own correction mechanism. C3, then merged with Expenses.
     |
-    | **This module lost its list and kept the two things only it had.** It
-    | was four tabs over every transaction, with the receipt, the payment and
-    | the voucher grid behind three buttons on top. Sales lists invoices and
-    | credit notes, Purchase lists bills and debit notes, Expenses lists
-    | expenses, and Insights' Day Book lists every posted document including
-    | the journals none of those show — a fifth copy here would have been
-    | four screens answering one question (§5.1).
+    | **It was two cards.** Transactions held the receipt, the payment and the
+    | journal voucher; Expenses (key `bills`) held the expense. A workshop
+    | does not think in document types — it thinks "money came in" and "money
+    | went out" — and two cards in the same band answering that question
+    | meant guessing which to open. So Expenses became a tab here, the staff
+    | advance gained a second way in beside the Staff card's own, and the
+    | owner's personal diary was added: six tabs, each an ordinary §2A
+    | workspace, each drawn only for somebody holding its grant.
     |
-    | What survived is structural. A customer clearing three invoices with one
-    | cheque, or paying on account before anything is raised, had nowhere to
-    | go; and the manual journal voucher is what CLAUDE.md names as the
-    | correction mechanism for everything else in the books. Without it the
-    | only correction available anywhere was reversing a whole document.
+    | **`bills` is gone from this file — do not put it back.** Its redirect
+    | is registered by hand in routes/web.php and its `#bills` hash is
+    | re-pointed by shell.js, because the loop there declares one per module
+    | this registry still names. The key here stays `journal`, which is the
+    | card's address.
     |
-    | It also closes M16's hole: `POST /transactions/{id}/allocate` and
-    | `GET /transactions/{id}/open-bills` had no caller anywhere in the front
-    | end, so a receipt could be settled on the way *in* and never re-pointed
-    | afterwards. That screen is the drawer of a posted receipt or payment.
-    |
-    | Gated on TRANSACTIONS, the same grant Sales, Purchase and Expenses need,
-    | so adding this module re-seeds nothing. Re-pointing a receipt
-    | additionally wants UPDATE:TRANSACTIONS, which is the honest grant: it
-    | writes no journal entry and moves no balance.
+    | Gated on TRANSACTIONS. Staff advance additionally needs READ:STAFF and
+    | Personal needs PERSONAL_EXPENSES (OWNER only); those tabs gate
+    | themselves. Re-pointing a receipt wants UPDATE:TRANSACTIONS, which is
+    | the honest grant: it writes no journal entry and moves no balance.
     */
     'journal' => [
-        'label' => 'Transactions',
-        'description' => 'Receipts, payments and journal vouchers',
-        'icon' => 'file-text',
+        'label' => 'Money in & out',
+        'description' => 'Expenses, payments, receipts and advances',
+        'icon' => 'receipt',
         'tone' => 'tone-blue',
         'permission' => 'READ:TRANSACTIONS',
         'workspace' => true,
         'group' => 'money',
-        // Converted (C3): three sections, each opening on its own create
-        // form with its list behind one switch control — the Staff shape.
+        // Six sections, each opening on its own create form with its list
+        // behind one switch control — the Staff shape.
         'enabled' => true,
     ],
 

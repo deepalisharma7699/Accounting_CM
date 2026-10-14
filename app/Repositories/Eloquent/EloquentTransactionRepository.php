@@ -153,6 +153,9 @@ class EloquentTransactionRepository implements TransactionRepositoryInterface
                 fn ($search) => $search
                     ->where('notes', 'like', '%'.$filters['search'].'%')
                     ->orWhere('doc_no', 'like', '%'.$filters['search'].'%')
+                    // The number a vendor quotes on the phone is theirs, not ours.
+                    ->when(Transaction::recordsVendorInvoiceNo(), fn ($q) => $q
+                        ->orWhere('vendor_invoice_no', 'like', '%'.$filters['search'].'%'))
                     ->orWhereHas(
                         'party',
                         fn ($party) => $party->where('name', 'like', '%'.$filters['search'].'%')
@@ -212,6 +215,14 @@ class EloquentTransactionRepository implements TransactionRepositoryInterface
             ->when(
                 filled($filters['party_id'] ?? null),
                 fn ($query) => $query->where('party_id', $filters['party_id'])
+            )
+            // Exact, not a search: "is INV-2291 already in?" On a server the
+            // manual SQL has not reached, nothing can match, so nothing does.
+            ->when(
+                filled($filters['vendor_invoice_no'] ?? null),
+                fn ($query) => Transaction::recordsVendorInvoiceNo()
+                    ? $query->where('vendor_invoice_no', $filters['vendor_invoice_no'])
+                    : $query->whereRaw('1 = 0')
             )
             // Where the bill stands against what has been paid on it — M16.
             ->when(

@@ -46,6 +46,65 @@ material with a recipe of its own, and `RECIPE_WOULD_NEST` is what catches it.
 
 ---
 
+## Where it is written
+
+On the Items form, in the variant block, under **What it consumes** — offered
+whenever the product holds no stock of its own, on a **create as well as an
+edit**, and on a variant added to an existing product. A recipe names other
+products, the copper and the varnish already on the shelf, so nothing about it
+waits for the rewind to exist: one save writes the rewind and its recipe, and a
+refusal leaves neither (`POST /items` takes `variants[].components`, inside the
+same transaction as the product).
+
+The edit form is opened from the catalogue list, so **the list and the product
+carry each variant's recipe** (`ItemVariantService::attachRecipes()`). They did
+not, and that was the worst failure this feature had: the form read "nothing
+yet" for a rewind that had a recipe, and because a recipe write is a
+*replacement*, the next save of that form — a price change — sent an empty one
+and wiped it. A variant that arrives without a `components` key at all (a
+server that has not run the schema step) is treated as *unknown*, not empty:
+the section is not offered and nothing is sent.
+
+## Every refusal is made when the recipe is written
+
+A wrong recipe is found at the counter, with a customer waiting, or at a stock
+take months later. So everything the posting would refuse is refused earlier,
+where somebody can act on it, and each refusal is pinned to the field it is
+about (`components`, or `is_stock`):
+
+| Refused | Code | Why |
+| --- | --- | --- |
+| A fraction of something counted in whole units — 0.5 PCS of sleeve | `RECIPE_QUANTITY_FRACTIONAL` | The stock ledger refuses it at posting, so every bill for the rewind would be |
+| Stock tracking turned **off** on a material a recipe consumes | `RECIPE_MATERIAL_IN_USE` (409) | Every bill for the rewind would then have nothing to issue |
+| Stock tracking turned **on** for something with a recipe | `RECIPE_PARENT_WOULD_HOLD_STOCK` | The recipe would be silently ignored and the bill would issue the product from an empty shelf |
+| Deleting a material variant a recipe consumes | `RECIPE_MATERIAL_IN_USE` (409) | Said in words; the foreign key would refuse it as a database error |
+| A recipe on something another recipe already consumes | `RECIPE_WOULD_NEST` | The nesting rule, asked from the other side |
+
+**Clearing a recipe is always allowed**, whatever the product has become since —
+it is the way out of each of the states above.
+
+Deleting a variant that *has* a recipe takes the recipe with it, row by row.
+
+## History
+
+A recipe save is a **diff**, not a delete-and-rewrite: a material added, a
+quantity changed and a material removed are each one entry, written through the
+model so the audit trail sees them, and a save that changes nothing writes
+nothing. It used to bulk-delete and recreate on every save — which fires no
+audit event for the deletion — so History showed every material "added" again
+each time anybody saved the rewind's price, and never a removal.
+
+## On the bill
+
+Under a made line the bill says what it will consume: "Consumes 8.5 kg copper".
+When a material is **also** on the bill as a line of its own, that note turns
+amber and says both are taken off the shelf. That is usually the copper written
+twice — once by hand, often off a job card's parts list, and once through the
+recipe. It is said rather than refused: a job that really did use more than the
+recipe records the extra as a part, and that is a legitimate bill.
+
+---
+
 ## Nothing posted ever reads a recipe again
 
 This is the part that makes the feature safe to change.

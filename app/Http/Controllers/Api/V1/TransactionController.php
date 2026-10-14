@@ -217,6 +217,13 @@ class TransactionController extends Controller
             ], fn ($value) => $value !== null && $value !== []);
         }
 
+        // A draft bill's lines carry ids and figures only. Opening one is the
+        // step before continuing it, and the form needs each line's name, unit
+        // and rate back — resolved here, once, and never on a listing.
+        if ($record->type->hasDocumentLines() && $record->isDraft()) {
+            $record->draftLineDetails = $this->bills->draftLinesFor($record);
+        }
+
         // Who did the work — M22. Attached for a sale at any status, including a
         // draft: a document parked half-written keeps the two names that were
         // picked, or reopening it would silently drop them.
@@ -647,15 +654,37 @@ class TransactionController extends Controller
      * PATCH /api/v1/transactions/{transaction}
      *
      * Drafts only, of any type — `lines` for a journal, `payments` for a
-     * settlement. Editing something already in the books is refused by the
-     * service and again by the model.
+     * settlement, `items` and the bill's terms for a sale or a purchase. Editing
+     * something already in the books is refused by the service and again by the
+     * model.
      */
     public function update(UpdateTransactionRequest $request, int $transaction): JsonResponse
     {
-        return ApiResponse::success(
-            new TransactionResource($this->transactions->update($transaction, $request->payload())),
-            'Draft updated.'
-        );
+        $payload = $request->payload();
+
+        /*
+        | The draft and who did the work commit together, for the reason
+        | `createBill` gives: a refusal from the attribution after the draft had
+        | already been rewritten would leave somebody looking at an error over an
+        | edit that went through.
+        |
+        | Synced whenever the key is present, including empty — on a draft being
+        | continued, "nobody is named any more" is an edit like any other. Only a
+        | sale may carry it; the service refuses it on anything else.
+        */
+        $record = DB::transaction(function () use ($transaction, $payload) {
+            $record = $this->transactions->update($transaction, $payload);
+
+            if (array_key_exists('staff', $payload)) {
+                $this->attribution->sync($record, $payload['staff']);
+            }
+
+            return $record;
+        });
+
+        $this->attribution->attachTo([$record]);
+
+        return ApiResponse::success(new TransactionResource($record), 'Draft updated.');
     }
 
     /**
@@ -666,9 +695,20 @@ class TransactionController extends Controller
      */
     public function post(Request $request, int $transaction): JsonResponse
     {
+        $posted = $this->transactions->post($transaction, $request->user());
+
+        $this->attribution->attachTo([$posted]);
+
+        // The warnings a bill posted straight from the form comes back with —
+        // below cost, more than the shelf says is there. A draft authorised later
+        // is the same posting, and is owed the same look before anybody moves on.
+        $warnings = $posted->type->isBillable() ? $this->bills->warningsFor($posted) : [];
+
         return ApiResponse::success(
-            new TransactionResource($this->transactions->post($transaction, $request->user())),
-            'Transaction posted.'
+            new TransactionResource($posted),
+            'Transaction posted.',
+            200,
+            $warnings === [] ? [] : ['warnings' => $warnings],
         );
     }
 

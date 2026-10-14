@@ -68,8 +68,8 @@ class ItemComponent extends Model
 
     public function auditLabel(): string
     {
-        $parent = $this->relationLoaded('parentVariant') ? $this->parentVariant?->displayLabel() : null;
-        $component = $this->relationLoaded('componentVariant') ? $this->componentVariant?->displayLabel() : null;
+        $parent = $this->relationLoaded('parentVariant') ? $this->parentVariant?->fullLabel() : null;
+        $component = $this->relationLoaded('componentVariant') ? $this->componentVariant?->fullLabel() : null;
 
         if ($parent === null || $component === null) {
             return "Recipe #{$this->id}";

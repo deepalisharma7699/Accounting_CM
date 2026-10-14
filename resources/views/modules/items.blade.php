@@ -622,6 +622,11 @@
                         </label>
                     </div>
 
+                    {{-- Where a switch the recipes depend on is refused: a
+                         material a recipe consumes, or a made thing that has
+                         one. --}}
+                    <p class="field-error hidden" data-error-for="is_stock"></p>
+
                     {{-- The day the shelf was counted, and there is one of it
                          however many variants declare a quantity: they post a
                          single stock adjustment between them, and a document has
@@ -929,14 +934,13 @@
                                  the same pass that hides the stock boxes, from
                                  the opposite side of the same question.
 
-                                 `data-variant-edit-only` as well, alongside the
-                                 name and the markup: a recipe names *other*
-                                 products, which have to exist before it can point
-                                 at them. Writing one at the moment the product
-                                 itself is being created would mean choosing from
-                                 a catalogue this product is not in yet. --}}
+                                 Offered on a create as well as an edit. A recipe
+                                 names *other* products — the copper and the
+                                 varnish, which are already on the shelf — so
+                                 nothing about it waits for this one to exist,
+                                 and the rewind is written whole in one save. --}}
                             <div class="hidden space-y-3 rounded-[10px] border border-dashed border-border p-3.5"
-                                 data-variant-recipe data-variant-edit-only>
+                                 data-variant-recipe>
                                 <div class="flex flex-wrap items-start justify-between gap-3">
                                     <div>
                                         <p class="field-label mb-0">What it consumes</p>

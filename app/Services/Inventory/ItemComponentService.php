@@ -165,19 +165,67 @@ class ItemComponentService
 
         $parent->loadMissing('item.category');
 
-        if ($parent->item?->tracksStock()) {
-            throw RecipeException::parentHoldsStock($this->nameOf($parent));
+        // Clearing is always allowed, whatever the parent has become since. It
+        // is the one way to tidy a recipe left behind on something that now
+        // holds stock, and refusing it would leave that row unremovable.
+        if ($rows !== []) {
+            if ($parent->item?->tracksStock()) {
+                throw RecipeException::parentHoldsStock($this->nameOf($parent));
+            }
+
+            // One level, asked from this side as well: a variant another recipe
+            // already consumes cannot be given a recipe of its own.
+            $usedBy = $this->recipesUsing([(int) $parent->id]);
+
+            if ($usedBy !== []) {
+                throw RecipeException::parentIsAMaterial($this->nameOf($parent), $usedBy);
+            }
         }
 
         $prepared = $this->validate($parent, $rows);
 
         return DB::transaction(function () use ($parent, $prepared) {
-            ItemComponent::query()->where('parent_variant_id', $parent->id)->delete();
+            /*
+            | A diff against what is stored, not a delete-and-recreate.
+            |
+            | Each row is written through the model so its audit event fires: a
+            | bulk delete fires none, which left History with every material
+            | "added" again on each save and never a removal or a changed
+            | quantity — the trail a recipe is audited for. Rows that did not
+            | change are not written at all.
+            */
+            $existing = ItemComponent::query()
+                ->where('parent_variant_id', $parent->id)
+                ->with('componentVariant.item.category')
+                ->get()
+                ->keyBy(fn (ItemComponent $row) => (int) $row->component_variant_id);
 
-            $written = new Collection;
+            $wanted = [];
 
             foreach ($prepared as $row) {
-                $written->push(ItemComponent::create([
+                $wanted[$row['component_variant_id']] = true;
+            }
+
+            foreach ($existing as $componentId => $row) {
+                if (! isset($wanted[$componentId])) {
+                    $row->setRelation('parentVariant', $parent);
+                    $row->delete();
+                }
+            }
+
+            foreach ($prepared as $row) {
+                $current = $existing->get($row['component_variant_id']);
+
+                if ($current !== null) {
+                    if ($current->quantityValue()->amount() !== $row['quantity']->amount()) {
+                        $current->setRelation('parentVariant', $parent);
+                        $current->update(['quantity' => $row['quantity']->amount()]);
+                    }
+
+                    continue;
+                }
+
+                $component = new ItemComponent([
                     // Stamped from the parent rather than from the context, the
                     // rule every child table here follows: a recipe row can
                     // never end up in a different workshop from the variant it
@@ -186,18 +234,91 @@ class ItemComponentService
                     'parent_variant_id' => $parent->id,
                     'component_variant_id' => $row['component_variant_id'],
                     'quantity' => $row['quantity']->amount(),
-                ]));
+                ]);
+
+                // So History names both sides rather than "Recipe #12".
+                $component->setRelation('parentVariant', $parent);
+                $component->setRelation('componentVariant', $row['variant']);
+                $component->save();
             }
 
-            return $written;
+            return $this->forVariant((int) $parent->id);
         });
+    }
+
+    /**
+     * Remove a variant's whole recipe, one audited row at a time.
+     *
+     * For a variant about to be deleted: the foreign key would cascade the rows
+     * away too, but silently, and the recipe would vanish from History with no
+     * entry saying so.
+     */
+    public function clear(ItemVariant $parent): void
+    {
+        if (! $this->isInstalled()) {
+            return;
+        }
+
+        ItemComponent::query()
+            ->where('parent_variant_id', $parent->id)
+            ->with('componentVariant.item.category')
+            ->get()
+            ->each(function (ItemComponent $row) use ($parent): void {
+                $row->setRelation('parentVariant', $parent);
+                $row->delete();
+            });
+    }
+
+    /**
+     * The recipes that consume any of these variants — "what uses this".
+     *
+     * Named rather than counted, because every caller is about to refuse
+     * something and the refusal has to say which recipe to go and change.
+     *
+     * @param  array<int, int>  $variantIds
+     * @return array<int, string>
+     */
+    public function recipesUsing(array $variantIds): array
+    {
+        $variantIds = array_values(array_unique(array_filter(array_map('intval', $variantIds))));
+
+        if ($variantIds === [] || ! $this->isInstalled()) {
+            return [];
+        }
+
+        return ItemComponent::query()
+            ->whereIn('component_variant_id', $variantIds)
+            ->with('parentVariant.item.category')
+            ->orderBy('parent_variant_id')
+            ->get()
+            ->map(fn (ItemComponent $row) => $row->parentVariant === null ? null : $this->nameOf($row->parentVariant))
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Whether any of these variants has a recipe of its own.
+     *
+     * @param  array<int, int>  $variantIds
+     */
+    public function anyHasRecipe(array $variantIds): bool
+    {
+        $variantIds = array_values(array_unique(array_filter(array_map('intval', $variantIds))));
+
+        if ($variantIds === [] || ! $this->isInstalled()) {
+            return false;
+        }
+
+        return ItemComponent::query()->whereIn('parent_variant_id', $variantIds)->exists();
     }
 
     /**
      * Check every row, and resolve each material once.
      *
      * @param  array<int, array<string, mixed>>  $rows
-     * @return array<int, array{component_variant_id: int, quantity: Quantity}>
+     * @return array<int, array{component_variant_id: int, quantity: Quantity, variant: ItemVariant}>
      *
      * @throws RecipeException
      */
@@ -246,18 +367,26 @@ class ItemComponentService
                 throw RecipeException::quantityNotPositive($name);
             }
 
+            // The stock ledger's own rule ({@see StockLedgerService::assertMovable()}),
+            // asked here so a recipe it would refuse is never saved: otherwise
+            // "0.5 PCS" stores happily and every bill for the rewind is refused
+            // at the counter instead.
+            $unit = $variant->item->base_uom;
+
+            if (! $quantity->fitsUnit($unit)) {
+                throw RecipeException::fractionalQuantity($name, $quantity->trimmed(), $unit->label());
+            }
+
             $seen[$variantId] = true;
-            $prepared[] = ['component_variant_id' => $variantId, 'quantity' => $quantity];
+            $prepared[] = ['component_variant_id' => $variantId, 'quantity' => $quantity, 'variant' => $variant];
         }
 
         return $prepared;
     }
 
-    private function nameOf(ItemVariant $variant): string
+    /** What a refusal calls a variant — {@see ItemVariant::fullLabel()}. */
+    public function nameOf(ItemVariant $variant): string
     {
-        $family = $variant->item?->name;
-        $label = $variant->displayLabel();
-
-        return trim(($family === null ? '' : $family.' · ').$label, ' ·');
+        return $variant->fullLabel();
     }
 }

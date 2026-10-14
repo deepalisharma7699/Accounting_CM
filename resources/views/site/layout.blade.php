@@ -25,6 +25,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    @include('partials.favicon')
     <meta name="theme-color" content="#0a0c10">
 
     <title>{{ $meta['title'] }}</title>

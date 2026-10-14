@@ -377,6 +377,13 @@ take it away to protect one line of it.
 **There is no POST, PATCH or DELETE under `/stock`.** That absence is asserted by
 a test, because it is the whole design.
 
+Each `GET /stock` row also carries `purchase_price` and `has_trading_history` —
+whether the variant has moved through anything but an opening declaration. They
+exist for the **Opening-stock template**, which downloads the never-moved
+variants the filters show as a file for the Opening balances card to import; see
+[opening-balances-module.md](opening-balances-module.md#a-third-way-in-the-stock-cards-template).
+It is not the CSV export, whose report headers that importer reads as other columns.
+
 ### Why the stock list pages in PHP
 
 "What is running out" and "what has gone negative" are questions about a sum over

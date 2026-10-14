@@ -276,7 +276,11 @@ class TransactionService
             [
                 'date' => $transaction->date,
                 'notes' => $transaction->notes,
-                'lines' => $transaction->draft_lines ?? [],
+                // Only where the lines *are* the request. For a derived type
+                // `draft_lines` is the template's output, and seeding it here
+                // stored a copy of the old ledger lines inside the new request,
+                // where it described a bill that no longer existed.
+                ...($transaction->type->acceptsRawLines() ? ['lines' => $transaction->draft_lines ?? []] : []),
                 'payments' => $transaction->draft_payments ?? [],
                 // Absent means unchanged, and an explicit null detaches the
                 // party — which is why the merge below is by key rather than a
@@ -322,6 +326,22 @@ class TransactionService
 
         if (array_key_exists('adjustments', $payload) && $type !== TransactionType::StockAdjustment) {
             throw TransactionPayloadMismatchException::adjustmentsNotAccepted($type);
+        }
+
+        // A bill's own terms. Only the sale and purchase templates read them, so
+        // on anything else they would be stored on the draft and never applied.
+        // The vendor's number is narrower still — a purchase's alone — and the
+        // engine would drop it from a sale without a word.
+        $billTerms = ['bill_discount', 'bill_discount_percent', 'settle_total'];
+
+        foreach ($billTerms as $key) {
+            if (array_key_exists($key, $payload) && ! $type->isBillable()) {
+                throw TransactionPayloadMismatchException::billTermsNotAccepted($type, $key);
+            }
+        }
+
+        if (array_key_exists('vendor_invoice_no', $payload) && $type !== TransactionType::Purchase) {
+            throw TransactionPayloadMismatchException::billTermsNotAccepted($type, 'vendor_invoice_no');
         }
     }
 

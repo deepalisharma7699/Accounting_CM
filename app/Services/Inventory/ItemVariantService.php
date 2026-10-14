@@ -5,6 +5,7 @@ namespace App\Services\Inventory;
 use App\Enums\AttributeType;
 use App\Exceptions\Accounting\InvalidItemAttributesException;
 use App\Exceptions\Accounting\ItemInUseException;
+use App\Exceptions\Accounting\RecipeException;
 use App\Exceptions\ConflictException;
 use App\Exceptions\ResourceNotFoundException;
 use App\Models\Item;
@@ -14,7 +15,9 @@ use App\Models\ItemVariant;
 use App\Repositories\Contracts\ItemVariantRepositoryInterface;
 use App\Repositories\Contracts\TransactionLineRepositoryInterface;
 use App\Support\Money;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -70,6 +73,21 @@ class ItemVariantService
         // Items drawer shows what a made thing consumes beside its price, and a
         // request per variant to find out would be N+1 on the list (§7.2).
         return $this->recipes->attachTo($this->variants->forItem($item, $activeOnly));
+    }
+
+    /**
+     * Recipes onto variants that were loaded somewhere else — the catalogue
+     * list and the product, which are what the Items edit form is opened from.
+     *
+     * Without this the form read "nothing yet" for a rewind that had a recipe,
+     * and its next save sent an empty one — a replacement — and wiped it.
+     *
+     * @param  EloquentCollection<int, ItemVariant>  $variants
+     * @return EloquentCollection<int, ItemVariant>
+     */
+    public function attachRecipes(EloquentCollection $variants): EloquentCollection
+    {
+        return $this->recipes->attachTo($variants);
     }
 
     public function find(int $id): ItemVariant
@@ -284,7 +302,21 @@ class ItemVariantService
             throw ItemInUseException::variantHasStockHistory($variant->id, $variant->displayLabel());
         }
 
-        $this->variants->delete($variant);
+        // A material a recipe still consumes. The foreign key refuses this too,
+        // but as a database error; this says which recipe to change first.
+        $usedBy = $this->recipes->recipesUsing([(int) $variant->id]);
+
+        if ($usedBy !== []) {
+            throw RecipeException::materialStillUsed($this->recipes->nameOf($variant), $usedBy);
+        }
+
+        DB::transaction(function () use ($variant): void {
+            // Its own recipe goes with it, row by row so History records it —
+            // the cascade would remove the same rows without a word.
+            $this->recipes->clear($variant);
+
+            $this->variants->delete($variant);
+        });
 
         Log::info('item_variants.deleted', ['variant_id' => $variant->id]);
     }

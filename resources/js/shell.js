@@ -48,7 +48,6 @@ const PAGES = {
     // screen is the second view of this one.
     accounts: () => import('./pages/accounts'),
     audit: () => import('./pages/audit'),
-    bills: () => import('./pages/bills'),
     // Two screens over one `parties` table — both are thin wrappers around
     // ./pages/counterparty, which is where the shared behaviour lives.
     customers: () => import('./pages/customers'),
@@ -70,6 +69,28 @@ const PAGES = {
     vendors: () => import('./pages/vendors'),
     workspace: () => import('./pages/workspace'),
 };
+
+/**
+ * Addresses of modules that were merged into another card, and where each now
+ * lives. A bookmark or an old link to `#bills?doc=88` opens the Expense tab of
+ * Money in & out with the same document, rather than landing on nothing.
+ */
+const MOVED = {
+    bills: { key: 'journal', tab: 'expense' },
+};
+
+/** Follow a moved address to where the module lives now. */
+function resolveMoved(key, search = '') {
+    const moved = MOVED[key];
+
+    if (!moved) return [key, search];
+
+    const params = new URLSearchParams(search);
+
+    params.set('tab', moved.tab);
+
+    return [moved.key, params.toString()];
+}
 
 /** moduleKey -> the mounted root element, attached or detached. */
 const mounted = new Map();
@@ -535,8 +556,8 @@ export function initShell() {
         | The intent rides in the URL too, so Back onto a filtered module
         | restores the filter with it.
         */
-        const [hash = '', search = ''] = location.hash.replace(/^#/, '').split('?');
-        const key = hash || event.state?.module || null;
+        const [hash = '', rawSearch = ''] = location.hash.replace(/^#/, '').split('?');
+        const [key, search] = resolveMoved(hash || event.state?.module || '', rawSearch);
 
         if (!key) {
             goHome({ push: false });
@@ -582,7 +603,8 @@ export function initShell() {
     | either lands here — so the fragment is read once on boot and opened without
     | a second load. `#jobs?overdue=1` carries an intent with it.
     */
-    const [key = '', search = ''] = location.hash.replace(/^#/, '').split('?');
+    const [hashKey = '', hashSearch = ''] = location.hash.replace(/^#/, '').split('?');
+    const [key, search] = resolveMoved(hashKey, hashSearch);
 
     history.replaceState({ module: key || null }, '', location.href);
 

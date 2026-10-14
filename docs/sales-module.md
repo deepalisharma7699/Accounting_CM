@@ -187,7 +187,7 @@ came from exactly as it stands.
 
 | Document | Offered |
 | --- | --- |
-| Draft | Post, Discard |
+| Draft | **Continue editing**, Post, Discard |
 | Posted invoice, nothing collected and nothing credited | Collect payment, Accept return, **Correct**, Repeat, Print, Share, Reverse |
 | Posted invoice, part paid or part credited | Collect payment, Accept return, Repeat, Print, Share, Reverse |
 | Posted invoice, settled | Accept return, Repeat, Print, Share, Reverse |
@@ -196,6 +196,25 @@ came from exactly as it stands.
 The preview a freshly posted invoice lands on offers the same two, gated the same
 way — see [the customer's copy comes up over it](#and-the-customers-copy-comes-up-over-it).
 | Reversed | nothing but Close |
+
+### A draft is continued, not only posted or thrown away
+
+Somebody saves an invoice as a draft because it is not finished, so the drawer's
+first offer is **Continue editing**. It puts the draft back in this module's own
+create form — `components/bill-revision.js`, the same loader a correction uses —
+with everything it was saved with: the party, the date, the notes, each line at
+its rate with its discount in the unit it was typed in and its tax basis, the
+bill discount, the payment split and a short "paid in full", and who did the
+work. A banner names the draft; **Stop editing** leaves it as last saved.
+
+From there the form's own buttons write to that draft: "Save as a draft" rewrites
+it (`PATCH /transactions/{id}`), and "Review & post" rewrites it and then posts
+it (`/post`). It keeps its id, and it takes its number only when it posts. If the
+form is already holding unsaved work, continuing asks before replacing it. If the
+draft was posted or discarded elsewhere in the meantime, the form says which,
+rather than failing with a generic error. The control needs `UPDATE` and `WRITE`
+on transactions — `UPDATE` to rewrite a draft, `WRITE` to reach the create form
+it is finished in.
 
 **Correct disappears the moment anything is against the invoice**, because the
 receipt or the credit note would be left pointing at a cancelled document. The

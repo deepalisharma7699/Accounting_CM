@@ -223,7 +223,8 @@ class PagesRenderTest extends TestCase
 
         foreach (Modules::all() as $key => $module) {
             $this->assertStringContainsString('data-open="'.$key.'"', $content);
-            $this->assertStringContainsString($module['label'], $content);
+            // As Blade writes it — "Money in & out" is served as "&amp;".
+            $this->assertStringContainsString(e($module['label']), $content);
         }
     }
 
@@ -606,8 +607,9 @@ class PagesRenderTest extends TestCase
 
         $this->get('/bills/new')->assertNotFound();
 
-        // `/bills` itself is still the Expenses module's redirect.
-        $this->get('/bills')->assertRedirect('/dashboard#bills');
+        // `/bills` was the Expenses card's address; Expenses is now the
+        // Expense tab of Money in & out, and the old address follows it there.
+        $this->get('/bills')->assertRedirect('/dashboard#journal?tab=expense');
     }
 
     /* ---------------------------------------------------------------------
@@ -1401,25 +1403,32 @@ class PagesRenderTest extends TestCase
     | ------------------------------------------------------------------ */
 
     /**
-     * Three §2A workspaces under one card, built from the shared renderer.
+     * Six §2A workspaces under one card, built from the shared renderer.
      *
-     * Receipt, Payment and Journal voucher are three write acts a workshop only
-     * ever does one after another, so they are one card with three sections —
-     * the Staff shape. Each carries exactly one `[data-ws-form]` and one
-     * `[data-ws-list]`, which is what `mountWorkspace()` looks for and what makes
-     * the swap, the switch control and the count badge free.
+     * Expense, Pay a vendor, Receipt, Staff advance, Journal voucher and
+     * Personal are six write acts on Money in & out — the Staff shape. Each
+     * carries exactly one `[data-ws-form]` and one `[data-ws-list]`, which is
+     * what `mountWorkspace()` looks for and what makes the swap, the switch
+     * control and the count badge free.
      */
-    public function test_the_transactions_module_declares_three_sections_each_with_a_form_and_a_list(): void
+    public function test_money_in_and_out_declares_six_sections_each_with_a_form_and_a_list(): void
     {
         $content = $this->get('/modules/journal')->assertOk()->getContent();
 
-        foreach (['receipt', 'payment', 'journal'] as $section) {
+        foreach (['expense', 'payment', 'receipt', 'advance', 'journal', 'personal'] as $section) {
             $this->assertStringContainsString('data-txn-section="'.$section.'"', $content);
             $this->assertStringContainsString('data-txn-tab="'.$section.'"', $content);
         }
 
-        $this->assertSame(3, substr_count($content, 'data-ws-form'));
-        $this->assertSame(3, substr_count($content, 'data-ws-list'));
+        $this->assertSame(6, substr_count($content, 'data-ws-form'));
+        $this->assertSame(6, substr_count($content, 'data-ws-list'));
+
+        // Expense is first, and is the tab the card is served on.
+        $this->assertLessThan(
+            strpos($content, 'data-txn-tab="payment"'),
+            strpos($content, 'data-txn-tab="expense"'),
+        );
+        $this->assertMatchesRegularExpression('/data-txn-tab="expense" aria-selected="true"/', $content);
 
         // The heading and the one control that swaps the surfaces belong to the
         // workspace, so the markup must not carry a second one of its own
@@ -1427,9 +1436,52 @@ class PagesRenderTest extends TestCase
         $this->assertStringNotContainsString('<h1', $content);
         $this->assertStringNotContainsString('<h2', $content);
 
-        // Receipt is the section the module lands on, and exactly one tab is
-        // selected when it is served.
+        // Exactly one tab is selected when it is served.
         $this->assertSame(1, substr_count($content, 'aria-selected="true"'));
+    }
+
+    /**
+     * The two tabs not every holder of the card may use are gated on their own
+     * grant: the staff advance on READ:STAFF — which guards what people are
+     * paid, and which a data-entry clerk deliberately lacks — and the personal
+     * diary on PERSONAL_EXPENSES, which only OWNER is given.
+     */
+    public function test_the_advance_and_personal_tabs_are_gated_on_their_own_grant(): void
+    {
+        $content = $this->get('/modules/journal')->assertOk()->getContent();
+
+        $this->assertMatchesRegularExpression(
+            '/data-txn-tab="advance"[^>]*data-requires-permission="READ:STAFF"/',
+            $content,
+        );
+        $this->assertMatchesRegularExpression(
+            '/data-txn-tab="personal"[^>]*data-requires-permission="READ:PERSONAL_EXPENSES"/',
+            $content,
+        );
+
+        // The personal categories come from GET /personal-expenses/meta, never
+        // from this template.
+        $this->assertStringNotContainsString('Household &amp; groceries', $content);
+    }
+
+    /**
+     * The staff advance is one partial over one component, mounted by two
+     * cards. Two copies would be two places the confirmation, the recovery
+     * wording and the cancel rule could drift (§5.1).
+     */
+    public function test_the_staff_advance_form_is_one_partial_rendered_on_two_cards(): void
+    {
+        $money = $this->get('/modules/journal')->assertOk()->getContent();
+        $staff = $this->get('/modules/staff')->assertOk()->getContent();
+
+        foreach ([$money, $staff] as $content) {
+            $this->assertSame(1, substr_count($content, 'data-advance-form'));
+            $this->assertSame(1, substr_count($content, 'data-advances-body'));
+        }
+
+        // Distinct ids, so a <label for> never points into the other card.
+        $this->assertStringContainsString('id="money-advance-employee"', $money);
+        $this->assertStringContainsString('id="staff-advance-employee"', $staff);
     }
 
     /**
@@ -1453,10 +1505,10 @@ class PagesRenderTest extends TestCase
         $this->assertSame(1, substr_count($content, 'id="receipt-form"'));
         $this->assertSame(1, substr_count($content, 'id="payment-form"'));
 
-        // Both settlement forms and the voucher take a date and a note, so each
-        // field is written three times over the module and never twice.
+        // Every one of the six forms takes a date and a note, so each field is
+        // written six times over the module and never twice in one form.
         foreach (['date', 'notes'] as $field) {
-            $this->assertSame(3, substr_count($content, 'name="'.$field.'"'));
+            $this->assertSame(6, substr_count($content, 'name="'.$field.'"'));
         }
 
         /*
@@ -1560,15 +1612,20 @@ class PagesRenderTest extends TestCase
         $this->assertTrue($declared['journal']['workspace']);
 
         // The key is the module's address, and `journal` is what it has always
-        // been — the label says Transactions, which is what a workshop looks for.
+        // been — the label says Money in & out, which is what a workshop looks for.
+        $this->assertSame('Money in & out', $declared['journal']['label']);
         $this->get('/journal')->assertRedirect('/dashboard#journal');
+
+        // Expenses was merged in rather than kept as a second card answering
+        // the same question.
+        $this->assertArrayNotHasKey('bills', $declared);
+        $this->get('/modules/bills')->assertNotFound();
     }
 
     /*
-    | Expenses — C2. Converted, so it is fetched through the fragment route
-    | rather than rendered directly: that asserts the route as well as the
-    | markup, and a module whose `enabled` flag was never flipped answers 404
-    | here.
+    | Expenses — C2, now the Expense tab of Money in & out. Fetched through the
+    | card's fragment route; the expense section is the first of its six, so
+    | the first form and list surfaces in the markup are the expense's.
     */
 
     /**
@@ -1581,7 +1638,7 @@ class PagesRenderTest extends TestCase
      */
     public function test_the_expenses_module_declares_a_form_surface_and_a_list_surface(): void
     {
-        $content = $this->get('/modules/bills')->assertOk()->getContent();
+        $content = $this->get('/modules/journal')->assertOk()->getContent();
 
         $this->assertStringContainsString('data-ws-form', $content);
         $this->assertStringContainsString('data-ws-list', $content);
@@ -1618,7 +1675,7 @@ class PagesRenderTest extends TestCase
      */
     public function test_the_expenses_module_offers_the_whole_expense_and_lists_nothing_else(): void
     {
-        $view = $this->get('/modules/bills')->assertOk();
+        $view = $this->get('/modules/journal')->assertOk();
 
         foreach (['date', 'account_id', 'amount', 'gst_amount', 'notes'] as $field) {
             $view->assertSee('name="'.$field.'"', escape: false);

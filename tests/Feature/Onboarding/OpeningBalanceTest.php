@@ -474,6 +474,170 @@ class OpeningBalanceTest extends TestCase
         $this->assertBooksBalance($this->tenant, 'after declaring one variant by id');
     }
 
+    /* ---------------------------------------------------------------------
+     | The Stock card's template
+     |-------------------------------------------------------------------- */
+
+    /**
+     * The file the Stock card downloads, filled in for one of its rows.
+     *
+     * Its headers are the template's own — `opening_qty`, `item`, `unit` and the
+     * rest — and it must resolve by `variant_id` alone: two variants sharing a
+     * name is exactly the catalogue somebody exports hundreds of rows from. The
+     * row nobody counted is dropped rather than refused, purchase price and all.
+     */
+    #[Test]
+    public function the_stock_cards_template_declares_by_variant_id_and_ignores_rows_left_empty(): void
+    {
+        [$first, $second] = $this->twinVariants();
+
+        $import = $this->import(implode("\n", [
+            'kind,variant_id,item,variant,sku,unit,opening_qty,unit_cost',
+            "stock,{$first->id},Ball Bearing,Ball Bearing,,pcs,,95.00",
+            "stock,{$second->id},Ball Bearing,Ball Bearing,,pcs,12,95.00",
+        ]));
+
+        $this->assertSame(1, $import->imported_count);
+
+        $this->actingForTenant($this->tenant, function () use ($second) {
+            $movement = StockMovement::query()->sole();
+
+            $this->assertSame($second->id, $movement->variant_id);
+            $this->assertSame('12.000', (string) $movement->quantity);
+        });
+
+        $this->assertSame('1140.00', $this->balanceOf($this->tenant, SystemAccount::Inventory));
+    }
+
+    /**
+     * A template in which nothing was filled in declares nothing, and says so
+     * rather than posting an empty receipt.
+     */
+    #[Test]
+    public function a_template_with_no_quantity_filled_in_is_nothing_to_import(): void
+    {
+        $variant = $this->variantFor($this->tenant, 'part');
+
+        $this->expectException(OpeningBalanceException::class);
+
+        $this->plan(implode("\n", [
+            'kind,variant_id,item,variant,sku,unit,opening_qty,unit_cost',
+            "stock,{$variant->id},Bearing,Bearing,,pcs,,95.00",
+        ]));
+    }
+
+    /**
+     * Opening stock is not declared beneath a shelf that has already moved.
+     *
+     * The case this exists for: on a live workshop "out of stock" is as often
+     * *sold out* as *never entered*. A variant bought and then sold back to
+     * nought looks exactly like one nobody ever entered, and an opening figure
+     * on it would be stock that was never there — dated at go-live, beneath
+     * sales that already took their cost.
+     */
+    #[Test]
+    public function a_variant_that_has_already_moved_is_refused_and_points_at_a_count(): void
+    {
+        $variant = $this->variantFor($this->tenant, 'part');
+
+        $this->receiveStock($this->tenant, $variant, '5', '100.00');
+        $this->issueStock($this->tenant, $variant, '5');
+
+        $plan = $this->planRows([[
+            'kind' => 'stock', 'variant_id' => $variant->id, 'quantity' => '10', 'unit_cost' => '120.00',
+        ]]);
+
+        $this->assertTrue($plan->hasErrors());
+        $this->assertStringContainsString('Record a count', (string) $plan->rows[0]->reason);
+    }
+
+    /**
+     * One shelf takes one opening figure per file. Nothing is posted until every
+     * row has resolved, so the guard against a second declaration cannot be the
+     * ledger — two templates pasted together would otherwise post twice.
+     */
+    #[Test]
+    public function a_variant_declared_twice_in_one_file_is_refused_on_the_second_row(): void
+    {
+        $variant = $this->variantFor($this->tenant, 'part');
+
+        $plan = $this->plan(implode("\n", [
+            'kind,variant_id,item,variant,sku,unit,opening_qty,unit_cost',
+            "stock,{$variant->id},Bearing,Bearing,,pcs,4,95.00",
+            "stock,{$variant->id},Bearing,Bearing,,pcs,6,95.00",
+        ]));
+
+        $this->assertTrue($plan->hasErrors());
+        $this->assertSame('ready', $plan->rows[0]->outcome->value);
+        $this->assertStringContainsString('already declared on line 2', (string) $plan->rows[1]->reason);
+    }
+
+    /**
+     * The same holds for a product the file is creating: the preview gives the
+     * new variant a placeholder id and catches the repeat there, rather than
+     * promising a post the commit would double.
+     */
+    #[Test]
+    public function a_new_product_named_twice_in_one_file_is_refused_in_the_preview(): void
+    {
+        $plan = $this->plan(<<<'CSV'
+        kind,name,variant,type,quantity,unit_cost
+        stock,Ball Bearing,6204,part,10,120.00
+        stock,Ball Bearing,6204,part,5,120.00
+        CSV);
+
+        $this->assertTrue($plan->hasErrors());
+        $this->assertStringContainsString('already declared on line 2', (string) $plan->rows[1]->reason);
+    }
+
+    /**
+     * Reversing an opening declaration is not a trading history.
+     *
+     * Both halves are typed `opening` on the transaction, so the variant is
+     * still one nobody has bought, sold or counted — what the row meets is the
+     * existing per-variant guard (skipped), never the new refusal.
+     */
+    #[Test]
+    public function a_reversed_opening_declaration_is_not_a_trading_history(): void
+    {
+        $variant = $this->variantFor($this->tenant, 'part');
+        $row = fn (string $quantity) => [
+            'kind' => 'stock', 'variant_id' => $variant->id, 'quantity' => $quantity, 'unit_cost' => '120.00',
+        ];
+
+        $this->importRows([$row('10')]);
+
+        $this->actingForTenant($this->tenant, fn () => $this->engine()->reverse(
+            Transaction::query()->where('type', TransactionType::Opening->value)->sole(),
+            reason: 'Counted wrong',
+            actor: $this->owner,
+        ));
+
+        $plan = $this->planRows([$row('8')]);
+
+        $this->assertFalse($plan->hasErrors(), (string) $plan->rows[0]->reason);
+        $this->assertTrue($this->actingForTenant(
+            $this->tenant,
+            fn () => $this->stock()->tradedVariantIds([$variant->id]) === [],
+        ));
+    }
+
+    /**
+     * A row naming its variant by id needs no name — somebody who deleted the
+     * template's item column has still said exactly where the stock goes.
+     */
+    #[Test]
+    public function a_row_with_a_variant_id_needs_no_name(): void
+    {
+        $variant = $this->variantFor($this->tenant, 'part');
+
+        $plan = $this->planRows([[
+            'kind' => 'stock', 'variant_id' => $variant->id, 'quantity' => '3', 'unit_cost' => '50.00',
+        ]]);
+
+        $this->assertFalse($plan->hasErrors(), (string) $plan->rows[0]->reason);
+    }
+
     /**
      * Two variants under one product, sharing a name — the shape the Items
      * drawer is looking at when it offers this.

@@ -1,5 +1,6 @@
 import auth from '../auth-client';
 import { mountPaymentRows } from '../components/payment-rows';
+import { mountStaffAdvances } from '../components/staff-advance';
 import { can } from '../permissions';
 import { clearModuleParams, moduleParams, registerEscape } from '../shell';
 import {
@@ -57,7 +58,6 @@ const FETCH_SIZE = 200;
 const MAX_PAGES = 10;
 
 const PEOPLE_COLUMNS = 7;
-const ADVANCE_COLUMNS = 7;
 const RUN_COLUMNS = 7;
 
 /* -------------------------------------------------------------------------
@@ -104,12 +104,6 @@ const state = {
         openRun: null,
     },
 
-    advances: {
-        rows: [],
-        outstanding: {},
-        employeeId: '',
-    },
-
     openEmployee: null,
 };
 
@@ -125,13 +119,13 @@ let root = null;
 let employeeForm = null;
 let employeeFormSlot = null;
 let employeeModalSlot = null;
-let advanceForm = null;
 
 /** sectionKey -> { root, form, list, workspace, opened } */
 const sections = {};
 
 let activeSection = 'people';
-let advancePayments = null;
+/** The Advances tab — components/staff-advance.js, mounted on first open. */
+let advances = null;
 let payrollPayments = null;
 
 const inForm = (key, selector) => $(selector, sections[key].form);
@@ -249,7 +243,7 @@ async function ensureEmployees({ force = false } = {}) {
     state.employees = rows;
     state.employeesLoaded = true;
 
-    paintEmployeePickers();
+    advances?.paintPickers();
 }
 
 /** Everybody still on the payroll, for the pickers that write something. */
@@ -1601,7 +1595,7 @@ async function postPayroll() {
             loadSheet(),
             state.employeesLoaded ? ensureEmployees({ force: true }) : Promise.resolve(),
             sections.payroll.workspace?.hasList() ? loadRuns() : Promise.resolve(),
-            sections.advances.opened ? loadAdvances() : Promise.resolve(),
+            advances ? advances.load() : Promise.resolve(),
         ]);
 
         if (sections.people.workspace?.hasList()) renderPeople();
@@ -1799,7 +1793,7 @@ async function reverseRun() {
         await Promise.all([
             loadRuns(),
             state.employeesLoaded ? ensureEmployees({ force: true }) : Promise.resolve(),
-            sections.advances.opened ? loadAdvances() : Promise.resolve(),
+            advances ? advances.load() : Promise.resolve(),
         ]);
 
         if (sections.people.workspace?.hasList()) renderPeople();
@@ -1833,283 +1827,6 @@ function exportRun() {
     });
 
     downloadCsv(`payroll-${run.period}.csv`, rows);
-}
-
-/* -------------------------------------------------------------------------
- | Section 4 — Advances
- | ---------------------------------------------------------------------- */
-
-function paintEmployeePickers() {
-    const pickers = [
-        { select: advanceForm ? $('#advance-employee', advanceForm) : null, blank: 'Choose somebody…', activeOnly: true },
-        { select: sections.advances?.list ? inList('advances', '#advances-filter-employee') : null, blank: 'Everybody', activeOnly: false },
-    ];
-
-    pickers.forEach(({ select, blank, activeOnly }) => {
-        if (!select) return;
-
-        const previous = select.value;
-        const rows = activeOnly ? activeEmployees() : state.employees;
-
-        select.innerHTML = [`<option value="">${esc(blank)}</option>`].concat(
-            rows.map((row) => `<option value="${row.id}">${esc(row.name)}</option>`),
-        ).join('');
-
-        select.value = previous;
-    });
-
-    paintAdvanceHint();
-}
-
-/**
- * What is already out with the person the form is pointed at.
- *
- * Stated at the moment it can still change the decision, which is the same
- * reasoning the bill form's party picker follows: somebody about to hand over
- * another ₹5,000 should be able to see the ₹8,000 that has not come back yet
- * without opening a second screen.
- */
-function paintAdvanceHint() {
-    if (!advanceForm) return;
-
-    const hint = $('#advance-outstanding-hint', advanceForm);
-    const id = $('#advance-employee', advanceForm).value;
-
-    if (!id) {
-        hint.textContent = '';
-        hint.className = 'mt-1.5 text-xs text-muted-foreground';
-
-        return;
-    }
-
-    const employee = state.employees.find((row) => String(row.id) === String(id));
-    const outstanding = Number(employee?.advance?.outstanding ?? 0);
-
-    hint.className = outstanding > 0
-        ? 'mt-1.5 text-xs font-medium text-amber-600'
-        : 'mt-1.5 text-xs text-muted-foreground';
-
-    hint.textContent = outstanding > 0
-        ? `${formatMoney(employee.advance.outstanding)} is already out with them.`
-        : 'Nothing is out with them at the moment.';
-}
-
-async function submitAdvance(event) {
-    event.preventDefault();
-
-    clearFormErrors(advanceForm);
-
-    const employeeId = $('#advance-employee', advanceForm).value;
-
-    if (!employeeId) {
-        showFormErrors(advanceForm, {
-            fields: { employee_id: ['Say who the advance is for.'] },
-            message: 'Say who the advance is for.',
-        });
-
-        return;
-    }
-
-    const split = advancePayments.value();
-    const total = advancePayments.total();
-
-    if (!split.length) {
-        showFormMessage(advanceForm, 'Enter how much is being handed over.');
-
-        return;
-    }
-
-    const employee = state.employees.find((row) => String(row.id) === String(employeeId));
-
-    const confirmed = await confirmAction({
-        title: `Pay ${formatMoney(total)} to ${employee?.name ?? 'them'}?`,
-        body: 'This posts to the ledger straight away — an advance is cash in somebody’s hand. '
-            + 'It comes back off the next payroll, and an advance typed wrong is cancelled rather than edited.',
-        confirmLabel: 'Pay advance',
-        tone: 'primary',
-    });
-
-    if (!confirmed) return;
-
-    setSubmitting(advanceForm, true);
-
-    try {
-        const payload = await auth.call('/staff/advances', {
-            method: 'POST',
-            body: {
-                employee_id: Number(employeeId),
-                date: $('#advance-date', advanceForm).value || null,
-                payments: split,
-                notes: $('#advance-notes', advanceForm).value.trim() || null,
-                client_ref: state.advances.clientRef,
-            },
-        });
-
-        toast(payload.message ?? 'Advance paid.');
-
-        // A fresh reference for the next advance: reusing this one would have
-        // the next payment return this one's voucher.
-        state.advances.clientRef = crypto.randomUUID();
-
-        if (sections.advances.workspace?.hasList()) await loadAdvances();
-        else sections.advances.workspace?.refresh();
-
-        await ensureEmployees({ force: true });
-
-        if (sections.people.workspace?.hasList()) renderPeople();
-
-        // §2A.8 — the form stays put, cleared for the next one.
-        resetAdvanceForm();
-    } catch (error) {
-        showFormErrors(advanceForm, error);
-    } finally {
-        setSubmitting(advanceForm, false);
-    }
-}
-
-function resetAdvanceForm() {
-    clearFormErrors(advanceForm);
-
-    $('#advance-employee', advanceForm).value = '';
-    $('#advance-date', advanceForm).value = today();
-    $('#advance-notes', advanceForm).value = '';
-
-    advancePayments?.reset();
-    paintAdvanceHint();
-
-    $('#advance-employee', advanceForm).focus();
-}
-
-async function loadAdvances() {
-    const body = inList('advances', '#advances-body');
-    body.innerHTML = tableMessage(ADVANCE_COLUMNS, 'Loading advances…');
-
-    try {
-        const query = state.advances.employeeId
-            ? `?employee_id=${state.advances.employeeId}&per_page=100`
-            : '?per_page=100';
-
-        const payload = await auth.call(`/staff/advances${query}`);
-
-        state.advances.rows = payload.data ?? [];
-        state.advances.outstanding = payload.meta?.outstanding ?? {};
-
-        renderAdvances();
-    } catch (error) {
-        body.innerHTML = tableMessage(ADVANCE_COLUMNS, error.message, 'error');
-    }
-}
-
-function renderAdvances() {
-    const body = inList('advances', '#advances-body');
-    const rows = state.advances.rows;
-
-    if (!rows.length) {
-        body.innerHTML = tableMessage(ADVANCE_COLUMNS, 'No advances have been paid.');
-        inList('advances', '#advances-summary').textContent = '';
-        sections.advances.workspace?.refresh();
-        paintTabCounts();
-
-        return;
-    }
-
-    const mayReverse = can('UPDATE', 'STAFF');
-
-    body.innerHTML = rows.map((row) => {
-        const reversed = row.status === 'reversed';
-        const outstanding = state.advances.outstanding[row.employee_id]?.outstanding;
-
-        return `
-            <tr class="${reversed ? 'opacity-60' : ''}">
-                <td class="px-4 py-3 text-[0.8125rem] whitespace-nowrap text-muted-foreground">
-                    ${esc(formatDate(row.date))}
-                </td>
-                <td class="px-4 py-3 text-[0.8125rem] whitespace-nowrap text-muted-foreground">
-                    ${esc(row.doc_no ?? '—')}
-                </td>
-                <td class="px-4 py-3 text-[0.875rem] font-semibold text-foreground">
-                    ${esc(row.employee?.name ?? '—')}
-                </td>
-                <td class="px-4 py-3 text-right text-[0.875rem] font-semibold whitespace-nowrap
-                           ${reversed ? 'text-muted-foreground line-through' : 'text-foreground'}">
-                    ${esc(formatMoney(row.total))}
-                </td>
-                <td class="px-4 py-3 text-right text-[0.8125rem] whitespace-nowrap text-muted-foreground">
-                    ${outstanding !== undefined && Number(outstanding) > 0
-                        ? esc(formatMoney(outstanding))
-                        : '—'}
-                </td>
-                <td class="px-4 py-3 text-[0.8125rem] text-muted-foreground">
-                    ${reversed
-                        ? '<span class="badge bg-muted text-secondary-foreground">Cancelled</span> '
-                        : ''}${esc(row.notes ?? '')}
-                </td>
-                <td class="px-4 py-3">
-                    <div class="flex justify-end gap-1">
-                        ${!reversed && mayReverse
-                            ? `<button type="button" class="btn btn-ghost btn-icon hover:!text-rose-600"
-                                       data-reverse-advance="${row.id}" title="Cancel this advance"
-                                       aria-label="Cancel this advance">${iconUndo}</button>`
-                            : '<span class="text-xs text-muted-foreground">—</span>'}
-                    </div>
-                </td>
-            </tr>`;
-    }).join('');
-
-    const live = rows.filter((row) => row.status !== 'reversed');
-    const outTotal = Object.values(state.advances.outstanding)
-        .reduce((sum, position) => sum + Number(position.outstanding ?? 0), 0);
-
-    inList('advances', '#advances-summary').textContent =
-        `${live.length} advance${live.length === 1 ? '' : 's'} · `
-        + `${formatMoney(outTotal.toFixed(2))} still to come back`;
-
-    sections.advances.workspace?.refresh();
-    paintTabCounts();
-}
-
-async function reverseAdvance(id) {
-    const advance = state.advances.rows.find((row) => String(row.id) === String(id));
-    if (!advance) return;
-
-    const confirmed = await confirmAction({
-        title: 'Cancel this advance?',
-        body: `${formatMoney(advance.total)} to ${advance.employee?.name ?? 'them'} is cancelled by its `
-            + 'mirror image in the ledger — nothing is deleted from the books. It stops counting against '
-            + 'them immediately, so the next payroll will not try to recover it.',
-        confirmLabel: 'Cancel the advance',
-    });
-
-    if (!confirmed) return;
-
-    try {
-        const payload = await auth.call(`/staff/advances/${id}/reverse`, { method: 'POST', body: {} });
-
-        toast(payload.message ?? 'Advance cancelled.');
-
-        await Promise.all([loadAdvances(), ensureEmployees({ force: true })]);
-
-        if (sections.people.workspace?.hasList()) renderPeople();
-    } catch (error) {
-        toast(error.message, 'error');
-    }
-}
-
-function exportAdvances() {
-    const rows = [['Date', 'Voucher', 'Who', 'Amount', 'Status', 'Note']];
-
-    state.advances.rows.forEach((row) => {
-        rows.push([
-            row.date,
-            row.doc_no ?? '',
-            row.employee?.name ?? '',
-            row.total,
-            row.status_label ?? row.status,
-            row.notes ?? '',
-        ]);
-    });
-
-    downloadCsv(`staff-advances-${today()}.csv`, rows);
 }
 
 /* -------------------------------------------------------------------------
@@ -2333,7 +2050,6 @@ const svg = (paths, size = 16) =>
 const iconPencil = svg('<path d="M21.17 6.83a2.83 2.83 0 0 0-4-4L3.5 16.5 2 22l5.5-1.5z"/><path d="m15 5 4 4"/>');
 const iconTrash = svg('<path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>'
     + '<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>');
-const iconUndo = svg('<path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/>');
 const iconArrowUp = svg('<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>', 12);
 const iconArrowDown = svg('<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>', 12);
 
@@ -2343,16 +2059,15 @@ const iconArrowDown = svg('<path d="M12 5v14"/><path d="m19 12-7 7-7-7"/>', 12);
 
 function paintTabCounts() {
     const people = $('[data-count="people"]', root);
-    const advances = $('[data-count="advances"]', root);
+    const advanceCount = $('[data-count="advances"]', root);
 
     const here = state.employees.filter((row) => row.is_active).length;
 
     if (people) people.textContent = state.employeesLoaded ? String(here) : '';
 
-    const out = Object.values(state.advances.outstanding)
-        .reduce((sum, position) => sum + Number(position.outstanding ?? 0), 0);
+    const out = advances?.outstandingTotal() ?? 0;
 
-    if (advances) advances.textContent = out > 0 ? formatMoney(out.toFixed(2)) : '';
+    if (advanceCount) advanceCount.textContent = out > 0 ? formatMoney(out.toFixed(2)) : '';
 }
 
 /**
@@ -2411,13 +2126,10 @@ export default async function initStaff() {
         };
     });
 
-    advanceForm = $('#advance-form', sections.advances.form);
-
     // A reference per document, generated when the operator starts writing it —
     // not per request. A value regenerated on retry would make the second
     // attempt look like a different run, which is exactly what it must not.
     state.payroll.clientRef = crypto.randomUUID();
-    state.advances.clientRef = crypto.randomUUID();
 
     // Fetched before anything mounts: the section the module lands on is a form
     // that needs all of it.
@@ -2578,9 +2290,7 @@ function initPeopleSection() {
         hideModal('#employee-drawer');
         await openSection('advances');
 
-        sections.advances.workspace?.showForm();
-        $('#advance-employee', advanceForm).value = String(employee.id);
-        paintAdvanceHint();
+        advances?.preselect(employee.id);
     });
 
     /* The form. */
@@ -2840,53 +2550,29 @@ function initPayrollSection() {
 function initAdvancesSection() {
     const section = sections.advances;
 
-    advanceForm.addEventListener('submit', submitAdvance);
-    $('[data-advance-clear]', advanceForm).addEventListener('click', resetAdvanceForm);
-    $('#advance-employee', advanceForm).addEventListener('change', paintAdvanceHint);
-
-    inList('advances', '#advances-filter-employee').addEventListener('change', (event) => {
-        state.advances.employeeId = event.target.value;
-        loadAdvances();
-    });
-
-    inList('advances', '#advances-export').addEventListener('click', exportAdvances);
-
-    inList('advances', '#advances-body').addEventListener('click', (event) => {
-        const button = event.target.closest('[data-reverse-advance]');
-
-        if (button) reverseAdvance(button.dataset.reverseAdvance);
-    });
-
+    /*
+    | The shared component — the same one Money in & out mounts as its Staff
+    | advance tab. This card already holds the staff list, so it lends it rather
+    | than letting the component fetch a second copy.
+    */
     section.mount = async () => {
-        $('#advance-date', advanceForm).value = today();
-
-        advancePayments = mountPaymentRows($('#advance-payments-host', advanceForm), {
-            modes: state.meta.modes,
-            heading: 'Handed over',
-            verb: 'paid',
-            // The split *is* the amount — there is no document to settle against,
-            // so the state chips have nothing to mean. See payment-rows.js.
-            settlesADocument: false,
-        });
-
-        section.workspace = mountWorkspace(section.root, {
+        advances = await mountStaffAdvances(section.root, {
             key: 'staff:advances',
-            title: 'Advances',
-            formSubtitle: 'Money against a salary not yet earned. It comes back off the next payroll.',
-            listSubtitle: (count) => (count === null
-                ? 'What has been handed out, and what is still to come back.'
-                : `${count} advance${count === 1 ? '' : 's'}.`),
-            createLabel: 'Pay an advance',
-            count: () => (state.advances.rows.length ? state.advances.rows.length : null),
-            canCreate: can('WRITE', 'STAFF'),
-            onShowList: loadAdvances,
-            onShowForm: () => {},
+            modes: state.meta.modes,
+            employees: () => state.employees,
+            refreshEmployees: () => ensureEmployees({ force: true }),
+            onChange: () => {
+                if (sections.people.workspace?.hasList()) renderPeople();
+                paintTabCounts();
+            },
         });
+
+        section.workspace = advances.workspace;
 
         // The picker needs the staff list, and the list may not have been
         // fetched — somebody can open Advances without ever opening Staff.
         await ensureEmployees();
-        paintEmployeePickers();
+        advances.paintPickers();
     };
 }
 

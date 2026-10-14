@@ -137,6 +137,11 @@ const WRITES = [
 
     [/^\/accounts(\/|\?|$)/, ['ledger']],
 
+    // The owner's personal diary. Listed so the omission reads as a decision:
+    // it is not the workshop's money, so a write here leaves every held screen
+    // — the ledger, every report, every list — exactly as true as it was.
+    [/^\/personal-expenses(\/|\?|$)/, []],
+
     /*
     | Which cards sit at the top of home. Listed *ahead* of `/workspace` below,
     | and the order is the whole reason this row exists: first match wins, so

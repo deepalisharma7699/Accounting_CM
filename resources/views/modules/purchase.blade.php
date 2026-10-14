@@ -41,6 +41,11 @@
             came back has to be able to tell at a glance that pressing "Review &
             post" will reverse PUR/26-27/1002 rather than write a new bill —
             which is a materially different act on the same button.
+
+            The same banner says so when a saved draft has been brought back to
+            be finished: both buttons then write to that draft rather than to a
+            new document. `bill-revision.js` shows whichever `data-revise-for`
+            copy is true.
         --}}
         <div data-revise-banner
              class="mb-4 hidden items-start gap-3 rounded-[10px] border border-amber-200 bg-amber-50 px-4 py-3">
@@ -48,15 +53,21 @@
 
             <div class="flex-1 text-[0.8125rem] text-amber-900">
                 <p class="font-semibold" data-revise-title></p>
-                <p class="mt-1">
+                <p class="mt-1" data-revise-for="correct">
                     Posting this reverses the original and issues the corrected bill in its place. Both
                     documents stay on the record — nothing is erased, and the stock moves by the difference
                     between them.
                 </p>
+                <p class="mt-1 hidden" data-revise-for="draft">
+                    "Save as a draft" saves your changes to this draft, and "Review &amp; post" posts it —
+                    it gets its number then, and only then. Until you do either, the draft stays exactly as
+                    it was last saved.
+                </p>
             </div>
 
             <button type="button" data-revise-cancel class="btn btn-secondary btn-sm shrink-0">
-                Cancel the correction
+                <span data-revise-for="correct">Cancel the correction</span>
+                <span class="hidden" data-revise-for="draft">Stop editing</span>
             </button>
         </div>
 
@@ -72,7 +83,7 @@
             <div class="search-pill min-w-56 flex-1">
                 <x-icon name="search" :size="16" />
                 <input type="search" data-filter-search class="w-full bg-transparent text-sm outline-none"
-                       placeholder="Bill number, supplier or note…" aria-label="Search purchases">
+                       placeholder="Bill no., vendor invoice no., supplier or note…" aria-label="Search purchases">
             </div>
 
             {{-- Debit notes are listed with the bills they came off rather than

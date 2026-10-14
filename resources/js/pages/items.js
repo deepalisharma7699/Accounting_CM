@@ -1281,11 +1281,14 @@ function drawerVariants(item) {
                 | A variant with a position has had something move through it,
                 | and what it needs then is a count — this would be declaring an
                 | opening figure on top of a shelf that already has a history.
-                | Once anything has been declared the server skips it anyway
-                | (`hasOpeningStock`), so the button going quiet at nought is the
-                | client agreeing with the rule rather than inventing one.
+                | So does one that sold out back to nought, which is what
+                | `has_trading_history` catches: the server refuses both
+                | (`hasOpeningStock`, `hasTradingHistory`), so the button going
+                | quiet is the client agreeing with the rule rather than
+                | inventing one.
                 */
                 mayOpen && variant.is_active && !hasPosition(item, variant)
+                    && !positionFor(item.id, variant.id)?.has_trading_history
                     ? `<button type="button" class="btn btn-ghost btn-icon" data-opening-stock="${variant.id}"
                                title="Declare opening stock" aria-label="Declare opening stock">${iconOpening}</button>`
                     : '',
@@ -1802,7 +1805,7 @@ function paintVariantRecipe(block) {
 
     if (!section) return;
 
-    const offered = !formTracksStock();
+    const offered = !formTracksStock() && block.recipeKnown !== false;
 
     section.classList.toggle('hidden', !offered);
 
@@ -1870,7 +1873,7 @@ function paintRecipeCost(block) {
 
     slot.classList.remove('hidden');
     slot.textContent = unpriced > 0
-        ? `Materials ≈ ${formatMoney(total)} at today's cost — ${unpriced} of them has no cost on the shelf yet.`
+        ? `Materials ≈ ${formatMoney(total)} at today's cost — ${unpriced} of them ${unpriced === 1 ? 'has' : 'have'} no cost on the shelf yet.`
         : `Materials ≈ ${formatMoney(total)} at today's cost.`;
 }
 
@@ -2030,9 +2033,12 @@ function addVariantBlock({ variant = null, focus = false } = {}) {
     block.variantRecord = variant;
     block.dataset.variantId = variant ? String(variant.id) : '';
 
-    // The recipe as the server last sent it. Absent rather than empty where the
-    // installation has no recipes at all (§4.6), which is the same thing as
-    // "this product consumes nothing" as far as this screen is concerned.
+    // The recipe as the server last sent it. A variant that arrived *without*
+    // one — a server that has not run the schema step (§4.6) — is not the same
+    // as one that consumes nothing: its recipe is unknown here, so the section
+    // is not offered and nothing is sent. Sending `[]` for it would be a
+    // replacement, and would wipe whatever is stored.
+    block.recipeKnown = !variant || Array.isArray(variant.components);
     block.recipeRows = (variant?.components ?? []).map(recipeRowFrom);
 
     if (variant) {
@@ -2405,6 +2411,16 @@ async function submitItem() {
         }
     }
 
+    // Before anything is sent, on an edit as well as a create: an edit writes
+    // the product first, and a recipe refused after that is half a save.
+    const recipe = recipeProblem();
+
+    if (recipe) {
+        showFormErrors(form, recipe);
+
+        return;
+    }
+
     setSubmitting(form, true);
 
     try {
@@ -2491,12 +2507,21 @@ function variantPayload(block, { creating = false } = {}) {
     };
 
     if (creating) {
-        return {
+        const create = {
             ...payload,
             variant_label: field('label'),
             opening_stock: field('opening_stock'),
             opening_cost: field('opening_cost'),
         };
+
+        // Only a recipe somebody actually wrote. A new product has nothing to
+        // clear, so an empty list would say nothing — and leaving the key off
+        // keeps a stocked product's create exactly as it was.
+        if (recipeOffered(block) && recipeRowsOf(block).length > 0) {
+            create.components = recipePayload(block);
+        }
+
+        return create;
     }
 
     const edit = { ...payload, label: field('label') };
@@ -2508,14 +2533,60 @@ function variantPayload(block, { creating = false } = {}) {
     | holds stock of its own, or a server that has not run the schema step — would
     | silently clear something the operator was never looking at.
     */
-    if (!$('[data-variant-recipe]', block)?.classList.contains('hidden')) {
-        edit.components = recipeRowsOf(block).map((row) => ({
-            component_variant_id: row.variant_id,
-            quantity: row.quantity,
-        }));
+    if (recipeOffered(block)) {
+        edit.components = recipePayload(block);
     }
 
     return edit;
+}
+
+/** Whether this block's recipe section is on screen — the only time it is sent. */
+function recipeOffered(block) {
+    return Boolean($('[data-variant-recipe]', block)) && !$('[data-variant-recipe]', block).classList.contains('hidden');
+}
+
+function recipePayload(block) {
+    return recipeRowsOf(block).map((row) => ({
+        component_variant_id: row.variant_id,
+        quantity: String(row.quantity ?? '').trim(),
+    }));
+}
+
+/**
+ * The first recipe in the form that cannot be sent, as an error for its block.
+ *
+ * Asked before the round trip only for what the browser can know: a row with no
+ * quantity, or one that is not a positive number to three places. Whether a
+ * fraction suits the material's unit, and everything else, stays the server's
+ * (§6.1) — ItemComponentService is where the rule is.
+ */
+function recipeProblem() {
+    const blocks = variantBlocks();
+
+    for (let index = 0; index < blocks.length; index += 1) {
+        const block = blocks[index];
+
+        if (!recipeOffered(block)) continue;
+
+        const bad = recipeRowsOf(block).find((row) => {
+            const quantity = String(row.quantity ?? '').trim();
+
+            return !/^\d+(\.\d{1,3})?$/.test(quantity) || !(Number(quantity) > 0);
+        });
+
+        if (bad) {
+            return {
+                fields: {
+                    [`variants.${index}.components`]: [
+                        `How much "${bad.label}" does one of these consume? Enter a quantity above nought, to three decimal places at most.`,
+                    ],
+                },
+                message: 'A material on the recipe has no quantity.',
+            };
+        }
+    }
+
+    return null;
 }
 
 /**
@@ -3431,7 +3502,14 @@ export default async function initItems() {
     // Every block's stock boxes follow the family's own choice. Bound here
     // rather than only repainted when the category changes, which is what left
     // them live after somebody unticked "Keep stock of this".
-    $('#item-stock', itemForm).addEventListener('change', applyStockFieldsState);
+    $('#item-stock', itemForm).addEventListener('change', () => {
+        applyStockFieldsState();
+
+        // And the recipe, which is the other half of the same answer. Left
+        // alone, ticking the box on a rewind kept its recipe on screen and
+        // sent it — the product saved as stocked and the variant was refused.
+        variantBlocks().forEach(paintVariantRecipe);
+    });
 
     $('#item-add-variant', itemForm).addEventListener('click', () => addVariantBlock({ focus: true }));
 

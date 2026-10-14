@@ -7,6 +7,7 @@ use App\Providers\AuditServiceProvider;
 use App\Providers\AuthModuleServiceProvider;
 use App\Providers\InventoryServiceProvider;
 use App\Providers\OnboardingServiceProvider;
+use App\Providers\PersonalServiceProvider;
 use App\Providers\StaffServiceProvider;
 use App\Providers\TenancyServiceProvider;
 use App\Providers\WorkshopServiceProvider;
@@ -37,6 +38,9 @@ return [
     // posting a payroll run and paying an advance both hand a payload to the
     // engine — though every binding is lazy, so the position is presentational.
     StaffServiceProvider::class,
+    // The owner's personal diary. Touches no account, so its position is
+    // presentational too.
+    PersonalServiceProvider::class,
     // M14. Cross-cutting like the audit trail, and last because its jobs
     // re-establish the tenant context and attribute changes through the
     // recorder — both of which are registered above.

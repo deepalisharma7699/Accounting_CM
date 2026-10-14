@@ -294,6 +294,8 @@ outstanding returns to exactly what it was.
 | The split and the entries disagree | `PAYMENT_SPLIT_MISMATCH` | 422 |
 | `lines` sent for a settlement draft | `TRANSACTION_LINES_NOT_ACCEPTED` | 422 |
 | `payments` sent for a journal draft | `TRANSACTION_PAYMENTS_NOT_ACCEPTED` | 422 |
+| A settlement draft edited to an empty split — the edit accepts `[]`, because a bill on credit has none, and the template refuses it here | `PAYMENT_SPLIT_REQUIRED` | 422 |
+| A bill's terms (`bill_discount`, `settle_total`, `vendor_invoice_no`) sent for a settlement draft | `TRANSACTION_BILL_TERMS_NOT_ACCEPTED` | 422 |
 
 `PAYMENT_SPLIT_MISMATCH` cannot happen through a template — it builds the control
 line *from* the split's total, so the two agree by construction. It is asserted

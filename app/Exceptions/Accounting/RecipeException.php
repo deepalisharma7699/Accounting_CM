@@ -30,16 +30,15 @@ class RecipeException extends ApiException
      */
     public static function parentHoldsStock(string $name): self
     {
-        return new self(
-            message: sprintf(
+        return self::about(
+            sprintf(
                 '"%s" is counted in stock, so it cannot also be made from a recipe. A recipe belongs to '.
                 'something the workshop produces rather than holds — labour, a rewind, a service. '.
                 'Turn stock tracking off for it, or record the materials as their own lines on the bill.',
                 $name,
             ),
-            status: 422,
-            errorCode: 'RECIPE_PARENT_HOLDS_STOCK',
-            details: ['parent' => $name],
+            'RECIPE_PARENT_HOLDS_STOCK',
+            ['parent' => $name],
         );
     }
 
@@ -52,15 +51,14 @@ class RecipeException extends ApiException
      */
     public static function componentHoldsNoStock(string $name): self
     {
-        return new self(
-            message: sprintf(
+        return self::about(
+            sprintf(
                 '"%s" is not counted in stock, so there is nothing for a recipe to take off the shelf. '.
                 'Only a material with a stock position can be consumed.',
                 $name,
             ),
-            status: 422,
-            errorCode: 'RECIPE_COMPONENT_HOLDS_NO_STOCK',
-            details: ['component' => $name],
+            'RECIPE_COMPONENT_HOLDS_NO_STOCK',
+            ['component' => $name],
         );
     }
 
@@ -75,25 +73,23 @@ class RecipeException extends ApiException
      */
     public static function componentHasOwnRecipe(string $name): self
     {
-        return new self(
-            message: sprintf(
+        return self::about(
+            sprintf(
                 '"%s" is itself made from a recipe, and a recipe cannot contain another one. '.
                 'List what it is made of directly instead.',
                 $name,
             ),
-            status: 422,
-            errorCode: 'RECIPE_WOULD_NEST',
-            details: ['component' => $name],
+            'RECIPE_WOULD_NEST',
+            ['component' => $name],
         );
     }
 
     public static function componentIsItself(string $name): self
     {
-        return new self(
-            message: sprintf('"%s" cannot be made out of itself.', $name),
-            status: 422,
-            errorCode: 'RECIPE_SELF_REFERENCE',
-            details: ['component' => $name],
+        return self::about(
+            sprintf('"%s" cannot be made out of itself.', $name),
+            'RECIPE_SELF_REFERENCE',
+            ['component' => $name],
         );
     }
 
@@ -106,29 +102,27 @@ class RecipeException extends ApiException
      */
     public static function duplicateComponent(string $name): self
     {
-        return new self(
-            message: sprintf(
+        return self::about(
+            sprintf(
                 '"%s" is on this recipe twice. Put the whole quantity on one row — two rows would '.
                 'both be issued.',
                 $name,
             ),
-            status: 422,
-            errorCode: 'RECIPE_DUPLICATE_COMPONENT',
-            details: ['component' => $name],
+            'RECIPE_DUPLICATE_COMPONENT',
+            ['component' => $name],
         );
     }
 
     public static function quantityNotPositive(string $name): self
     {
-        return new self(
-            message: sprintf(
+        return self::about(
+            sprintf(
                 'How much "%s" does one of these consume? A recipe row needs a quantity above nought — '.
                 'remove the row if nothing is used.',
                 $name,
             ),
-            status: 422,
-            errorCode: 'RECIPE_QUANTITY_NOT_POSITIVE',
-            details: ['component' => $name],
+            'RECIPE_QUANTITY_NOT_POSITIVE',
+            ['component' => $name],
         );
     }
 
@@ -141,16 +135,180 @@ class RecipeException extends ApiException
      */
     public static function componentArchived(string $name): self
     {
-        return new self(
-            message: sprintf(
+        return self::about(
+            sprintf(
                 '"%s" has been archived, so it cannot be added to a recipe. Restore it, or choose the '.
                 'material that replaced it.',
                 $name,
             ),
-            status: 422,
-            errorCode: 'RECIPE_COMPONENT_ARCHIVED',
-            details: ['component' => $name],
+            'RECIPE_COMPONENT_ARCHIVED',
+            ['component' => $name],
         );
+    }
+
+    /**
+     * A fraction of something counted in whole units.
+     *
+     * Refused here because the stock ledger refuses it at posting — "0.5 PCS of
+     * sleeve" saves as a recipe and then stops every bill for the rewind at the
+     * counter with `STOCK_QUANTITY_FRACTIONAL`, which is the moment this class
+     * exists to keep refusals away from.
+     */
+    public static function fractionalQuantity(string $name, string $quantity, string $unitLabel): self
+    {
+        return self::about(
+            sprintf(
+                '"%s" is counted in whole %ss, so %s of it cannot be taken off the shelf. '.
+                'Use a whole number.',
+                $name,
+                strtolower($unitLabel),
+                $quantity,
+            ),
+            'RECIPE_QUANTITY_FRACTIONAL',
+            ['component' => $name, 'unit' => $unitLabel],
+        );
+    }
+
+    /**
+     * A recipe on something that is already a material in another recipe.
+     *
+     * The other side of {@see componentHasOwnRecipe()}: that one refuses adding
+     * a made thing to a recipe, this one refuses making a thing that a recipe
+     * already consumes. Either way round the result would be a recipe inside a
+     * recipe.
+     *
+     * @param  array<int, string>  $usedBy
+     */
+    public static function parentIsAMaterial(string $name, array $usedBy): self
+    {
+        return self::about(
+            sprintf(
+                '"%s" is a material in %s, so it cannot have a recipe of its own — a recipe cannot '.
+                'contain another one. Take it out of %s first.',
+                $name,
+                self::listOf($usedBy),
+                count($usedBy) === 1 ? 'that recipe' : 'those recipes',
+            ),
+            'RECIPE_WOULD_NEST',
+            ['parent' => $name, 'used_by' => array_values($usedBy)],
+        );
+    }
+
+    /**
+     * Stock tracking turned off on something a recipe takes off the shelf.
+     *
+     * If it were allowed, every bill for the made thing would be refused at the
+     * counter, because the material would have no shelf to be issued from.
+     *
+     * @param  array<int, string>  $usedBy
+     */
+    public static function materialWouldStopHoldingStock(string $name, array $usedBy): self
+    {
+        return self::about(
+            sprintf(
+                '"%s" is a material in %s, and billing %s takes it off the shelf — so it has to stay '.
+                'counted in stock. Take it out of %s first.',
+                $name,
+                self::listOf($usedBy),
+                count($usedBy) === 1 ? 'that' : 'those',
+                count($usedBy) === 1 ? 'that recipe' : 'those recipes',
+            ),
+            'RECIPE_MATERIAL_IN_USE',
+            ['item' => $name, 'used_by' => array_values($usedBy)],
+            409,
+            'is_stock',
+        );
+    }
+
+    /**
+     * Stock tracking turned on for something that has a recipe.
+     *
+     * If it were allowed, the bill would quietly stop issuing the materials and
+     * issue the product itself from a shelf that has never held any — the
+     * question {@see parentHoldsStock()} refuses from the other direction.
+     */
+    public static function parentWouldHoldStock(string $name): self
+    {
+        return self::about(
+            sprintf(
+                '"%s" has a recipe — billing it takes its materials off the shelf — so it cannot also be '.
+                'counted in stock. Remove its materials first, then turn stock tracking on.',
+                $name,
+            ),
+            'RECIPE_PARENT_WOULD_HOLD_STOCK',
+            ['item' => $name],
+            422,
+            'is_stock',
+        );
+    }
+
+    /**
+     * Deleting a variant a recipe consumes.
+     *
+     * Said in words rather than left to the foreign key, which would refuse it
+     * as a database error nobody at a counter could act on.
+     *
+     * @param  array<int, string>  $usedBy
+     */
+    public static function materialStillUsed(string $name, array $usedBy): self
+    {
+        return self::about(
+            sprintf(
+                '"%s" is a material in %s, so it cannot be deleted. Take it out of %s first.',
+                $name,
+                self::listOf($usedBy),
+                count($usedBy) === 1 ? 'that recipe' : 'those recipes',
+            ),
+            'RECIPE_MATERIAL_IN_USE',
+            ['component' => $name, 'used_by' => array_values($usedBy)],
+            409,
+            null,
+        );
+    }
+
+    /**
+     * Every refusal above, pinned to the field it is about.
+     *
+     * `fields` and not only `field`, because only the map reaches a form —
+     * `auth-client.js` reads `details.fields`, and without it a recipe refusal
+     * landed on the banner while the slot under the recipe stayed empty. A
+     * variant endpoint answers `components`; the product form re-keys that onto
+     * the block it is about ({@see ApiException::underField()}).
+     *
+     * @param  array<string, mixed>  $details
+     */
+    private static function about(
+        string $message,
+        string $errorCode,
+        array $details,
+        int $status = 422,
+        ?string $field = 'components',
+    ): self {
+        if ($field !== null) {
+            $details['field'] = $field;
+            $details['fields'] = [$field => [$message]];
+        }
+
+        return new self(message: $message, status: $status, errorCode: $errorCode, details: $details);
+    }
+
+    /**
+     * "5 HP Rewind", "5 HP Rewind and 7.5 HP Rewind", "three recipes".
+     *
+     * Named in full up to three, because those are the ones somebody will go
+     * and open; past that the count is the useful part.
+     *
+     * @param  array<int, string>  $names
+     */
+    private static function listOf(array $names): string
+    {
+        $names = array_values(array_map(static fn (string $name) => '"'.$name.'"', $names));
+
+        return match (true) {
+            count($names) > 3 => count($names).' recipes',
+            count($names) === 1 => $names[0],
+            default => implode(', ', array_slice($names, 0, -1)).' and '.end($names),
+        };
     }
 
     /**

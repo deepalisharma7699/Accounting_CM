@@ -101,6 +101,11 @@ final class PostingBatch
          * money plus this, and nothing else, makes up its total.
          */
         public readonly ?Money $settlementDiscount = null,
+        /**
+         * The number the vendor printed on their own bill — "INV-2291". A
+         * purchase only, optional, and never ours: our number is `doc_no`.
+         */
+        public readonly ?string $vendorInvoiceNo = null,
     ) {}
 
     /**
@@ -124,6 +129,7 @@ final class PostingBatch
         ?string $clientRef = null,
         ?int $againstTransactionId = null,
         ?Money $settlementDiscount = null,
+        ?string $vendorInvoiceNo = null,
     ): self {
         return new self(
             $type,
@@ -140,6 +146,7 @@ final class PostingBatch
             $clientRef,
             $againstTransactionId,
             $settlementDiscount,
+            $vendorInvoiceNo,
         );
     }
 

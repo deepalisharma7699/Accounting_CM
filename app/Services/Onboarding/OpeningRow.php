@@ -30,12 +30,13 @@ final class OpeningRow
         /**
          * The variant this row is about, where the caller already knows it.
          *
-         * A pasted file never sets this — it has names in it, which is what
+         * A file of the workshop's own has names in it, which is what
          * `variant` and the name matcher are for. A *screen* is the opposite
-         * case: the Items drawer is looking at one variant and holds its id, so
-         * putting that id through a fuzzy name match would be throwing away the
-         * one certain thing it knows and risking a near-miss on a shop with
-         * "Bearing 6204" and "Bearing 6204 ZZ". Set, it short-circuits
+         * case, and so is the template the Stock card downloads, which writes
+         * the id into every row: the Items drawer is looking at one variant and
+         * holds its id, so putting that id through a fuzzy name match would be
+         * throwing away the one certain thing it knows and risking a near-miss
+         * on a shop with "Bearing 6204" and "Bearing 6204 ZZ". Set, it short-circuits
          * resolution entirely — see OpeningBalanceService::resolveItem().
          */
         public readonly ?int $variantId,
@@ -128,11 +129,12 @@ final class OpeningRow
         | not accept, with a message about a file nobody used.
         |
         | **Appended only when set**, which is what keeps the paste box exactly
-        | as it was. A CSV row's id is always null, so its parts array is
-        | unchanged byte for byte and every fingerprint already stored against an
-        | imported file still matches it. Adding an empty segment unconditionally
-        | would rehash every one of them, and a workshop re-pasting last month's
-        | file would stop being told it had already been imported.
+        | as it was. A CSV row without a `variant_id` column has a null id, so
+        | its parts array is unchanged byte for byte and every fingerprint
+        | already stored against an imported file still matches it. Adding an
+        | empty segment unconditionally would rehash every one of them, and a
+        | workshop re-pasting last month's file would stop being told it had
+        | already been imported.
         */
         if ($this->variantId !== null) {
             $parts[] = 'variant#'.$this->variantId;
@@ -154,6 +156,20 @@ final class OpeningRow
             // A row that names a variant by id is about something, whatever
             // else it left out.
             && $this->variantId === null;
+    }
+
+    /**
+     * True for a row of the Stock card's template that nobody filled in: it
+     * names a variant and declares nothing about it.
+     *
+     * A unit cost on its own does not count as filled — the template writes the
+     * purchase price into every row before anybody has counted anything.
+     */
+    public function isUnfilledTemplateRow(): bool
+    {
+        return $this->variantId !== null
+            && $this->quantity === null
+            && $this->amount === null;
     }
 
     /* ---------------------------------------------------------------------

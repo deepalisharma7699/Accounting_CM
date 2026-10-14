@@ -44,6 +44,9 @@ class IndexTransactionRequest extends FormRequest
             // Everything one counterparty was involved in — the drill-down
             // behind a party statement.
             'party_id' => ['nullable', 'integer', 'min:1'],
+            // An exact vendor bill number — how the purchase form asks whether
+            // this vendor's invoice is already in the books.
+            'vendor_invoice_no' => ['nullable', 'string', 'max:50'],
             /*
             | Where a bill stands against what has been paid on it — M16.
             | Derived on the fly from the document's total, its own counter
@@ -89,6 +92,9 @@ class IndexTransactionRequest extends FormRequest
             'to' => $this->input('to'),
             'account_id' => $this->filled('account_id') ? (int) $this->input('account_id') : null,
             'party_id' => $this->filled('party_id') ? (int) $this->input('party_id') : null,
+            'vendor_invoice_no' => $this->filled('vendor_invoice_no')
+                ? trim((string) $this->input('vendor_invoice_no'))
+                : null,
             'payment_status' => $this->input('payment_status'),
             // Absent rather than false when the toggle is off, so it narrows
             // nothing — `outstanding=0` is "I did not ask", not "show me the

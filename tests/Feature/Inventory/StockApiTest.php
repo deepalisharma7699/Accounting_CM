@@ -77,6 +77,37 @@ class StockApiTest extends TestCase
         $this->assertIsString($row['average_cost']);
     }
 
+    /**
+     * What the opening-stock template is built from.
+     *
+     * Two out-of-stock rows that look identical on the shelf and are not: one
+     * was never entered, one was bought and sold back to nought. Only the first
+     * may still have opening stock declared, and the row has to say which —
+     * along with the purchase price the template starts its unit cost at.
+     */
+    #[Test]
+    public function a_row_says_whether_the_variant_has_a_trading_history(): void
+    {
+        $untouched = $this->variantFor($this->tenant, 'part');
+        $soldOut = $this->variantFor($this->tenant, 'part');
+
+        $this->actingForTenant($this->tenant, fn () => $untouched->update(['purchase_price' => '95.50']));
+
+        $this->receiveStock($this->tenant, $soldOut, '4', '100.00');
+        $this->issueStock($this->tenant, $soldOut, '4');
+
+        $rows = collect($this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/stock?status=out')
+            ->assertOk()
+            ->json('data'))->keyBy('variant_id');
+
+        $this->assertFalse($rows[$untouched->id]['has_trading_history']);
+        $this->assertSame('95.50', $rows[$untouched->id]['purchase_price']);
+
+        $this->assertTrue($rows[$soldOut->id]['has_trading_history']);
+        $this->assertNull($rows[$soldOut->id]['purchase_price']);
+    }
+
     #[Test]
     public function a_variant_that_has_never_moved_reports_zero_rather_than_being_missing(): void
     {

@@ -31,6 +31,7 @@ use App\Services\Accounting\PartyService;
 use App\Services\Accounting\PostingEngine;
 use App\Services\Inventory\ItemService;
 use App\Services\Inventory\ItemVariantService;
+use App\Services\Inventory\StockLedgerService;
 use App\Support\Money;
 use App\Support\Quantity;
 use App\Support\Tenancy\TenantContext;
@@ -122,7 +123,9 @@ class OpeningBalanceService
     private ?Collection $accountCache = null;
 
     /**
-     * Whether a given target already carries an opening balance, memoised.
+     * Whether a given target already carries an opening balance — or, for a
+     * variant, a trading history an opening figure cannot be put beneath —
+     * memoised.
      *
      * Asked per row rather than prefetched for the whole catalogue, because a
      * file naming six items should not sweep every variant a workshop has ever
@@ -132,6 +135,15 @@ class OpeningBalanceService
      */
     private array $alreadyDeclared = [];
 
+    /**
+     * The line each variant was first declared on in this file, by id —
+     * placeholders included, so a new variant named twice is caught in the
+     * preview exactly as it would be on the commit.
+     *
+     * @var array<int, int>
+     */
+    private array $declaredInFile = [];
+
     public function __construct(
         private readonly OpeningCsvParser $parser,
         private readonly NameMatcher $matcher,
@@ -139,6 +151,7 @@ class OpeningBalanceService
         private readonly LedgerService $ledger,
         private readonly ItemService $items,
         private readonly ItemVariantService $variants,
+        private readonly StockLedgerService $stock,
         private readonly PartyService $parties,
         private readonly ItemRepositoryInterface $itemRepository,
         private readonly ItemVariantRepositoryInterface $variantRepository,
@@ -470,16 +483,21 @@ class OpeningBalanceService
 
     private function resolveStock(int $lineNo, OpeningRow $row, bool $commit): PlannedRow
     {
-        if ($row->name === null) {
+        // A row naming its variant by id needs no name to be resolved — the
+        // template the Stock card downloads carries one, but a column somebody
+        // deleted is not a reason to refuse a row that says exactly where it goes.
+        if ($row->name === null && $row->variantId === null) {
             return PlannedRow::error($lineNo, $row, 'Say which item this stock is. A quantity with no name cannot be put anywhere.');
         }
+
+        $named = $row->name ?? sprintf('variant #%d', $row->variantId);
 
         $quantity = $this->quantityOf($row->quantity);
 
         if ($quantity === null || ! $quantity->isPositive()) {
             return PlannedRow::error($lineNo, $row, sprintf(
                 'Give a quantity greater than zero for %s. If none was on the shelf at go-live, leave the row out.',
-                $row->name,
+                $named,
             ));
         }
 
@@ -489,7 +507,7 @@ class OpeningBalanceService
             return PlannedRow::error($lineNo, $row, sprintf(
                 'Say what %s was worth — either a unit cost or a total value. Opening stock valued at nothing '.
                 'would report a margin of 100%% on the first one sold.',
-                $row->name,
+                $named,
             ));
         }
 
@@ -524,6 +542,48 @@ class OpeningBalanceService
         if ($variant->id > 0 && $this->hasOpeningStock((int) $variant->id)) {
             return PlannedRow::skipped($lineNo, $row, $label, 'Opening stock has already been declared for this variant.');
         }
+
+        /*
+        | A shelf that has already moved is refused, not declared under.
+        |
+        | Opening stock is dated at go-live. A variant that has been bought,
+        | sold, counted or consumed since has a history that started without
+        | it: a sale out of an empty shelf took its cost from nothing, and an
+        | opening figure slipped in beneath it would leave that cost of goods
+        | wrong for good while the shelf looked right. "Out of stock" on a live
+        | workshop is as often *sold out* as *never entered*, and a
+        | declaration on the first adds stock that was never there.
+        |
+        | An error rather than a skip, because a skip reads as "already done"
+        | and this is not — it wants a count from the Stock card, which is
+        | dated today and says so.
+        */
+        if ($variant->id > 0 && $this->hasTradingHistory((int) $variant->id)) {
+            return PlannedRow::error($lineNo, $row, sprintf(
+                '%s has already been bought, sold or counted in this product, so its shelf has a history that '.
+                'an opening figure would be slipped underneath. Record a count for it on the Stock card instead.',
+                $label,
+            ));
+        }
+
+        /*
+        | One shelf, one opening figure — within a file as well as across them.
+        |
+        | `hasOpeningStock` only sees what is already posted, and nothing in a
+        | file is posted until every row has resolved, so a variant named twice
+        | would be declared twice. Two filtered templates pasted into one file,
+        | or a row copied down a spreadsheet, is how that happens — and the
+        | second figure is stock that was never on the shelf.
+        */
+        if (isset($this->declaredInFile[(int) $variant->id])) {
+            return PlannedRow::error($lineNo, $row, sprintf(
+                '%s is already declared on line %d of this file. Keep one row for it, with the whole quantity.',
+                $label,
+                $this->declaredInFile[(int) $variant->id],
+            ));
+        }
+
+        $this->declaredInFile[(int) $variant->id] = $lineNo;
 
         return PlannedRow::ready(
             lineNo: $lineNo,
@@ -597,8 +657,8 @@ class OpeningBalanceService
 
             if ($variant === null || $variant->item === null) {
                 return sprintf(
-                    'The variant this declaration names (#%d) no longer exists. Reopen the product and try '.
-                    'again — nothing has been posted.',
+                    'The variant this declaration names (#%d) no longer exists in this workshop\'s catalogue. '.
+                    'Download a fresh template or reopen the product — nothing has been posted.',
                     $row->variantId,
                 );
             }
@@ -1264,12 +1324,19 @@ class OpeningBalanceService
         // ids belong to somebody else entirely.
         $this->categoryCache = null;
         $this->alreadyDeclared = [];
+        $this->declaredInFile = [];
     }
 
     private function hasOpeningStock(int $variantId): bool
     {
         return $this->alreadyDeclared['variant:'.$variantId] ??=
             $this->imports->variantsWithOpeningStock([$variantId]) !== [];
+    }
+
+    private function hasTradingHistory(int $variantId): bool
+    {
+        return $this->alreadyDeclared['traded:'.$variantId] ??=
+            $this->stock->tradedVariantIds([$variantId]) !== [];
     }
 
     private function hasOpeningBalance(int $partyId): bool

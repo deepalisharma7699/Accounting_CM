@@ -18,6 +18,8 @@ use App\Http\Controllers\Api\V1\PartyController;
 use App\Http\Controllers\Api\V1\PasskeyController;
 use App\Http\Controllers\Api\V1\PayrollController;
 use App\Http\Controllers\Api\V1\PermissionController;
+use App\Http\Controllers\Api\V1\PersonalExpenseCategoryController;
+use App\Http\Controllers\Api\V1\PersonalExpenseController;
 use App\Http\Controllers\Api\V1\ReportController;
 use App\Http\Controllers\Api\V1\RoleController;
 use App\Http\Controllers\Api\V1\StaffAdvanceController;
@@ -1436,6 +1438,51 @@ Route::prefix('v1')->group(function () {
             Route::delete('{employee}', [EmployeeController::class, 'destroy'])
                 ->whereNumber('employee')
                 ->middleware('permission:DELETE,STAFF');
+        });
+
+        /*
+        | The owner's personal diary — money out of their own pocket.
+        |
+        | Not the workshop's money, so nothing below posts and no report reads
+        | it. PERSONAL_EXPENSES is given to OWNER alone; the diary is one per
+        | workshop, shared by whoever holds it. The category master is declared
+        | before `{expense}`, which is numeric-constrained.
+        */
+        Route::prefix('personal-expenses')->group(function () {
+            Route::get('meta', [PersonalExpenseController::class, 'meta'])
+                ->middleware('permission:READ,PERSONAL_EXPENSES');
+
+            Route::get('categories', [PersonalExpenseCategoryController::class, 'index'])
+                ->middleware('permission:READ,PERSONAL_EXPENSES');
+
+            Route::post('categories', [PersonalExpenseCategoryController::class, 'store'])
+                ->middleware('permission:WRITE,PERSONAL_EXPENSES');
+
+            Route::patch('categories/{category}', [PersonalExpenseCategoryController::class, 'update'])
+                ->whereNumber('category')
+                ->middleware('permission:UPDATE,PERSONAL_EXPENSES');
+
+            Route::delete('categories/{category}', [PersonalExpenseCategoryController::class, 'destroy'])
+                ->whereNumber('category')
+                ->middleware('permission:DELETE,PERSONAL_EXPENSES');
+
+            Route::get('/', [PersonalExpenseController::class, 'index'])
+                ->middleware('permission:READ,PERSONAL_EXPENSES');
+
+            Route::get('{expense}', [PersonalExpenseController::class, 'show'])
+                ->whereNumber('expense')
+                ->middleware('permission:READ,PERSONAL_EXPENSES');
+
+            Route::post('/', [PersonalExpenseController::class, 'store'])
+                ->middleware('permission:WRITE,PERSONAL_EXPENSES');
+
+            Route::patch('{expense}', [PersonalExpenseController::class, 'update'])
+                ->whereNumber('expense')
+                ->middleware('permission:UPDATE,PERSONAL_EXPENSES');
+
+            Route::delete('{expense}', [PersonalExpenseController::class, 'destroy'])
+                ->whereNumber('expense')
+                ->middleware('permission:DELETE,PERSONAL_EXPENSES');
         });
 
         /*

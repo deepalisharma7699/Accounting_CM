@@ -704,6 +704,46 @@ draft after a delivery at a higher price and asserts it costs at today's average
 A draft's `items` are echoed back **unpriced and untaxed** — `taxable_value: null`
 rather than `"0.00"`, because a zero would be read as "no tax".
 
+### Continuing one
+
+A draft is finished in the form it was written in: the drawer's **Continue
+editing** loads it back (`bill-revision.js`'s `continueDraft()`), "Save as a
+draft" rewrites it with `PATCH`, and posting rewrites it and then calls `/post`.
+Three things in the server half are load-bearing.
+
+* **The edit merges over the stored request**, so a key the PATCH leaves out is
+  kept. That is right for an API caller moving only the date, and wrong for a form
+  — so the form sends a whole restatement, naming `bill_discount`,
+  `bill_discount_percent` and `settle_total` as null unless it has a figure. The
+  bill discount is also replaced **as a pair** on the server: an edit naming one
+  unit nulls the other, so ₹100 off edited to 10% cannot carry both.
+* **The single read names the lines; a listing never does.** The stored request
+  holds ids and figures only. `BillService::draftLinesFor()` resolves each line's
+  name (through `BillLine::describe()`, so it reads as the invoice will), unit,
+  current GST rate and tax basis — the line's own flag, or the item's where it
+  gave none, the rule `BillTemplate::lineFrom()` applies at posting — in one query
+  for the variants, attached to the model as `draftLineDetails`. A page of drafts
+  would otherwise pay the catalogue lookup per row.
+* **A bill's terms are refused on a draft that is not a bill**
+  (`TRANSACTION_BILL_TERMS_NOT_ACCEPTED`), and the vendor's number on anything but
+  a purchase, for the reason every other vocabulary mismatch is: stored on the
+  draft, they would be read by no template and the edit would report success.
+
+Who did the work is synced in the same database transaction as the rewrite,
+whenever the PATCH names `staff` — an empty list included, because on a draft
+being finished "nobody any more" is an edit like any other.
+`DraftBillContinuationTest` covers all of it, including that the inclusive-of-tax
+flag and a percentage discount survive an edit through to the posted figures and
+the stock.
+
+The drawer can still post or discard a draft directly, including one that is open
+in the form at that moment. When it does, `release()` takes the draft off the form
+and the toast says so; otherwise the form would go on saying "Continuing" a document
+that no longer accepts edits, and the next Save would be the first anybody heard
+of it. A draft posted from the drawer shows the same `meta.warnings` (below cost,
+short stock) as one posted from the form, because `/post` now returns them for
+any bill.
+
 ## Reversal
 
 A reversal mirrors the ledger entries, the payment split and the stock movements,
@@ -927,7 +967,9 @@ nothing else: a receipt has no payment status, because it *is* the payment.
 | `POST /transactions/purchase` | Template C |
 | `POST /transactions/expense` | Template F |
 | `GET /transactions/{id}` | The document, its tax summary, its margin and its warnings |
-| `PATCH /transactions/{id}` | Drafts only — `items` for a bill, refused for anything else |
+| `GET /transactions/{id}` on a **draft** | Also each line's `description`, `unit_symbol`, `gst_rate`, `price_includes_tax` and `discount_percent`, and the bill's `bill_terms` — what the form needs to continue it |
+| `PATCH /transactions/{id}` | Drafts only — `items` and the bill's terms (`bill_discount`/`_percent`, `settle_total`, `vendor_invoice_no`, `staff`) for a bill, refused for anything else. UPDATE |
+| `POST /transactions/{id}/post` | Authorise a draft. A bill comes back with the same `meta.warnings` a bill posted outright does. UPDATE |
 | `GET /transactions/{id}/invoice` | **M20** — the customer's copy, for printing. READ |
 | `POST /transactions/{id}/share` | **M20** — publish it; idempotent, returns the live link. WRITE |
 | `DELETE /transactions/{id}/share` | **M20** — stop the link, permanently. WRITE |

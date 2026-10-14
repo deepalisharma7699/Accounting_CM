@@ -38,6 +38,18 @@ use App\Exceptions\Onboarding\OpeningBalanceException;
  * | `side` | balance only: debit or credit, defaulting to the account's own |
  * | `gstin` | party rows, optional |
  * | `reference` | free text, kept as the ledger memo |
+ * | `variant_id` | stock only: the exact variant, as the Stock card's template writes it |
+ *
+ * ## The opening-stock template
+ *
+ * The Stock card downloads a file of the variants it is showing that have never
+ * moved, with `variant_id`, an `opening_qty` column to fill in and the purchase
+ * price already in `unit_cost`. Two things here exist for it. The id resolves
+ * the row exactly, so no name is matched at all. And a template row whose
+ * quantity was **left empty** is dropped like a spacer line rather than refused:
+ * somebody exports five hundred variants, counts eighty of them, and uploads
+ * the file as it stands — making them delete four hundred and twenty rows first
+ * would be the re-keying this parser exists to avoid.
  *
  * Anything else in the header is ignored rather than refused. A workshop's own
  * spreadsheet has columns this product has no use for, and making them delete
@@ -77,6 +89,11 @@ class OpeningCsvParser
 
         'quantity' => 'quantity',
         'qty' => 'quantity',
+        'opening_qty' => 'quantity',
+        'opening_quantity' => 'quantity',
+        'opening_stock' => 'quantity',
+
+        'variant_id' => 'variant_id',
 
         'unit_cost' => 'unit_cost',
         'cost' => 'unit_cost',
@@ -142,7 +159,7 @@ class OpeningCsvParser
 
             // A blank line is a spacer, not a mistake. Spreadsheets are full of
             // them and reporting each one as an error would bury the real ones.
-            if ($row->isBlank()) {
+            if ($row->isBlank() || $row->isUnfilledTemplateRow()) {
                 continue;
             }
 

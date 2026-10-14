@@ -645,7 +645,13 @@ now offers **Declare opening stock** on a variant whose shelf is empty, and it
 posts one structured row to `POST /opening-balances` rather than reimplementing
 anything (§4.3, §4.4). A row may carry `variant_id`, and then the service matches
 no names at all: two variants of one product share a name, so a fuzzy match is
-the one way that path lands a declaration on the wrong shelf. See
+the one way that path lands a declaration on the wrong shelf. **Opening stock is
+refused on any variant that has moved** through anything but an opening
+transaction — sold out reads exactly like never entered, and a figure dated at
+go-live beneath a sale leaves that sale's cost of goods wrong for good. In bulk it
+is the Stock card's **Opening-stock template**, a file in the importer's own
+columns uploaded on the Opening balances card; never the Stock export, whose
+report headers that importer reads as other columns. See
 [opening-balances-module.md](docs/opening-balances-module.md).
 
 **A bill line may take several things off the shelf, and that used to be
@@ -742,6 +748,22 @@ wrong in a second copy are not the obvious ones — the banner surviving onto a
 blank document, the correction handle being dropped from the autosaved draft, the
 client reference regenerated per attempt instead of per correction, a correction
 allowed to park as a draft — so it must not be forked either.
+
+**A parked bill is finished in the same form, through the same component.** A
+draft's drawer offers **Continue editing**, and `continueDraft()` loads it back
+the way a correction is loaded — but with a `draft` handle, so "Save as a draft"
+rewrites *that* draft with `PATCH /transactions/{id}` and posting rewrites it and
+then calls `/post`. It keeps its id; no second document is ever written. Two
+parts of it are wrong in ways that look right. The PATCH is **a whole
+restatement**: the server merges an edit over the request it stored, so the form
+names `bill_discount`, `bill_discount_percent` and `settle_total` as null unless
+it is sending a figure — a key left out would carry the old discount into the
+posted bill. And a draft's stored request holds ids and figures only, so the
+single-document read resolves each line's name, unit, rate and tax basis once
+(`BillService::draftLinesFor()`, named by `BillLine::describe()`) and a listing
+never does. The edit endpoint accepts the bill's whole vocabulary and refuses it
+on anything that is not a sale or a purchase (`TRANSACTION_BILL_TERMS_NOT_ACCEPTED`).
+See [billing-module.md](docs/billing-module.md).
 
 **A rate can be quoted with the GST already in it, and the line remembers
 which.** A counter prices both ways — "ten thousand plus tax" for a rewind,
@@ -1096,7 +1118,7 @@ SVG `viewBox` scales its text and renders microscopic labels on a phone. See
 **What is left — one module, and it is built.** **Items**, **Stock**,
 **Purchase**, **Sales**, **Vendors**, **Customers**, **Users**, **Roles**,
 **Staff**, **Insights**, **Settings** (`workspace`), **Opening balances**
-(`opening`), **Expenses** (`bills`), **Transactions** (`journal`), **Jobs**,
+(`opening`), **Money in & out** (`journal` — Expenses merged in), **Jobs**,
 **Accounting** (`accounts`), **History** (`audit`) and **Workshops** (`tenants`)
 have been converted and are on. The last one — **Uploads** — is
 `'enabled' => false`.
@@ -1198,7 +1220,9 @@ no "save as draft" left anywhere in the product, and there is: the shared bill
 document still offers it, so **Sales and Purchase can still park a bill**.
 Insights' parked-draft worklist is therefore not yet a set that only shrinks.
 Removing the control from those two is a product decision nobody has taken;
-saying it had already happened was a documentation error.
+saying it had already happened was a documentation error. What a parked bill is
+no longer is a dead end: it is continued in its own module's form (above), which
+was the only reason anybody parked one.
 
 One refusal is deliberate and worth knowing before somebody "fixes" it: a
 settlement **cannot be left unallocated while the party has open bills**. An
@@ -1215,6 +1239,33 @@ counterparty, which paints no position line and offers no "+ Add": `outstanding`
 has a receivable half and a payable half and nothing would say which to read, and
 quick-party never asks which role a record is — the module it was opened from
 decides, and a journal has not decided.
+
+**Money in & out is one card, and Expenses is a tab of it.** Transactions
+(`journal`) and Expenses (`bills`) were two cards in one band answering "where did
+the money go", so they were merged: **Expense · Pay a vendor · Receipt · Staff
+advance · Journal voucher · Personal**, six §2A sections on the Staff shape, opening
+on Expense. `bills` is **gone from config/modules.php — do not put it back**;
+`/bills` redirects by hand in web.php and `#bills` is re-pointed by `MOVED` in
+shell.js. Nothing was forked: the expense section is the old card's markup and code
+moved (`partials/expense-section.blade.php`, `pages/journal-expense.js`), and the
+staff advance is **one partial and one component mounted by two cards**
+(`partials/staff-advance-section.blade.php`,
+[components/staff-advance.js](resources/js/components/staff-advance.js)) — Staff's
+Advances tab and this card's Staff advance tab. A tab a person may not use is not
+drawn: Staff advance needs READ:STAFF, Personal needs PERSONAL_EXPENSES.
+
+**Personal is the owner's own pocket, and it is not in the books.** Money the owner
+spent on themselves from their own money never passed through the workshop, so
+`personal_expenses` is a diary beside the books: it posts nothing, no report, Day
+Book or Insights panel reads it, and an entry is edited and deleted rather than
+reversed. **Never route it through the posting engine and never add it to a
+report** — a family's groceries in the shop's P&L understate the profit that tax is
+paid on. PERSONAL_EXPENSES is given to **OWNER only**, for privacy; one diary per
+workshop, shared by every owner. Neither model is `Auditable`, so History never
+shows it, and the topbar search does not reach it. Categories are data
+(`personal_expense_categories`, seeded from `PersonalCategoryDefaults`). The schema
+is `database/manual/sql/2026_10_14_001_personal_expenses.sql`. See
+[personal-expenses.md](docs/personal-expenses.md).
 
 **C2 is done, and what it deleted matters more than what it built.** The Bills
 module was the whole transaction list; it is now **Expenses** and nothing else,
