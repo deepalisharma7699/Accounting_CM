@@ -739,6 +739,63 @@ class WorkAttributionTest extends TestCase
     }
 
     #[Test]
+    public function the_people_panel_puts_each_persons_attendance_beside_their_work(): void
+    {
+        $this->travelTo('2026-03-10 12:00:00');
+
+        $this->postSale([['designation_id' => $this->fitter->id, 'employee_id' => $this->ramesh->id]]);
+
+        // Sunil joined on the 6th, so the first five days of March were never his.
+        $this->actingForTenant($this->tenant, fn () => $this->sunil->update(['joined_on' => '2026-03-06']));
+
+        $marks = [
+            '2026-03-02' => ['present', null],
+            '2026-03-03' => ['half_day', null],
+            '2026-03-04' => ['absent', null],
+            '2026-03-05' => ['paid_leave', null],
+            '2026-03-08' => ['week_off', 'holiday'],
+            '2026-03-09' => [null, 'present'],
+            '2026-03-10' => [null, 'present'],
+        ];
+
+        foreach ($marks as $date => [$ramesh, $sunil]) {
+            $rows = [];
+
+            if ($ramesh !== null) {
+                $rows[] = ['employee_id' => $this->ramesh->id, 'status' => $ramesh];
+            }
+
+            if ($sunil !== null) {
+                $rows[] = ['employee_id' => $this->sunil->id, 'status' => $sunil];
+            }
+
+            $this->withHeaders($this->authHeader($this->owner))
+                ->putJson('/api/v1/staff/attendance', ['date' => $date, 'rows' => $rows])
+                ->assertOk();
+        }
+
+        $rows = collect($this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/insights/people?period=this_month')
+            ->assertOk()
+            ->json('data.people'))->keyBy('employee_id');
+
+        // 1–10 March is ten days in service, six of them marked. The 11th onwards
+        // has not happened, so it is not unmarked.
+        $this->assertSame([
+            'present' => 1, 'half_day' => 1, 'absent' => 1, 'paid_leave' => 1, 'off' => 1, 'unmarked' => 5,
+        ], $rows[$this->ramesh->id]['attendance']);
+
+        // 6–10 March is five days, three marked; the days before Sunil joined
+        // were nobody's to mark.
+        $this->assertSame([
+            'present' => 2, 'half_day' => 0, 'absent' => 0, 'paid_leave' => 0, 'off' => 1, 'unmarked' => 2,
+        ], $rows[$this->sunil->id]['attendance']);
+
+        // Side by side with the work, in the same row.
+        $this->assertSame(1, $rows[$this->ramesh->id]['work_jobs']);
+    }
+
+    #[Test]
     public function a_reversed_invoice_stops_counting_as_work_done(): void
     {
         $sale = $this->postSale(

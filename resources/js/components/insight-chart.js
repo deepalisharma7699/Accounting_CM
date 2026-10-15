@@ -50,6 +50,7 @@ export const SERIES = {
     stock: { fill: '#7c3aed', label: 'Stock value' },
     wages: { fill: '#d97706', label: 'Wages' },
     goods: { fill: '#2563eb', label: 'Parts' },
+    made: { fill: '#0891b2', label: 'Work with materials' },
     service: { fill: '#7c3aed', label: 'Labour' },
 };
 

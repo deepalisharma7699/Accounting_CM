@@ -9,6 +9,7 @@ use App\Repositories\Contracts\TenantRepositoryInterface;
 use App\Services\Accounting\Tax\GstRate;
 use App\Support\AmountInWords;
 use App\Support\Money;
+use App\Support\Quantity;
 
 /**
  * The invoice as a document — what is printed, and what the customer is shown.
@@ -137,7 +138,7 @@ class InvoiceDocumentService
             return null;
         }
 
-        $lines = $transaction->lines->map(fn (TransactionLine $line) => [
+        $lines = $this->withLabourCombined($transaction, $transaction->lines->map(fn (TransactionLine $line) => [
             'line_no' => $line->line_no,
             'description' => $line->description,
             'memo' => $line->memo,
@@ -146,7 +147,20 @@ class InvoiceDocumentService
             'rate' => $this->withTax($line, $line->unitPriceMoney())->amount(),
             'discount' => $this->withTax($line, $line->discountMoney())->amount(),
             'amount' => $line->totalMoney()->amount(),
-        ])->all();
+        ])->all(), function (array $rows) {
+            $amount = $this->sumOf($rows, 'amount');
+            $discount = $this->sumOf($rows, 'discount');
+
+            return [
+                'memo' => null,
+                'quantity' => Quantity::of('1')->amount(),
+                'unit_symbol' => '',
+                // So the row multiplies out: one, at this, less the discount, is the amount.
+                'rate' => $amount->plus($discount)->amount(),
+                'discount' => $discount->amount(),
+                'amount' => $amount->amount(),
+            ];
+        });
 
         return [
             'date' => $transaction->date->toDateString(),
@@ -264,7 +278,7 @@ class InvoiceDocumentService
      */
     private function lines(Transaction $transaction): array
     {
-        return $transaction->lines->map(fn ($line) => [
+        return $this->withLabourCombined($transaction, $transaction->lines->map(fn ($line) => [
             'line_no' => $line->line_no,
             'description' => $line->description,
             'hsn_sac' => $line->hsn_sac,
@@ -300,7 +314,117 @@ class InvoiceDocumentService
             'igst_amount' => (string) $line->igst_amount,
             'line_total' => $line->totalMoney()->amount(),
             'memo' => $line->memo,
-        ])->all();
+        ])->all(), function (array $rows) {
+            $taxable = $this->sumOf($rows, 'taxable_value');
+            $discount = $this->sumOf($rows, 'discount_amount');
+
+            return [
+                'quantity' => Quantity::of('1')->amount(),
+                'unit_symbol' => '',
+                // Before tax, like every rate on this document, and chosen so the
+                // row multiplies out: one, at this, less the discount, is the
+                // taxable value — which is the lines' own, added up.
+                'unit_price' => $taxable->plus($discount)->amount(),
+                'discount_amount' => $discount->amount(),
+                'taxable_value' => $taxable->amount(),
+                'cgst_amount' => $this->sumOf($rows, 'cgst_amount')->amount(),
+                'sgst_amount' => $this->sumOf($rows, 'sgst_amount')->amount(),
+                'igst_amount' => $this->sumOf($rows, 'igst_amount')->amount(),
+                'line_total' => $this->sumOf($rows, 'line_total')->amount(),
+                'memo' => null,
+            ];
+        });
+    }
+
+    /* ---------------------------------------------------------------------
+     | Labour as one row
+     |-------------------------------------------------------------------- */
+
+    /**
+     * The rows, with the sale's labour drawn as one "Labour charges" row where
+     * the counter asked for that — otherwise exactly as given.
+     *
+     * Only how the document is *drawn*. The lines, the ledger, the GST and every
+     * internal screen keep each task, so the workshop still sees what earned it.
+     *
+     * Three rules keep this a tax invoice rather than a summary of one:
+     *
+     * - **Labour is a service that took nothing off a shelf.** A rewind consumed
+     *   copper through its recipe and keeps its own row; a part bought to order
+     *   holds no stock either, but it is goods, and goods never print as labour.
+     * - **One row per SAC code and GST rate.** A row of a tax invoice carries one
+     *   of each, so two rates make two rows rather than one row that is wrong.
+     * - **Figures are added up, never worked out again.** Tax recomputed on the
+     *   combined amount can land a paisa away from what the lines posted, and
+     *   then the document disagrees with the books behind it.
+     *
+     * The decision is the one stored on the transaction when it was posted, so a
+     * reprint next year draws the same document the customer was handed.
+     *
+     * @param  array<int, array<string, mixed>>  $rows  one per line, in line order
+     * @param  callable(array<int, array<string, mixed>>): array<string, mixed>  $merge
+     * @return array<int, array<string, mixed>>
+     */
+    private function withLabourCombined(Transaction $transaction, array $rows, callable $merge): array
+    {
+        if (! $transaction->combine_labour) {
+            return $rows;
+        }
+
+        $transaction->lines->loadMissing('item.category');
+
+        $groupOf = $transaction->lines
+            ->filter(fn (TransactionLine $line) => ! $line->is_stock
+                && $line->stockMovements->isEmpty()
+                && $line->item?->isService())
+            ->mapWithKeys(fn (TransactionLine $line) => [
+                $line->line_no => ($line->hsn_sac ?? '').'|'.$line->gst_rate,
+            ]);
+
+        // A lone task has nothing to be combined with, and keeps its own name.
+        $sizes = $groupOf->countBy();
+        $groupOf = $groupOf->filter(fn (string $key) => $sizes->get($key) > 1);
+
+        if ($groupOf->isEmpty()) {
+            return $rows;
+        }
+
+        $groups = [];
+
+        foreach ($rows as $row) {
+            if (($key = $groupOf->get($row['line_no'])) !== null) {
+                $groups[$key][] = $row;
+            }
+        }
+
+        $drawn = [];
+
+        foreach ($rows as $row) {
+            $key = $groupOf->get($row['line_no']);
+
+            if ($key === null) {
+                $drawn[] = $row;
+            } elseif (isset($groups[$key])) {
+                // Where the first of them stood, so the order still reads as written.
+                $drawn[] = array_merge($row, ['description' => 'Labour charges'], $merge($groups[$key]));
+                unset($groups[$key]);
+            }
+        }
+
+        // Numbered as printed: a gap from 2 to 5 reads as rows torn off the page.
+        return array_map(
+            fn (array $row, int $index) => ['line_no' => $index + 1] + $row,
+            $drawn,
+            array_keys($drawn),
+        );
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $rows
+     */
+    private function sumOf(array $rows, string $key): Money
+    {
+        return Money::sum(array_map(fn (array $row) => Money::of($row[$key]), $rows));
     }
 
     /**

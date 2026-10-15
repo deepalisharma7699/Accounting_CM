@@ -106,6 +106,12 @@ final class PostingBatch
          * purchase only, optional, and never ours: our number is `doc_no`.
          */
         public readonly ?string $vendorInvoiceNo = null,
+        /**
+         * Whether the customer's copy shows the labour lines as one "Labour
+         * charges" row. A sale only, and only how the invoice is *drawn*: the
+         * lines, the ledger and the GST are the same either way.
+         */
+        public readonly bool $combineLabour = false,
     ) {}
 
     /**
@@ -130,6 +136,7 @@ final class PostingBatch
         ?int $againstTransactionId = null,
         ?Money $settlementDiscount = null,
         ?string $vendorInvoiceNo = null,
+        bool $combineLabour = false,
     ): self {
         return new self(
             $type,
@@ -147,6 +154,7 @@ final class PostingBatch
             $againstTransactionId,
             $settlementDiscount,
             $vendorInvoiceNo,
+            $combineLabour,
         );
     }
 

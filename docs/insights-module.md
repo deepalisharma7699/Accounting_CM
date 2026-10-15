@@ -107,6 +107,15 @@ counting it would report the whole of it as margin. The amount is real and is
 reported in full; the percentage is taken against goods revenue alone. This is
 `TransactionLine::margin()`'s judgement applied to the aggregate.
 
+**A sale's mix has three sides, not two.** Parts sold (`is_stock`), *work with
+materials* — a service line whose recipe took stock off the shelf, such as a
+rewind — and labour that consumed nothing. Split on `is_stock` alone, a ₹5,000
+rewind that used ₹1,870 of copper read as ₹5,000 of workmanship. The middle side
+is told apart by the movements its recipe wrote, and carries their cost and its
+own margin. Its revenue is **not** divided into "materials" and "labour": where
+the profit on a rewind belongs is a convention, and the side's cost already says
+how much went back onto the shelf. A purchase has no recipes and keeps two sides.
+
 **Items are ranked by margin, not revenue.** The biggest seller is very often not
 the part paying the rent, and no other screen in the application can tell them
 apart.
@@ -216,6 +225,22 @@ attribution carries no line grain and no hours, an invoice names at most one
 person per trade, and half a workshop's people never appear on a document at all.
 A winder with no invoices against them is usually the person doing the stripping.
 CLAUDE.md is explicit that attribution must never become an input to pay.
+
+**Each person's attendance sits in the same row, as raw counts.** Present, half
+day, absent, paid leave, off (holiday and weekly off together) and unmarked,
+over the panel's period, from `AttendanceService::summariesFor()` — the same
+grouped read as the Staff list's "this month" column. **Unmarked** is the days
+the person was in service (joining date to leaving date, never past today) with
+no mark at all. It is reported, never filled in, because what a blank day is
+worth depends on the salary basis and is decided once, in `SalaryBasis`.
+"Everything so far" starts at the earliest joining date on the roster. No
+attendance figure is divided into a work figure: the owner compares them.
+
+**A row opens a person drawer** (`#person-drawer`, level 2). Its header is the
+row already held; the invoices behind the count are paged from
+`GET /staff/{id}/work` over the same window, and each one opens in Sales
+(`#sales?doc=`). The rows are drawn by `components/work-invoices.js`, which the
+Staff card's employee drawer uses too.
 
 **A person's Invoices column counts documents, not names on them.**
 `transaction_staff` holds a row per trade, so a fitter who also wound the motor

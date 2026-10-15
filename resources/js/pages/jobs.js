@@ -1604,6 +1604,7 @@ export default async function initJobs() {
                     ...(payload.settle_total === undefined ? {} : { settle_total: payload.settle_total }),
                     payments: payload.payments,
                     staff: payload.staff ?? [],
+                    ...(payload.combine_labour === undefined ? {} : { combine_labour: payload.combine_labour }),
                 },
             });
         },

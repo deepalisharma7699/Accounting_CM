@@ -165,6 +165,23 @@
 
                     <p class="field-error hidden text-right" data-error-for="vendor_total"></p>
                 </div>
+
+                {{-- A sale's only, and shown once there are two labour lines to
+                     combine. Ticked by default: the tasks stay itemised in the
+                     books, and the customer is handed one "Labour charges" row. --}}
+                <div class="mt-3 hidden" data-bill-combine-labour-field>
+                    <label class="flex items-start justify-end gap-2.5 text-[0.8125rem] text-foreground">
+                        <input type="checkbox" name="combine_labour" class="mt-1" checked data-bill-combine-labour>
+                        <span class="text-right">
+                            <span class="font-medium">Show labour as one line on the customer&rsquo;s invoice</span>
+                            <span class="block text-xs text-muted-foreground">
+                                Printed as &ldquo;Labour charges&rdquo;. Each task stays itemised in your books and reports.
+                            </span>
+                        </span>
+                    </label>
+
+                    <p class="field-error hidden text-right" data-error-for="combine_labour"></p>
+                </div>
             </div>
         </div>
 

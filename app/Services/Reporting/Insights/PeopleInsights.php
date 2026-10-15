@@ -8,6 +8,7 @@ use App\Models\Employee;
 use App\Models\PayrollLine;
 use App\Models\StaffAttendance;
 use App\Services\Reporting\ReportPeriod;
+use App\Services\Staff\AttendanceService;
 use App\Services\Staff\PayrollService;
 use App\Services\Staff\WorkAttributionService;
 use App\Support\Money;
@@ -51,6 +52,7 @@ class PeopleInsights
     public function __construct(
         private readonly PayrollService $payroll,
         private readonly WorkAttributionService $attribution,
+        private readonly AttendanceService $register,
     ) {}
 
     /**
@@ -341,6 +343,8 @@ class PeopleInsights
             $period->to,
         );
 
+        $attendance = $this->attendanceByPerson($period, $employees);
+
         $rows = [];
 
         foreach ($employees as $employee) {
@@ -358,11 +362,82 @@ class PeopleInsights
                 'work_jobs' => $credited['job_count'],
                 'work_value' => $credited['invoice_value'],
                 'work_trades' => $credited['trades'],
+                'attendance' => $attendance[$id],
             ];
         }
 
         usort($rows, static fn (array $a, array $b) => bccomp($b['cost'], $a['cost'], 2)
             ?: bccomp($b['work_value'], $a['work_value'], 2));
+
+        return $rows;
+    }
+
+    /**
+     * Each person's register over the period, status by status.
+     *
+     * Straight off {@see AttendanceService::summariesFor()}, the one grouped read
+     * the staff list's "this month" column already makes, so a person's present
+     * days here and on their Staff row are the same query over a different
+     * window.
+     *
+     * **Unmarked is counted, never filled in** — the rule the workshop-wide card
+     * above follows, for the same reason: what a blank day is worth depends on
+     * the salary basis and is decided once, in the payroll calculator. It is the
+     * days somebody was in service, up to today, that carry no mark at all. A
+     * future day is not unmarked, it has not happened; a day before they joined
+     * or after they left was never theirs to mark.
+     *
+     * "Everything so far" has no start of its own, so it starts at the earliest
+     * joining date on the roster, which is the first day anybody could have
+     * been marked.
+     *
+     * @param  \Illuminate\Support\Collection<int, Employee>  $employees
+     * @return array<int, array<string, int>>
+     */
+    private function attendanceByPerson(ReportPeriod $period, \Illuminate\Support\Collection $employees): array
+    {
+        $today = CarbonImmutable::today();
+        $empty = ['present' => 0, 'half_day' => 0, 'absent' => 0, 'paid_leave' => 0, 'off' => 0, 'unmarked' => 0];
+
+        $earliest = $employees->min(fn (Employee $employee) => CarbonImmutable::parse($employee->joined_on));
+        $from = $period->from !== null ? CarbonImmutable::parse($period->from) : $earliest;
+        $to = $period->to !== null ? CarbonImmutable::parse($period->to) : $today;
+        $to = $to->greaterThan($today) ? $today : $to;
+
+        if ($from === null || $from->greaterThan($to)) {
+            return $employees->mapWithKeys(fn (Employee $employee) => [(int) $employee->id => $empty])->all();
+        }
+
+        $counts = $this->register->summariesFor(
+            $employees->map(fn (Employee $employee) => (int) $employee->id)->all(),
+            $from,
+            $to,
+        );
+
+        $rows = [];
+
+        foreach ($employees as $employee) {
+            $marks = $counts[(int) $employee->id] ?? [];
+
+            $start = CarbonImmutable::parse($employee->joined_on)->startOfDay()->max($from);
+            $end = $employee->left_on !== null
+                ? CarbonImmutable::parse($employee->left_on)->startOfDay()->min($to)
+                : $to;
+
+            $inService = $start->greaterThan($end) ? 0 : (int) $start->diffInDays($end) + 1;
+
+            $rows[(int) $employee->id] = [
+                'present' => (int) ($marks[AttendanceStatus::Present->value] ?? 0),
+                'half_day' => (int) ($marks[AttendanceStatus::HalfDay->value] ?? 0),
+                'absent' => (int) ($marks[AttendanceStatus::Absent->value] ?? 0),
+                'paid_leave' => (int) ($marks[AttendanceStatus::PaidLeave->value] ?? 0),
+                // The shop shut or their weekly off — neither is an absence, and
+                // a reader comparing two people wants them out of the way together.
+                'off' => (int) ($marks[AttendanceStatus::Holiday->value] ?? 0)
+                    + (int) ($marks[AttendanceStatus::WeekOff->value] ?? 0),
+                'unmarked' => max(0, $inService - (int) array_sum($marks)),
+            ];
+        }
 
         return $rows;
     }

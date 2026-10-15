@@ -292,6 +292,16 @@ class SalesInsights
      * service shows a rising margin percentage that is a change in *what* it
      * sells rather than in how well it sells it.
      *
+     * A sale has a third side: **work that consumed materials**. A rewind is
+     * one service line at ₹5,000 that took copper and varnish off the shelf
+     * through its recipe, so `is_stock` puts it with labour — and filed there,
+     * the whole ₹5,000 read as workmanship. It is told apart by the cost the
+     * line carries, which is the movements its recipe wrote. Nothing divides its
+     * revenue into "materials" and "labour": where the profit on a rewind
+     * belongs is a convention, and the side's own cost and margin already say
+     * how much of it went back onto the shelf. A purchase has no recipes, so it
+     * keeps its two sides.
+     *
      * @return array<int, array<string, string>>
      */
     public function mix(ReportPeriod $period, string $direction = 'sale'): array
@@ -300,18 +310,23 @@ class SalesInsights
 
         $rows = $this->lineQuery($period, $direction)
             ->selectRaw(implode(', ', [
-                'transaction_lines.is_stock as is_stock',
+                // The derived movements table is one row per line, so "has a
+                // movement" is "consumed something" without fanning the sum out.
+                "case when transaction_lines.is_stock then 'goods'"
+                    ." when stock_movements.id is not null then 'made'"
+                    ." else 'service' end as side",
                 'transactions.type as doc_type',
                 'sum(transaction_lines.taxable_value) as taxable',
                 'sum(coalesce(abs(stock_movements.value), 0)) as cost',
             ]))
-            ->groupBy('transaction_lines.is_stock', 'transactions.type')
+            ->groupBy('side', 'transactions.type')
             ->get();
 
-        $sides = [
-            ['key' => 'goods', 'label' => 'Parts and materials', 'stock' => true],
-            ['key' => 'service', 'label' => 'Labour and service', 'stock' => false],
-        ];
+        $sides = array_values(array_filter([
+            ['key' => 'goods', 'label' => 'Parts and materials'],
+            $direction !== 'purchase' ? ['key' => 'made', 'label' => 'Work with materials'] : null,
+            ['key' => 'service', 'label' => 'Labour and service'],
+        ]));
 
         $totals = [];
         $overall = Money::zero();
@@ -321,7 +336,7 @@ class SalesInsights
             $cost = Money::zero();
 
             foreach ($rows as $row) {
-                if ((bool) $row->is_stock !== $side['stock']) {
+                if ((string) $row->side !== $side['key']) {
                     continue;
                 }
 

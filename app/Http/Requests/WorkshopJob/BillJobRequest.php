@@ -74,6 +74,7 @@ class BillJobRequest extends FormRequest
             // Paid less than the repair came to and called square — the
             // difference comes off before tax. See StoreBillRequest.
             'settle_total' => ['nullable', 'numeric', 'decimal:0,2', 'gt:0', 'max:'.self::MAX_AMOUNT],
+            'combine_labour' => ['sometimes', 'boolean'],
 
             // What was collected as the motor went out. Optional, like any bill's:
             // a regular customer's repair goes out on account.
@@ -163,6 +164,10 @@ class BillJobRequest extends FormRequest
             if ($this->filled($field)) {
                 $overrides[$field] = $this->input($field);
             }
+        }
+
+        if ($this->has('combine_labour')) {
+            $overrides['combine_labour'] = $this->boolean('combine_labour');
         }
 
         if ($this->has('staff')) {

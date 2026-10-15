@@ -43,6 +43,7 @@ use Illuminate\Support\Carbon;
  * @property string $total
  * @property string|null $notes
  * @property string|null $vendor_invoice_no
+ * @property bool $combine_labour
  * @property array<int, array<string, mixed>>|null $draft_lines
  * @property array<int, array<string, mixed>>|null $draft_payments
  * @property array<string, mixed>|null $draft_payload
@@ -56,7 +57,7 @@ use Illuminate\Support\Carbon;
  */
 #[Fillable([
     'tenant_id', 'type', 'status', 'doc_no', 'client_ref', 'source', 'party_id', 'date', 'total',
-    'notes', 'vendor_invoice_no', 'draft_lines', 'draft_payments', 'draft_payload',
+    'notes', 'vendor_invoice_no', 'combine_labour', 'draft_lines', 'draft_payments', 'draft_payload',
     'created_by', 'posted_at', 'reverses_id', 'against_transaction_id', 'opening_import_id',
     'workshop_job_id', 'employee_id',
 ])]
@@ -163,6 +164,18 @@ class Transaction extends Model
     }
 
     /**
+     * Whether `transactions.combine_labour` exists on this server yet — the same
+     * two-shape arrangement as {@see recordsVendorInvoiceNo()}. Until the manual
+     * SQL runs, the box is accepted and every invoice prints itemised.
+     */
+    public static function recordsCombineLabour(): bool
+    {
+        static $installed = null;
+
+        return $installed ??= \Illuminate\Support\Facades\Schema::hasColumn('transactions', 'combine_labour');
+    }
+
+    /**
      * @return array<string, string>
      */
     protected function casts(): array
@@ -173,6 +186,7 @@ class Transaction extends Model
             'source' => TransactionSource::class,
             'date' => 'date',
             'total' => 'decimal:2',
+            'combine_labour' => 'boolean',
             'draft_lines' => 'array',
             'draft_payments' => 'array',
             'draft_payload' => 'array',

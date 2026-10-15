@@ -3,8 +3,12 @@ import {
     creditPanel, overviewPanel, peoplePanel, salesPanel, stockPanel,
 } from '../components/insight-panels';
 import { STATEMENTS } from '../components/report-statements';
+import { workInvoiceRows } from '../components/work-invoices';
 import { can } from '../permissions';
-import { $, $$, downloadCsv, esc, toast } from '../ui';
+import { openModule } from '../shell';
+import {
+    $, $$, downloadCsv, esc, formatMoney, hideModal, showModal, toast,
+} from '../ui';
 import { mountWorkspace } from '../workspace';
 
 /**
@@ -111,6 +115,8 @@ const state = {
     cache: new Map(),
     /** The window every cached entry belongs to, so a change invalidates all. */
     cacheKey: '',
+    /** The person drawer: who is open, and the invoices fetched for them so far. */
+    person: { id: null, page: 0, invoices: [], total: 0 },
 };
 
 /** Held at mount and never looked up again — see the file note. */
@@ -319,6 +325,132 @@ function paintPeriodLabel(period) {
 }
 
 /* -------------------------------------------------------------------------
+ | One person — the People tab's drawer
+ | ---------------------------------------------------------------------- */
+
+const PERSON_PAGE = 25;
+
+/**
+ * Open a row of "Person by person".
+ *
+ * The header is the row itself, out of the payload already held, so it paints
+ * at once and agrees with the table to the figure. Only the invoices behind the
+ * count are fetched — from the Staff card's own `/staff/{id}/work`, over the
+ * window the panel was drawn for, so the list and the count are one question.
+ */
+function openPerson(id) {
+    const held = state.cache.get('people');
+    const row = (held?.data?.people ?? []).find((person) => person.employee_id === id);
+
+    if (!row) return;
+
+    state.person = { id, page: 0, invoices: [], total: 0, period: held.meta?.period ?? null };
+
+    const days = row.attendance ?? {};
+    const present = String(days.present ?? 0) + (days.half_day ? ` + ${days.half_day} half` : '');
+
+    $('#person-drawer-title', root).textContent = row.name;
+    $('#person-drawer-subtitle', root).textContent = [
+        row.designation ?? 'No designation',
+        row.is_active ? null : 'Left',
+        held.meta?.period?.label,
+    ].filter(Boolean).join(' · ');
+
+    $('#person-drawer-tiles', root).innerHTML = [
+        ['Invoices', String(row.work_jobs ?? 0)],
+        ['Those invoices', formatMoney(row.work_value)],
+        ['Days present', present],
+        ['Cost', formatMoney(row.cost)],
+    ].map(([label, value]) => `
+        <div class="rounded-[10px] bg-background px-3 py-2.5">
+            <p class="mb-0.5 text-[11px] text-muted-foreground">${esc(label)}</p>
+            <p class="truncate text-[15px] font-bold text-foreground">${esc(value)}</p>
+        </div>`).join('');
+
+    $('#person-drawer-body', root).innerHTML = personDetails(row)
+        + '<div id="person-invoices"><span class="skel mb-3 w-full"></span><span class="skel w-2/3"></span></div>';
+
+    showModal($('#person-drawer', root));
+    loadPersonInvoices();
+}
+
+function personDetails(row) {
+    const days = row.attendance ?? {};
+    const pairs = [
+        ['Present', days.present], ['Half day', days.half_day], ['Absent', days.absent],
+        ['Paid leave', days.paid_leave], ['Off', days.off], ['Unmarked', days.unmarked],
+    ];
+    const trades = (row.work_trades ?? []).map((trade) => `${trade.designation} ${trade.jobs}`).join(' · ');
+
+    return `
+        <h4 class="mb-2 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">Attendance</h4>
+        <div class="mb-5 grid grid-cols-3 gap-2 sm:grid-cols-6">
+            ${pairs.map(([label, value]) => `
+                <div class="rounded-[10px] border border-border px-2.5 py-2 text-center">
+                    <p class="text-[11px] text-muted-foreground">${esc(label)}</p>
+                    <p class="text-[0.9375rem] font-semibold text-foreground">${esc(String(value ?? 0))}</p>
+                </div>`).join('')}
+        </div>
+
+        <dl class="dl mb-5">
+            <dt>Payslips</dt><dd>${esc(String(row.payslips ?? 0))}</dd>
+            <dt>Trades</dt><dd>${trades ? esc(trades) : '<span class="text-muted-foreground">—</span>'}</dd>
+        </dl>
+
+        <h4 class="mb-2 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">Invoices naming them</h4>`;
+}
+
+async function loadPersonInvoices() {
+    const person = state.person;
+    const id = person.id;
+    const params = new URLSearchParams({ per_page: PERSON_PAGE, page: person.page + 1 });
+
+    if (person.period?.from) params.set('from', person.period.from);
+    if (person.period?.to) params.set('to', person.period.to);
+
+    const more = $('#person-more', root);
+
+    if (more) {
+        more.disabled = true;
+        more.textContent = 'Loading…';
+    }
+
+    try {
+        const payload = await auth.call(`/staff/${id}/work?${params}`);
+
+        // The reader may have opened somebody else while this was in flight.
+        if (state.person.id !== id) return;
+
+        person.page += 1;
+        person.invoices.push(...(payload.data ?? []));
+        person.total = payload.meta?.pagination?.total ?? person.invoices.length;
+
+        paintPersonInvoices(payload.meta?.pagination?.has_more);
+    } catch (error) {
+        if (state.person.id !== id) return;
+
+        $('#person-invoices', root).innerHTML = `<p class="text-[0.8125rem] text-rose-600">${esc(error.message ?? 'The invoices could not be loaded.')}</p>`;
+    }
+}
+
+function paintPersonInvoices(hasMore) {
+    const { invoices, total } = state.person;
+    const host = $('#person-invoices', root);
+
+    if (!invoices.length) {
+        host.innerHTML = '<p class="rounded-[10px] border border-dashed border-border px-4 py-6 text-center text-[0.8125rem] text-muted-foreground">No invoice in this period names them.</p>';
+
+        return;
+    }
+
+    host.innerHTML = workInvoiceRows(invoices, { link: true })
+        + `<div class="mt-3 flex items-center justify-between gap-3">
+               <p class="text-[0.75rem] text-muted-foreground">Showing ${invoices.length} of ${total}, newest first.</p>
+               ${hasMore ? '<button type="button" id="person-more" class="btn btn-secondary btn-sm">Show more</button>' : ''}
+           </div>`;
+}
+
+/* -------------------------------------------------------------------------
  | Export
  | ---------------------------------------------------------------------- */
 
@@ -427,6 +559,8 @@ export default async function initInsights() {
 
     $('#export-csv', root).addEventListener('click', exportOpenTab);
 
+    bindPersonDrawer();
+
     /* --- inside a panel --------------------------------------------------- */
 
     /*
@@ -437,6 +571,14 @@ export default async function initInsights() {
     | after each render is how a listener ends up attached twice.
     */
     panelHost().addEventListener('click', (event) => {
+        const person = event.target.closest('[data-person]');
+
+        if (person) {
+            openPerson(Number(person.dataset.person));
+
+            return;
+        }
+
         // A row of the exception feed opens the tab it is about. That is the
         // whole point of the feed: a finding somebody cannot act on from the
         // screen it appears on is a finding they will not act on.
@@ -458,6 +600,26 @@ export default async function initInsights() {
 
         state.pages[state.tab] = page.dataset.page === 'next' ? current + 1 : Math.max(1, current - 1);
         show(state.tab, { refetch: true });
+    });
+}
+
+function bindPersonDrawer() {
+    $('#person-drawer', root).addEventListener('click', (event) => {
+        if (event.target.closest('#person-more')) {
+            loadPersonInvoices();
+
+            return;
+        }
+
+        // An invoice opens where invoices live — the Sales drawer, in the mounted
+        // shell. This drawer is closed first so it is not left on the modal
+        // stack for Escape to find from inside another module.
+        const doc = event.target.closest('[data-sale-doc]');
+
+        if (!doc) return;
+
+        hideModal($('#person-drawer', root));
+        openModule('sales', { search: `doc=${doc.dataset.saleDoc}` });
     });
 }
 

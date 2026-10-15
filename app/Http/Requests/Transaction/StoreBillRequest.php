@@ -49,6 +49,10 @@ class StoreBillRequest extends FormRequest
             // purchase's only; the engine drops it from anything else.
             'vendor_invoice_no' => ['nullable', 'string', 'max:50'],
 
+            // Show the labour as one row on the customer's copy. A sale's only;
+            // the engine ignores it on a purchase, and leaves it off if unsent.
+            'combine_labour' => ['sometimes', 'boolean'],
+
             // Explicit, and never defaulted to true — the same rule as every
             // other transaction.
             'post' => ['required', 'boolean'],
@@ -209,7 +213,7 @@ class StoreBillRequest extends FormRequest
     }
 
     /**
-     * @return array{date: string, notes: string|null, vendor_invoice_no: string|null, post: bool, party_id: int|null, bill_discount: mixed, bill_discount_percent: mixed, settle_total: string|null, vendor_total: string|null, items: array<int, array<string, mixed>>, staff: array<int, array<string, mixed>>, payments: array<int, array<string, mixed>>}
+     * @return array{date: string, notes: string|null, vendor_invoice_no: string|null, combine_labour: bool, post: bool, party_id: int|null, bill_discount: mixed, bill_discount_percent: mixed, settle_total: string|null, vendor_total: string|null, items: array<int, array<string, mixed>>, staff: array<int, array<string, mixed>>, payments: array<int, array<string, mixed>>}
      */
     public function payload(): array
     {
@@ -219,6 +223,7 @@ class StoreBillRequest extends FormRequest
             'vendor_invoice_no' => $this->filled('vendor_invoice_no')
                 ? trim((string) $this->string('vendor_invoice_no'))
                 : null,
+            'combine_labour' => $this->boolean('combine_labour'),
             'post' => $this->boolean('post'),
             'client_ref' => $this->clientRef(),
             'party_id' => $this->filled('party_id') ? (int) $this->input('party_id') : null,

@@ -148,3 +148,36 @@
 
     </div>{{-- /data-ws-list --}}
 </div>
+
+{{--
+    One person, over the period the People tab is showing — level 2.
+
+    Opened from a row of "Person by person". The figures in the header are the
+    row's own, already fetched; the body lists the invoices behind the count from
+    GET /staff/{id}/work for the same window, a page at a time, and each one opens
+    in Sales. Nothing here is divided into anything else: the owner compares.
+--}}
+<div id="person-drawer" class="drawer-backdrop hidden" data-modal role="dialog" aria-modal="true"
+     aria-labelledby="person-drawer-title">
+    <div class="drawer-panel max-w-[560px]">
+        <div class="border-b border-muted px-6 py-5">
+            <div class="flex items-start justify-between gap-2">
+                <div class="min-w-0">
+                    <h3 id="person-drawer-title" class="truncate text-base font-bold leading-tight text-foreground"></h3>
+                    <p id="person-drawer-subtitle" class="mt-0.5 truncate text-xs text-muted-foreground"></p>
+                </div>
+                <button type="button" class="btn btn-ghost btn-icon shrink-0" data-modal-close aria-label="Close">
+                    <x-icon name="x" :size="16" />
+                </button>
+            </div>
+
+            <div class="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4" id="person-drawer-tiles"></div>
+        </div>
+
+        <div class="flex-1 overflow-y-auto px-6 py-5" id="person-drawer-body"></div>
+
+        <div class="drawer-foot">
+            <button type="button" class="btn btn-secondary btn-sm ml-auto" data-modal-close>Close</button>
+        </div>
+    </div>
+</div>

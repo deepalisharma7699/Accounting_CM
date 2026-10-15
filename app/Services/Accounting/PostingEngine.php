@@ -159,20 +159,26 @@ class PostingEngine
             vendorInvoiceNo: $type === TransactionType::Purchase
                 ? $this->trimmedOrNull($input['vendor_invoice_no'] ?? null)
                 : null,
+            // How the customer's copy draws labour. A sale's alone, and off
+            // unless asked for: a caller that predates the box gets the
+            // itemised invoice it always got.
+            combineLabour: $type === TransactionType::Sale
+                && filter_var($input['combine_labour'] ?? false, FILTER_VALIDATE_BOOLEAN),
         );
     }
 
     /**
-     * The vendor's bill number as a column write — or nothing, on a server
-     * where the manual SQL has not been run yet. Spread into the row.
+     * The columns that arrive by manual SQL, as writes — each one left out on a
+     * server where its SQL has not been run yet. Spread into the row.
      *
-     * @return array<string, string|null>
+     * @return array<string, string|bool|null>
      */
-    private function vendorInvoiceNoOf(PostingBatch $batch): array
+    private function optionalColumnsOf(PostingBatch $batch): array
     {
-        return Transaction::recordsVendorInvoiceNo()
-            ? ['vendor_invoice_no' => $batch->vendorInvoiceNo]
-            : [];
+        return [
+            ...(Transaction::recordsVendorInvoiceNo() ? ['vendor_invoice_no' => $batch->vendorInvoiceNo] : []),
+            ...(Transaction::recordsCombineLabour() ? ['combine_labour' => $batch->combineLabour] : []),
+        ];
     }
 
     private function trimmedOrNull(mixed $value): ?string
@@ -273,7 +279,7 @@ class PostingEngine
                 'date' => $batch->date,
                 'total' => $batch->total()->amount(),
                 'notes' => $batch->notes,
-                ...$this->vendorInvoiceNoOf($batch),
+                ...$this->optionalColumnsOf($batch),
                 'draft_lines' => null,
                 'draft_payments' => null,
                 'draft_payload' => null,
@@ -327,7 +333,7 @@ class PostingEngine
             'date' => $batch->date,
             'total' => $batch->total()->amount(),
             'notes' => $batch->notes,
-            ...$this->vendorInvoiceNoOf($batch),
+            ...$this->optionalColumnsOf($batch),
             'draft_lines' => $batch->toArray(),
             // Held on the row rather than in transaction_payments, exactly as
             // the intended lines are held out of the ledger: nothing reading
@@ -361,7 +367,7 @@ class PostingEngine
             'date' => $batch->date,
             'total' => $batch->total()->amount(),
             'notes' => $batch->notes,
-            ...$this->vendorInvoiceNoOf($batch),
+            ...$this->optionalColumnsOf($batch),
             'draft_lines' => $batch->toArray(),
             'draft_payments' => $batch->hasPayments() ? $batch->paymentsToArray() : null,
             'draft_payload' => $batch->payload,
@@ -405,7 +411,7 @@ class PostingEngine
                 // somebody discarded the draft — M16.
                 'doc_no' => $this->numbers->assign($draft->type, $draft->date),
                 'total' => $batch->total()->amount(),
-                ...$this->vendorInvoiceNoOf($batch),
+                ...$this->optionalColumnsOf($batch),
                 'draft_lines' => null,
                 'draft_payments' => null,
                 'draft_payload' => null,

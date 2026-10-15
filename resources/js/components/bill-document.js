@@ -540,6 +540,29 @@ export async function mountBillDocument(root, {
     }
 
     /**
+     * Offer "labour as one line" only where it would change the invoice: a sale
+     * with two or more lines of labour at the same GST rate. A line counts when
+     * it holds no stock and consumes nothing through a recipe — the server
+     * decides the same thing again, and is the one that is believed.
+     *
+     * Hidden rather than unticked, so the choice survives a line being removed
+     * and added back.
+     */
+    function paintCombineLabour() {
+        const field = el('[data-bill-combine-labour-field]');
+
+        if (!field) return;
+
+        const perRate = new Map();
+
+        (state.preview?.lines ?? [])
+            .filter((row) => !row.is_stock && (row.consumes ?? []).length === 0)
+            .forEach((row) => perRate.set(row.gst_rate, (perRate.get(row.gst_rate) ?? 0) + 1));
+
+        field.classList.toggle('hidden', isPurchase() || ![...perRate.values()].some((count) => count > 1));
+    }
+
+    /**
      * What each line will take off the shelf, under the line.
      *
      * A rewind is one line at one price and several quantities of stock, and
@@ -953,6 +976,7 @@ export async function mountBillDocument(root, {
             if (!settle()) return;
 
             state.preview = null;
+            paintCombineLabour();
 
             // The distinction the old code could not draw. Nothing to price
             // because nothing has been typed yet is a blank panel; nothing to
@@ -1005,6 +1029,7 @@ export async function mountBillDocument(root, {
             state.preview = data;
 
             paintConsumption();
+            paintCombineLabour();
         } catch (error) {
             /*
             | A failed preview must not block the bill — the server prices it
@@ -1549,7 +1574,7 @@ export async function mountBillDocument(root, {
             // The vendor's own bill number — a purchase's only.
             ...(isPurchase()
                 ? { vendor_invoice_no: el('[data-bill-vendor-invoice]').value.trim() || null }
-                : {}),
+                : { combine_labour: el('[data-bill-combine-labour]').checked }),
         };
     }
 
@@ -1634,6 +1659,7 @@ export async function mountBillDocument(root, {
                 billDiscount: el('[data-bill-discount]')?.value ?? '',
                 billDiscountMode: state.billDiscountMode,
                 vendorTotal: el('[data-bill-vendor-total]')?.value ?? '',
+                combineLabour: el('[data-bill-combine-labour]')?.checked ?? true,
                 payments: payments?.value() ?? [],
                 // Which of on credit / part paid / paid in full was chosen. The
                 // rows alone cannot say: an empty split is credit or a bill with
@@ -1679,9 +1705,10 @@ export async function mountBillDocument(root, {
      */
     function putTerms({
         billDiscount = '', billDiscountMode = 'amount', vendorTotal = '', payments: splits = [], settlement = null,
-        settleAt = null,
+        settleAt = null, combineLabour = true,
     }) {
         el('[data-bill-discount]').value = billDiscount ?? '';
+        el('[data-bill-combine-labour]').checked = combineLabour !== false;
         el('[data-bill-vendor-total]').value = isPurchase() ? (vendorTotal ?? '') : '';
         state.billDiscountMode = billDiscountMode === 'percent' ? 'percent' : 'amount';
         paintBillDiscountMode();
@@ -2153,6 +2180,8 @@ export async function mountBillDocument(root, {
     el('[data-bill-notes]').addEventListener('input', save);
     el('[data-bill-vendor-invoice]').addEventListener('input', save);
     el('[data-bill-vendor-invoice]').addEventListener('change', checkVendorInvoice);
+    // How the invoice is drawn, not what it comes to — nothing to re-price.
+    el('[data-bill-combine-labour]').addEventListener('change', save);
 
     el('[data-bill-discount]').addEventListener('input', () => {
         unsettle();
@@ -2250,6 +2279,7 @@ export async function mountBillDocument(root, {
         checkVendorInvoice();
         el('[data-bill-discount]').value = '';
         el('[data-bill-vendor-total]').value = '';
+        el('[data-bill-combine-labour]').checked = true;
         state.billDiscountMode = 'amount';
         paintBillDiscountMode();
         el('[data-restored]').classList.add('hidden');
@@ -2305,6 +2335,7 @@ export async function mountBillDocument(root, {
             // and leaves with the direction.
             mountStaff();
             mountVendorInvoice();
+            paintCombineLabour();
             renderLines();
             // The payment section names a party and an act, and the item hint
             // says where a rate comes from. All three just changed. Repainted

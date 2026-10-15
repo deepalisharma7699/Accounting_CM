@@ -1,6 +1,7 @@
 import auth from '../auth-client';
 import { mountPaymentRows } from '../components/payment-rows';
 import { mountStaffAdvances } from '../components/staff-advance';
+import { workInvoiceRows } from '../components/work-invoices';
 import { can } from '../permissions';
 import { clearModuleParams, moduleParams, registerEscape } from '../shell';
 import {
@@ -996,25 +997,7 @@ function workHistory(payload) {
             </div>
         </div>`;
 
-    const rows = invoices.map((invoice) => `
-        <div class="flex items-baseline justify-between gap-3 border-b border-muted py-2 last:border-0">
-            <div class="min-w-0">
-                <div class="truncate text-[0.8125rem] font-medium text-foreground">
-                    ${esc(invoice.doc_no ?? `#${invoice.id}`)}
-                    ${invoice.trades?.length
-                        ? `<span class="badge bg-accent text-accent-foreground">
-                               ${esc(invoice.trades.join(', '))}
-                           </span>`
-                        : ''}
-                </div>
-                <div class="truncate text-[0.75rem] text-muted-foreground">
-                    ${esc(formatDate(invoice.date))}${invoice.party ? ` · ${esc(invoice.party)}` : ''}
-                </div>
-            </div>
-            <div class="shrink-0 text-[0.875rem] font-semibold text-foreground">
-                ${esc(formatMoney(invoice.total))}
-            </div>
-        </div>`).join('');
+    const rows = workInvoiceRows(invoices);
 
     // The drawer shows the most recent ten. Saying so beats a list that looks
     // complete and is not — "eleven jobs" over ten rows is a discrepancy

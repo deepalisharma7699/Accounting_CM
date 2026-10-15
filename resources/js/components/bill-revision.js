@@ -245,6 +245,7 @@ export function mountBillRevision(root, { doc, workspace, direction, nouns }) {
                 */
                 settlement: terms.settle_total ? 'full' : (splits.length === 0 ? 'credit' : null),
                 settleAt: terms.settle_total ?? null,
+                combineLabour: bill.combine_labour !== false,
             });
         }
 

@@ -145,7 +145,7 @@ export function overviewPanel(data) {
 
         ${card('Parts against labour', stackedBar(mixSegments(data.mix ?? []), {
         empty: 'Nothing was billed in this period.',
-    }), { note: 'Goods carry a cost and labour does not, so each side shows its own margin.' })}
+    }), { note: 'Each side shows its own margin. Work with materials is a service that took stock off the shelf through its recipe, such as a rewind; the materials figure is what that stock cost.' })}
 
         ${reconciliationBanner(data.reconciliation)}`;
 }
@@ -216,7 +216,9 @@ function reconciliationBanner(reconciliation) {
 
 function mixSegments(mix) {
     return mix.map((side) => ({
-        label: `${side.label} · ${side.margin_percent}% margin`,
+        label: side.key === 'made'
+            ? `${side.label} · ${formatMoney(side.cost)} materials · ${side.margin_percent}% margin`
+            : `${side.label} · ${side.margin_percent}% margin`,
         amount: side.revenue,
         share: side.share,
         colour: SERIES[side.key]?.fill ?? SERIES.revenue.fill,
@@ -679,17 +681,34 @@ export function peoplePanel(data) {
         })
 
         + card('Person by person', table(
-            [['Name'], ['Designation'], ['Payslips', 'text-right'], ['Cost', 'text-right'], ['Invoices', 'text-right'], ['Those invoices', 'text-right'], ['Trades']],
-            (data.people ?? []).map((row) => `
-                <tr class="border-b border-border/60 ${row.is_active ? '' : 'opacity-60'}">
-                    ${cell(`<span class="font-medium">${esc(row.name)}</span>${row.is_active ? '' : ' <span class="badge bg-muted text-secondary-foreground">left</span>'}`)}
+            [
+                ['Name'], ['Designation'],
+                ['Present', 'text-right'], ['Half day', 'text-right'], ['Absent', 'text-right'],
+                ['Leave', 'text-right'], ['Off', 'text-right'], ['Unmarked', 'text-right'],
+                ['Payslips', 'text-right'], ['Cost', 'text-right'],
+                ['Invoices', 'text-right'], ['Those invoices', 'text-right'], ['Trades'],
+            ],
+            (data.people ?? []).map((row) => {
+                const days = row.attendance ?? {};
+
+                return `
+                <tr class="cursor-pointer border-b border-border/60 hover:bg-secondary/40 ${row.is_active ? '' : 'opacity-60'}"
+                    data-person="${esc(String(row.employee_id))}">
+                    ${cell(`<button type="button" class="font-medium text-foreground hover:underline" data-person="${esc(String(row.employee_id))}">${esc(row.name)}</button>${row.is_active ? '' : ' <span class="badge bg-muted text-secondary-foreground">left</span>'}`)}
                     ${cell(esc(row.designation ?? '—'), 'text-muted-foreground')}
+                    ${num(days.present ?? 0)}
+                    ${num(days.half_day ?? 0)}
+                    ${num(days.absent ? `<span class="text-rose-700">${days.absent}</span>` : 0)}
+                    ${num(days.paid_leave ?? 0)}
+                    ${num(days.off ?? 0)}
+                    ${num(days.unmarked ? `<span class="text-amber-700">${days.unmarked}</span>` : 0)}
                     ${num(row.payslips)}
                     ${num(money(row.cost))}
                     ${num(row.work_jobs || dash)}
                     ${num(Number(row.work_value) === 0 ? dash : money(row.work_value))}
                     ${cell(trades(row.work_trades), 'text-muted-foreground')}
-                </tr>`),
+                </tr>`;
+            }),
             'Nobody is on the payroll yet.',
         ), {
             note: creditedNote(data.work),
@@ -701,6 +720,12 @@ export function peoplePanel(data) {
                 second bench is said. An invoice naming two people appears whole in both their rows — neither did
                 a stated share of it and nothing here records one — so these figures are read across a row, never
                 added down a column. The workshop's own total is in the caption above.
+           </p>
+           <p class="px-1 pb-2 text-[0.75rem] text-muted-foreground">
+                The day columns are the attendance register over the same period. <strong class="font-semibold">Off</strong>
+                is holidays and weekly offs together, and <strong class="font-semibold">Unmarked</strong> is days the
+                person was on the staff with nothing recorded — left as it is, never counted as present or absent.
+                Open a row for that person's invoices.
            </p>
            <p class="px-1 pb-2 text-[0.75rem] text-muted-foreground">
                 None of it is an input to pay. Many of the workshop's people never appear on a document at all,

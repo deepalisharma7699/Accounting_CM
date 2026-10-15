@@ -346,6 +346,11 @@ class TransactionService
                 throw TransactionPayloadMismatchException::billTermsNotAccepted($type, $key);
             }
         }
+
+        // How the customer's copy draws labour — a sale's alone.
+        if (array_key_exists('combine_labour', $payload) && $type !== TransactionType::Sale) {
+            throw TransactionPayloadMismatchException::billTermsNotAccepted($type, 'combine_labour');
+        }
     }
 
     public function post(int $id, ?User $actor = null): Transaction

@@ -9,6 +9,7 @@ use App\Models\ItemVariant;
 use App\Models\Party;
 use App\Models\Tenant;
 use App\Models\User;
+use App\Services\Inventory\ItemVariantService;
 use App\Services\Reporting\Insights\StockInsights;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use PHPUnit\Framework\Attributes\Test;
@@ -302,7 +303,63 @@ class InsightTest extends TestCase
         // rewinding shop cares about and the ledger cannot make.
         $this->assertSame('goods', $sales->json('data.mix.0.key'));
         $this->assertSame('1000.00', $sales->json('data.mix.0.revenue'));
-        $this->assertSame('500.00', $sales->json('data.mix.1.revenue'));
+        $this->assertSame('service', $sales->json('data.mix.2.key'));
+        $this->assertSame('500.00', $sales->json('data.mix.2.revenue'));
+    }
+
+    #[Test]
+    public function work_that_consumed_materials_is_its_own_side_of_the_mix_and_carries_their_cost(): void
+    {
+        $copper = $this->variantFor($this->tenant, 'bulk_material');
+        $varnish = $this->variantFor($this->tenant, 'bulk_material');
+        $rewind = $this->serviceVariantFor($this->tenant, '5000.00');
+        $bearingChange = $this->serviceVariantFor($this->tenant, '500.00');
+
+        $this->receiveStock($this->tenant, $copper, '20', '700.00');
+        $this->receiveStock($this->tenant, $varnish, '5', '300.00');
+
+        $this->actingForTenant($this->tenant, fn () => app(ItemVariantService::class)->update($rewind, [
+            'components' => [
+                ['component_variant_id' => $copper->id, 'quantity' => '2.5'],
+                ['component_variant_id' => $varnish->id, 'quantity' => '0.4'],
+            ],
+        ]));
+
+        $this->actingForTenant($this->tenant, fn () => $this->engine()->postComposed(TransactionType::Sale, [
+            'date' => now()->toDateString(),
+            'party_id' => $this->customer()->id,
+            'items' => [
+                ['item_id' => $rewind->item_id, 'variant_id' => $rewind->id, 'quantity' => '1', 'unit_price' => '5000.00'],
+                ['item_id' => $bearingChange->item_id, 'variant_id' => $bearingChange->id, 'quantity' => '1', 'unit_price' => '500.00'],
+            ],
+            'payments' => [],
+        ], $this->owner));
+
+        $mix = collect($this->insight('sales')->assertOk()->json('data.mix'))->keyBy('key');
+
+        $this->assertSame(['goods', 'made', 'service'], $mix->keys()->all());
+
+        // The rewind, with what its recipe took off the shelf: 2.5 kg × ₹700 +
+        // 0.4 L × ₹300. Revenue is not divided into materials and labour.
+        $this->assertSame('5000.00', $mix['made']['revenue']);
+        $this->assertSame('1870.00', $mix['made']['cost']);
+        $this->assertSame('3130.00', $mix['made']['margin']);
+
+        // The bearing change consumed nothing, so it alone is labour.
+        $this->assertSame('500.00', $mix['service']['revenue']);
+        $this->assertSame('0.00', $mix['service']['cost']);
+
+        $this->assertSame('0.00', $mix['goods']['revenue']);
+    }
+
+    #[Test]
+    public function a_purchase_mix_has_no_work_with_materials_side(): void
+    {
+        $this->tradeOneBearing();
+
+        $mix = $this->insight('purchase')->assertOk()->json('data.mix');
+
+        $this->assertSame(['goods', 'service'], array_column($mix, 'key'));
     }
 
     #[Test]

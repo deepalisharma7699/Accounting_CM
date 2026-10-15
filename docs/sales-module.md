@@ -390,6 +390,37 @@ in `modules/sales.blade.php` would carry the document off the page with it the
 moment somebody opened another module. `PagesRenderTest` asserts both — one sheet
 in one child of `body`, and a body-level preview that renders none.
 
+### Labour can be shown to the customer as one row
+
+A repair is billed task by task — bearing change ₹100, seal repair ₹200 — and the
+counter may hand the customer one **"Labour charges ₹300"** row instead. A
+checkbox under the bill discount, ticked by default and shown only once the bill
+has two labour lines at one GST rate, sends `combine_labour`; it is stored on
+`transactions.combine_labour` (manual SQL `2026_10_14_002`) and read back on every
+print, so a reprint is the document the customer was handed. It is a **sale's
+only** — the engine drops it elsewhere and an edit naming it on anything else is
+refused — and an unsent flag means itemised, so every caller that predates it is
+unchanged. Until the SQL is run the box is accepted and every invoice prints
+itemised.
+
+It changes how the invoice is **drawn** and nothing else.
+`InvoiceDocumentService::withLabourCombined()` does it, for the GST invoice and
+the estimate alike, so print, the share page and the thermal receipt agree. The
+lines, the ledger, Insights and the drawer keep every task. Three rules keep it a
+tax invoice:
+
+* **Labour is a service that took nothing off a shelf** — no-stock category, no
+  movement. A rewind consumed copper through its recipe and keeps its own row; a
+  part bought to order holds no stock either, but it is goods.
+* **One row per SAC code and GST rate**, because a row of a tax invoice carries
+  one of each. A lone task keeps its own name; there is nothing to combine it with.
+* **Figures are added up, never recomputed.** Tax worked out again on ₹300 can
+  land a paisa from what the lines posted. The row's rate is the summed taxable
+  value plus the summed discount, so it multiplies out.
+
+A credit note is always itemised: it names lines one by one, and `SalesReturn` is
+not a type the flag applies to.
+
 ### Sharing is a row, and revoking is its whole lifetime
 
 The link has **no expiry**: a customer keeps an invoice, and a link that quietly

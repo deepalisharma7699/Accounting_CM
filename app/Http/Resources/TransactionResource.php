@@ -51,6 +51,11 @@ class TransactionResource extends JsonResource
             // continued in the form does not lose a number it was saved with.
             'vendor_invoice_no' => $this->vendor_invoice_no
                 ?? ($this->isDraft() ? ($this->draft_payload['vendor_invoice_no'] ?? null) : null),
+            // Whether the customer's copy shows labour as one row. A draft reads
+            // its stored request, which holds it whether or not the column exists.
+            'combine_labour' => (bool) ($this->isDraft()
+                ? ($this->draft_payload['combine_labour'] ?? false)
+                : ($this->combine_labour ?? false)),
 
             /*
             | A draft bill's terms, as they were saved: the discount on the whole

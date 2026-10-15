@@ -87,6 +87,7 @@ class UpdateTransactionRequest extends FormRequest
             | refuses them rather than storing figures no template will read.
             */
             'vendor_invoice_no' => ['sometimes', 'nullable', 'string', 'max:50'],
+            'combine_labour' => ['sometimes', 'boolean'],
             'bill_discount' => ['sometimes', 'nullable', 'numeric', 'decimal:0,2', 'min:0', 'max:'.self::MAX_AMOUNT],
             'bill_discount_percent' => [
                 'sometimes', 'nullable', 'numeric', 'min:0', 'max:100', 'prohibits:bill_discount',
@@ -182,6 +183,10 @@ class UpdateTransactionRequest extends FormRequest
                     : null,
                 'memo' => $line['memo'] ?? null,
             ], array_values((array) $this->input('items', [])));
+        }
+
+        if ($this->has('combine_labour')) {
+            $payload['combine_labour'] = $this->boolean('combine_labour');
         }
 
         if ($this->has('vendor_invoice_no')) {
