@@ -638,6 +638,10 @@ function paintPay() {
         <p class="field-error hidden" data-error-for="party_id"></p>`;
 
     // Paid in full at less than is owing — the rest written off after tax.
+    // One per payment, reused on every retry — so a request that timed out
+    // after the server had posted cannot put the same money in twice.
+    drawer.clientRef = crypto.randomUUID();
+
     drawer.settle = settleAgainst(bill.due ?? '0.00');
 
     drawer.payments = mountPaymentRows(el('[data-pay-host]'), {
@@ -775,6 +779,7 @@ async function submitReceipt() {
             body: {
                 date: el('[data-pay-date]').value,
                 post: true,
+                client_ref: drawer.clientRef,
                 party_id: bill.party?.id,
                 payments: split,
                 // What the customer was let off, where they paid less to close it.

@@ -17,6 +17,12 @@ use Illuminate\Support\Collection;
 class EloquentJournalEntryRepository implements JournalEntryRepositoryInterface
 {
     /**
+     * True for both halves of a reversal pair. A literal rather than a binding,
+     * so the select and the GROUP BY are the same expression to MySQL.
+     */
+    private const CANCELLED = "(transactions.status = 'reversed' OR transactions.reverses_id IS NOT NULL)";
+
+    /**
      * @param  array<int, PostingLine>  $lines
      * @return Collection<int, JournalEntry>
      */
@@ -197,9 +203,16 @@ class EloquentJournalEntryRepository implements JournalEntryRepositoryInterface
             // Qualified: `transactions` has a `date` column too, so an
             // unqualified one is ambiguous and MySQL refuses the query.
             ->when(filled($to), fn ($query) => $query->whereDate('journal_entries.date', '<=', $to))
+            // Split by whether the row belongs to a reversal pair — the document
+            // that was cancelled, or the reversal that cancelled it. A balance
+            // reads both halves, which net to nothing; a lifetime total must
+            // read neither, or a reversed ₹50,000 payment counts its reversal
+            // as ₹50,000 purchased.
             ->groupBy('transactions.party_id', 'journal_entries.account_id')
+            ->groupByRaw($cancelled = self::CANCELLED)
             ->selectRaw(
                 'transactions.party_id as party_id, journal_entries.account_id as account_id, '.
+                $cancelled.' as cancelled, '.
                 'COALESCE(SUM(journal_entries.debit), 0) as debit_total, '.
                 'COALESCE(SUM(journal_entries.credit), 0) as credit_total'
             )
@@ -207,6 +220,7 @@ class EloquentJournalEntryRepository implements JournalEntryRepositoryInterface
             ->map(fn (JournalEntry $row) => [
                 'party_id' => (int) $row->party_id,
                 'account_id' => (int) $row->account_id,
+                'cancelled' => (bool) $row->cancelled,
                 'debit' => (string) $row->debit_total,
                 'credit' => (string) $row->credit_total,
             ]);

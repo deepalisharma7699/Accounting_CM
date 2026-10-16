@@ -163,6 +163,30 @@ class EloquentPayrollRepository implements PayrollRepositoryInterface
         return $totals;
     }
 
+    public function advancesPaidBetween(array $employeeIds, ?string $from, ?string $to): array
+    {
+        $ids = array_values(array_unique(array_map('intval', $employeeIds)));
+
+        if ($ids === []) {
+            return [];
+        }
+
+        return Transaction::query()
+            ->whereIn('employee_id', $ids)
+            ->where('type', TransactionType::StaffAdvance->value)
+            ->where('status', TransactionStatus::Posted->value)
+            ->when($from, fn ($query, $from) => $query->whereDate('date', '>=', $from))
+            ->when($to, fn ($query, $to) => $query->whereDate('date', '<=', $to))
+            ->groupBy('employee_id')
+            ->selectRaw('employee_id, SUM(total) as amount, COUNT(*) as vouchers')
+            ->get()
+            ->mapWithKeys(fn ($row) => [(int) $row->employee_id => [
+                'amount' => (string) $row->amount,
+                'count' => (int) $row->vouchers,
+            ]])
+            ->all();
+    }
+
     public function paginateAdvances(array $filters, int $perPage): LengthAwarePaginator
     {
         return Transaction::query()

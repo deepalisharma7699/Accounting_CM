@@ -278,6 +278,45 @@ class AllocationTest extends TestCase
     }
 
     #[Test]
+    public function a_part_payment_from_the_bills_own_screen_takes_only_what_was_paid(): void
+    {
+        $customer = $this->party(PartyRole::Customer);
+        $bill = $this->sellTo($customer, '10000.00');
+
+        // The drawer names the bill and no figure. ₹5,000 of an ₹11,800 invoice
+        // is ₹5,000 of it — not the whole due, refused against the receipt.
+        $this->collect($customer, '5000.00', [['bill_transaction_id' => $bill->id]]);
+
+        $shown = $this->show($bill);
+
+        $this->assertSame('5000.00', $shown['paid']);
+        $this->assertSame('6800.00', $shown['due']);
+        $this->assertSame('partial', $shown['payment_status']);
+    }
+
+    #[Test]
+    public function a_refused_allocation_leaves_no_payment_in_the_books(): void
+    {
+        $customer = $this->party(PartyRole::Customer);
+        $bill = $this->sellTo($customer, '10000.00');
+
+        $before = $this->actingForTenant($this->tenant, fn () => Transaction::count());
+
+        $this->withHeaders($this->authHeader($this->owner))
+            ->postJson('/api/v1/transactions/receipt', [
+                'date' => now()->toDateString(),
+                'post' => true,
+                'party_id' => $customer->id,
+                'payments' => [['mode' => 'cash', 'amount' => '20000.00']],
+                'allocations' => [['bill_transaction_id' => $bill->id, 'amount' => '15000.00']],
+            ])
+            ->assertStatus(422);
+
+        // A refusal the operator retries must not have written the money first.
+        $this->assertSame($before, $this->actingForTenant($this->tenant, fn () => Transaction::count()));
+    }
+
+    #[Test]
     public function a_posted_receipt_can_be_re_pointed_afterwards(): void
     {
         $customer = $this->party(PartyRole::Customer);

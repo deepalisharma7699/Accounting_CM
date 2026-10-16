@@ -52,11 +52,9 @@
  * it later only has to subscribe.
  *
  * `ledger` is held by Opening balances, whose position is a copy of the books
- * and of the go-live date on the settings screen. `staff` has no subscriber yet
- * — the module that would hold a copy of it refreshes its own sections already.
- * It is named here anyway, because the announcement is what has to be right: a
- * write that reports nothing is invisible, and the module that comes to hold
- * that data later only has to subscribe.
+ * and of the go-live date on the settings screen. `staff` is held by Insights,
+ * whose People tab is a copy of the register, the advances and the payroll — it
+ * subscribes to every resource here, because each of its panels reads one.
  */
 const RESOURCES = ['stock', 'items', 'transactions', 'parties', 'ledger', 'staff', 'kinds'];
 

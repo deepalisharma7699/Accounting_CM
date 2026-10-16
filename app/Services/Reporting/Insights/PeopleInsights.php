@@ -61,7 +61,13 @@ class PeopleInsights
     public function forPeriod(ReportPeriod $period, Money $revenue): array
     {
         $cost = $this->cost($period);
-        $employees = Employee::query()->with('designation:id,name')->get();
+        $employees = Employee::query()->with('designation:id,name')->orderBy('name')->get();
+        $ids = $employees->map(fn (Employee $employee) => (int) $employee->id)->all();
+
+        // Read once and handed to both tables, so the Advances card and a
+        // person's row cannot quote two different figures for one month.
+        $positions = $this->payroll->advanceOutstandingFor($ids);
+        $given = $this->payroll->advancesPaidBetween($ids, $period->from, $period->to);
 
         return [
             'cost' => $cost + [
@@ -72,9 +78,9 @@ class PeopleInsights
                 'share_of_revenue' => $this->percentOf(Money::of($cost['gross']), $revenue),
             ],
             'trend' => $this->costTrend($period),
-            'advances' => $this->advances($employees),
+            'advances' => $this->advances($employees, $positions, $given),
             'attendance' => $this->attendance($period, $employees),
-            'people' => $this->people($period, $employees),
+            'people' => $this->people($period, $employees, $positions, $given),
             'work' => $this->work($period),
         ];
     }
@@ -160,7 +166,7 @@ class PeopleInsights
      |-------------------------------------------------------------------- */
 
     /**
-     * Advances paid and not yet recovered.
+     * Advances paid and not yet recovered, and advances paid in the period.
      *
      * Straight off {@see PayrollService::advanceOutstandingFor()}, which is where
      * every other screen gets this figure — an advance is an **asset**, derived
@@ -168,35 +174,42 @@ class PeopleInsights
      * it with nothing having to remember. Recomputing it here would be a second
      * definition of what somebody owes the workshop.
      *
-     * Not filtered by the period, like the ageing and for the same reason: an
-     * advance from February is a position, not an event.
+     * Two different questions, kept in two columns. **Still out** is not
+     * filtered by the period, like the ageing and for the same reason: an
+     * advance from February is a position, not an event. **Given in period** is
+     * an event — the vouchers dated inside the window — and it is what somebody
+     * asking "what advances went out this month" means. A person is listed if
+     * either is non-zero, so an advance paid and already recovered inside the
+     * month is still on the card.
      *
      * @param  \Illuminate\Support\Collection<int, Employee>  $employees
+     * @param  array<int, array{paid: string, recovered: string, outstanding: string}>  $positions
+     * @param  array<int, array{amount: string, count: int}>  $given
      * @return array<string, mixed>
      */
-    private function advances(\Illuminate\Support\Collection $employees): array
+    private function advances(\Illuminate\Support\Collection $employees, array $positions, array $given): array
     {
-        $positions = $this->payroll->advanceOutstandingFor(
-            $employees->map(fn (Employee $employee) => (int) $employee->id)->all()
-        );
-
         $total = Money::zero();
+        $givenTotal = Money::zero();
+        $givenCount = 0;
+        $owing = 0;
         $rows = [];
 
         foreach ($employees as $employee) {
             $position = $positions[(int) $employee->id] ?? null;
+            $paidNow = $given[(int) $employee->id] ?? null;
 
-            if ($position === null) {
-                continue;
-            }
+            $outstanding = Money::of($position['outstanding'] ?? 0);
+            $givenHere = Money::of($paidNow['amount'] ?? 0);
 
-            $outstanding = Money::of($position['outstanding']);
-
-            if (! $outstanding->isPositive()) {
+            if (! $outstanding->isPositive() && ! $givenHere->isPositive()) {
                 continue;
             }
 
             $total = $total->plus($outstanding);
+            $givenTotal = $givenTotal->plus($givenHere);
+            $givenCount += (int) ($paidNow['count'] ?? 0);
+            $owing += $outstanding->isPositive() ? 1 : 0;
 
             $rate = Money::of($employee->pay_rate ?? 0);
 
@@ -205,8 +218,10 @@ class PeopleInsights
                 'name' => $employee->name,
                 'designation' => $employee->designation?->name,
                 'outstanding' => $outstanding->amount(),
-                'paid' => $position['paid'],
-                'recovered' => $position['recovered'],
+                'paid' => $position['paid'] ?? '0.00',
+                'recovered' => $position['recovered'] ?? '0.00',
+                'given_in_period' => $givenHere->amount(),
+                'given_count' => (int) ($paidNow['count'] ?? 0),
                 /*
                 | How much of a month's pay is already spent.
                 |
@@ -222,11 +237,14 @@ class PeopleInsights
             ];
         }
 
-        usort($rows, static fn (array $a, array $b) => bccomp($b['outstanding'], $a['outstanding'], 2));
+        usort($rows, static fn (array $a, array $b) => bccomp($b['outstanding'], $a['outstanding'], 2)
+            ?: bccomp($b['given_in_period'], $a['given_in_period'], 2));
 
         return [
             'outstanding' => $total->amount(),
-            'people' => count($rows),
+            'people' => $owing,
+            'given_in_period' => $givenTotal->amount(),
+            'given_count' => $givenCount,
             'rows' => $rows,
         ];
     }
@@ -322,13 +340,32 @@ class PeopleInsights
      * was accidentally saying: which benches this person covered, and on how
      * many invoices each.
      *
+     * ## Each row is the whole person, so the drawer needs no second request
+     *
+     * Who they are and how they are paid, what the period's payslips came to,
+     * what was advanced to them in it and what is still out — read in the same
+     * grouped passes as the rest of the panel. The drawer paints from this row,
+     * which is what keeps it agreeing with the table to the figure.
+     *
      * @param  \Illuminate\Support\Collection<int, Employee>  $employees
+     * @param  array<int, array{paid: string, recovered: string, outstanding: string}>  $positions
+     * @param  array<int, array{amount: string, count: int}>  $given
      * @return array<int, array<string, mixed>>
      */
-    private function people(ReportPeriod $period, \Illuminate\Support\Collection $employees): array
-    {
+    private function people(
+        ReportPeriod $period,
+        \Illuminate\Support\Collection $employees,
+        array $positions,
+        array $given,
+    ): array {
         $costs = $this->lineQuery($period)
-            ->selectRaw('payroll_lines.employee_id as employee_id, sum(payroll_lines.gross) as gross, count(*) as payslips')
+            ->selectRaw(implode(', ', [
+                'payroll_lines.employee_id as employee_id',
+                'sum(payroll_lines.gross) as gross',
+                'sum(payroll_lines.advance_recovered) as recovered',
+                'sum(payroll_lines.net) as net',
+                'count(*) as payslips',
+            ]))
             ->groupBy('payroll_lines.employee_id')
             ->get()
             ->keyBy('employee_id');
@@ -357,8 +394,19 @@ class PeopleInsights
                 'name' => $employee->name,
                 'designation' => $employee->designation?->name,
                 'is_active' => (bool) $employee->is_active,
+                'phone' => $employee->phone,
+                'salary_basis' => $employee->salary_basis?->value,
+                'salary_basis_label' => $employee->salary_basis?->label(),
+                'pay_rate' => Money::of($employee->pay_rate ?? 0)->amount(),
+                'joined_on' => $employee->joined_on?->toDateString(),
+                'left_on' => $employee->left_on?->toDateString(),
                 'cost' => Money::of($cost?->gross ?? 0)->amount(),
+                'net_paid' => Money::of($cost?->net ?? 0)->amount(),
                 'payslips' => (int) ($cost?->payslips ?? 0),
+                'advance_given' => Money::of($given[$id]['amount'] ?? 0)->amount(),
+                'advance_given_count' => (int) ($given[$id]['count'] ?? 0),
+                'advance_recovered' => Money::of($cost?->recovered ?? 0)->amount(),
+                'advance_outstanding' => Money::of($positions[$id]['outstanding'] ?? 0)->amount(),
                 'work_jobs' => $credited['job_count'],
                 'work_value' => $credited['invoice_value'],
                 'work_trades' => $credited['trades'],

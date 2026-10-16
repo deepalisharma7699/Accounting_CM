@@ -300,11 +300,21 @@ class SettlementService
 
         $planned = [];
 
+        // What an unstated amount may still draw on. "This bill" from a bill's
+        // own screen is a part-payment as often as not: ₹50,000 against a
+        // ₹1,11,215 purchase means ₹50,000 of it, not the whole due — which the
+        // check against the settlement would then refuse after the money had
+        // been typed, chosen and pressed for.
+        $unstated = $this->unallocated($settlement)->minus(Money::sum(array_filter($requested)));
+
         foreach ($requested as $billId => $amount) {
             $bill = $this->billFor($settlement, $billId);
             $due = $this->dueOn($bill, $this->allocations->allocatedAgainstBill($billId));
 
-            $amount ??= $due;
+            if ($amount === null) {
+                $amount = $due->compareTo($unstated) <= 0 ? $due : $unstated;
+                $unstated = $unstated->minus($amount);
+            }
 
             // A bill that is already settled contributes nothing rather than
             // failing the whole receipt. Somebody ticking four invoices where one

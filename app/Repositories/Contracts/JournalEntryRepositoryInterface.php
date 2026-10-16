@@ -102,7 +102,10 @@ interface JournalEntryRepositoryInterface
      *
      * @param  array<int, int>  $partyIds
      * @param  array<int, int>  $accountIds
-     * @return Collection<int, array{party_id: int, account_id: int, debit: string, credit: string}>
+     * `cancelled` marks rows from a reversal pair, so a caller can leave them
+     * out of a gross figure while still netting them into a balance.
+     *
+     * @return Collection<int, array{party_id: int, account_id: int, cancelled: bool, debit: string, credit: string}>
      */
     public function totalsByParty(array $partyIds, array $accountIds, ?string $to = null): Collection;
 

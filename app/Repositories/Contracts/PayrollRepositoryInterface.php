@@ -98,6 +98,21 @@ interface PayrollRepositoryInterface
     public function advanceTotalsFor(array $employeeIds): array;
 
     /**
+     * Advances **paid** to each of these people inside a window, by the
+     * voucher's date — what a period report means by "advances this month".
+     *
+     * The same rows {@see advanceTotalsFor()} sums for its `paid` side, narrowed
+     * to the window: posted vouchers only. A reversed advance is `reversed` and
+     * its reversal names nobody, so neither is counted. A null bound is open.
+     *
+     * Only ids with something paid are present.
+     *
+     * @param  array<int, int>  $employeeIds
+     * @return array<int, array{amount: string, count: int}>
+     */
+    public function advancesPaidBetween(array $employeeIds, ?string $from, ?string $to): array;
+
+    /**
      * The advance vouchers themselves, newest first — the Advances list.
      *
      * @param  array{employee_id?: int|null, status?: string|null, from?: string|null, to?: string|null}  $filters

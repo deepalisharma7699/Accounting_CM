@@ -1,4 +1,5 @@
 import auth from '../auth-client';
+import { onChange } from '../data-bus';
 import {
     creditPanel, overviewPanel, peoplePanel, salesPanel, stockPanel,
 } from '../components/insight-panels';
@@ -7,7 +8,7 @@ import { workInvoiceRows } from '../components/work-invoices';
 import { can } from '../permissions';
 import { openModule } from '../shell';
 import {
-    $, $$, downloadCsv, esc, formatMoney, hideModal, showModal, toast,
+    $, $$, downloadCsv, esc, formatDate, formatMoney, hideModal, showModal, toast,
 } from '../ui';
 import { mountWorkspace } from '../workspace';
 
@@ -346,8 +347,10 @@ function openPerson(id) {
 
     state.person = { id, page: 0, invoices: [], total: 0, period: held.meta?.period ?? null };
 
-    const days = row.attendance ?? {};
-    const present = String(days.present ?? 0) + (days.half_day ? ` + ${days.half_day} half` : '');
+    const days = row.attendance ?? null;
+    const present = days
+        ? String(days.present ?? 0) + (days.half_day ? ` + ${days.half_day} half` : '')
+        : '—';
 
     $('#person-drawer-title', root).textContent = row.name;
     $('#person-drawer-subtitle', root).textContent = [
@@ -357,10 +360,10 @@ function openPerson(id) {
     ].filter(Boolean).join(' · ');
 
     $('#person-drawer-tiles', root).innerHTML = [
-        ['Invoices', String(row.work_jobs ?? 0)],
-        ['Those invoices', formatMoney(row.work_value)],
         ['Days present', present],
-        ['Cost', formatMoney(row.cost)],
+        ['Wages', formatMoney(row.cost)],
+        ['Advanced', formatMoney(row.advance_given)],
+        ['Advance still out', formatMoney(row.advance_outstanding)],
     ].map(([label, value]) => `
         <div class="rounded-[10px] bg-background px-3 py-2.5">
             <p class="mb-0.5 text-[11px] text-muted-foreground">${esc(label)}</p>
@@ -374,30 +377,73 @@ function openPerson(id) {
     loadPersonInvoices();
 }
 
+const heading = (text) => `<h4 class="mb-2 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">${esc(text)}</h4>`;
+const none = '<span class="text-muted-foreground">—</span>';
+
+/** A `<dl>` of label/value pairs; a value is already escaped markup. */
+function pairs(rows) {
+    return `<dl class="dl mb-5">${rows.map(([label, value]) => `<dt>${esc(label)}</dt><dd>${value}</dd>`).join('')}</dl>`;
+}
+
+/**
+ * Everything the row carries about one person, in the order somebody asks it:
+ * who they are, whether they turned up, what they cost and what is out with
+ * them, and what work they are named on.
+ *
+ * Every figure is the row's own — the table and the drawer are one payload, so
+ * they cannot disagree.
+ */
 function personDetails(row) {
-    const days = row.attendance ?? {};
-    const pairs = [
-        ['Present', days.present], ['Half day', days.half_day], ['Absent', days.absent],
-        ['Paid leave', days.paid_leave], ['Off', days.off], ['Unmarked', days.unmarked],
+    const days = row.attendance ?? null;
+    const register = [
+        ['Present', days?.present], ['Half day', days?.half_day], ['Absent', days?.absent],
+        ['Paid leave', days?.paid_leave], ['Off', days?.off], ['Unmarked', days?.unmarked],
     ];
     const trades = (row.work_trades ?? []).map((trade) => `${trade.designation} ${trade.jobs}`).join(' · ');
+    const rate = Number(row.pay_rate) > 0
+        ? `${esc(formatMoney(row.pay_rate))} ${row.salary_basis === 'daily' ? 'a day' : 'a month'}`
+        : none;
 
-    return `
-        <h4 class="mb-2 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">Attendance</h4>
-        <div class="mb-5 grid grid-cols-3 gap-2 sm:grid-cols-6">
-            ${pairs.map(([label, value]) => `
-                <div class="rounded-[10px] border border-border px-2.5 py-2 text-center">
-                    <p class="text-[11px] text-muted-foreground">${esc(label)}</p>
-                    <p class="text-[0.9375rem] font-semibold text-foreground">${esc(String(value ?? 0))}</p>
-                </div>`).join('')}
-        </div>
+    return heading('Who')
+        + pairs([
+            ['Designation', row.designation ? esc(row.designation) : none],
+            ['Paid', row.salary_basis_label ? `${esc(row.salary_basis_label)} · ${rate}` : rate],
+            ['Joined', row.joined_on ? esc(formatDate(row.joined_on)) : none],
+            ...(row.left_on ? [['Left', esc(formatDate(row.left_on))]] : []),
+            ['Phone', row.phone ? `<a class="hover:underline" href="tel:${esc(row.phone)}">${esc(row.phone)}</a>` : none],
+        ])
 
-        <dl class="dl mb-5">
-            <dt>Payslips</dt><dd>${esc(String(row.payslips ?? 0))}</dd>
-            <dt>Trades</dt><dd>${trades ? esc(trades) : '<span class="text-muted-foreground">—</span>'}</dd>
-        </dl>
+        + heading('Attendance in this period')
+        + (days
+            ? `<div class="mb-5 grid grid-cols-3 gap-2 sm:grid-cols-6">
+                ${register.map(([label, value]) => `
+                    <div class="rounded-[10px] border border-border px-2.5 py-2 text-center">
+                        <p class="text-[11px] text-muted-foreground">${esc(label)}</p>
+                        <p class="text-[0.9375rem] font-semibold text-foreground">${esc(String(value ?? 0))}</p>
+                    </div>`).join('')}
+               </div>`
+            : '<p class="mb-5 text-[0.8125rem] text-muted-foreground">The register was not available for this period.</p>')
 
-        <h4 class="mb-2 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">Invoices naming them</h4>`;
+        + heading('Pay and advances')
+        + pairs([
+            ['Payslips', esc(String(row.payslips ?? 0))],
+            ['Wages (gross)', esc(formatMoney(row.cost))],
+            ['Recovered from pay', esc(formatMoney(row.advance_recovered))],
+            ['Paid out on payslips', esc(formatMoney(row.net_paid))],
+            ['Advances given', `${esc(formatMoney(row.advance_given))}${row.advance_given_count
+                ? ` <span class="text-muted-foreground">· ${row.advance_given_count} voucher${row.advance_given_count === 1 ? '' : 's'}</span>`
+                : ''}`],
+            ['Still out today', `<span class="${Number(row.advance_outstanding) > 0 ? 'font-semibold text-amber-700' : ''}">${esc(formatMoney(row.advance_outstanding))}</span>`],
+        ])
+
+        + heading('Work')
+        + pairs([
+            ['Invoices naming them', esc(String(row.work_jobs ?? 0))],
+            ['Those invoices', esc(formatMoney(row.work_value))],
+            ['Trades', trades ? esc(trades) : none],
+        ])
+
+        + heading('Invoices naming them');
 }
 
 async function loadPersonInvoices() {
@@ -528,6 +574,33 @@ export default async function initInsights() {
 
     await loadPeriods();
     await show(DEFAULT_TAB);
+
+    /* --- held is not the same as stale (§3.7) ------------------------------ */
+
+    /*
+    | Every panel here is worked out from what the other modules write, and the
+    | cache above holds each one for the life of the tab — so without this, a
+    | day's attendance marked in Staff, an advance paid or a sale posted left
+    | People, Sales and the rest reporting the figures from before, until a full
+    | reload. The People tab read zero days for a register that was full.
+    |
+    | Every resource, because there is no panel that reads none of them. The
+    | write only marks; the refetch waits until somebody is looking (§7.2) —
+    | the open tab on the way back in, every other tab on its next click.
+    */
+    let stale = false;
+
+    onChange(['stock', 'items', 'transactions', 'parties', 'ledger', 'staff'], () => {
+        stale = true;
+    });
+
+    root.addEventListener('module:shown', () => {
+        if (!stale) return;
+
+        stale = false;
+        state.cache.clear();
+        show(state.tab);
+    });
 
     /* --- the tab strip ---------------------------------------------------- */
 

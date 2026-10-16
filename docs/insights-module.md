@@ -233,6 +233,21 @@ grouped read as the Staff list's "this month" column. **Unmarked** is the days
 the person was in service (joining date to leaving date, never past today) with
 no mark at all. It is reported, never filled in, because what a blank day is
 worth depends on the salary basis and is decided once, in `SalaryBasis`.
+
+**Advances are two figures, and only one of them is about the period.** *Given
+in period* is the posted `staff_advance` vouchers dated inside the window
+(`PayrollRepository::advancesPaidBetween()`, the same rows `advanceTotalsFor()`
+sums); *still out* is today's position whatever the window. The Advances card
+lists anybody with either, so an advance paid and recovered inside one month is
+still on it. Both are read once in `forPeriod()` and handed to the card and to
+each person's row, so the two cannot disagree.
+
+**A row is the whole person, and the drawer paints from it.** Profile (basis,
+rate, joined, phone), the register, the period's payslips (gross, recovered,
+net), advances given and still out, and the attributed work all ride on the row;
+the drawer fetches only the invoices behind the count. A row that arrives with no
+`attendance` block shows a dash in the day columns, never a zero — a zero would
+claim nobody turned up.
 "Everything so far" starts at the earliest joining date on the roster. No
 attendance figure is divided into a work figure: the owner compares them.
 

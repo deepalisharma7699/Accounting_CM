@@ -291,25 +291,34 @@ class TransactionController extends Controller
             );
         }
 
-        $transaction = $this->transactions->create($type, $payload, $request->user());
+        // The money and which bills it settled are one act. Posted and then
+        // refused an allocation, the payment stayed in the books behind a 422 —
+        // so every retry of a refused payment wrote another one, and the
+        // supplier's balance fell by each of them while the screen said nothing
+        // had happened.
+        [$transaction, $allocations] = DB::transaction(function () use ($type, $payload, $request) {
+            $transaction = $this->transactions->create($type, $payload, $request->user());
 
-        // Which invoices the money settled — M16. Only once it is actually in
-        // the books: a draft has moved nothing, so there is nothing yet to point
-        // at anything.
-        //
-        // Applied even when the request named no bills, in which case the money
-        // goes against the party's open bills oldest first. That default is the
-        // difference between a receipt that reduces a balance and one that also
-        // marks INV/26-27/1012 as paid, and asking every counter clerk to
-        // nominate invoices before they can take a ₹500 note would be the wrong
-        // trade.
-        // Not re-run for a repeat submission: the first attempt already decided
-        // which invoices this money settled, and doing it again would replace
-        // that decision with a freshly computed one — quietly moving an
-        // allocation the operator may have corrected in between.
-        $allocations = $transaction->isDraft() || ! $transaction->wasRecentlyCreated
-            ? new Collection
-            : $this->settlements->allocate($transaction, $request->allocations());
+            // Which invoices the money settled — M16. Only once it is actually in
+            // the books: a draft has moved nothing, so there is nothing yet to point
+            // at anything.
+            //
+            // Applied even when the request named no bills, in which case the money
+            // goes against the party's open bills oldest first. That default is the
+            // difference between a receipt that reduces a balance and one that also
+            // marks INV/26-27/1012 as paid, and asking every counter clerk to
+            // nominate invoices before they can take a ₹500 note would be the wrong
+            // trade.
+            // Not re-run for a repeat submission: the first attempt already decided
+            // which invoices this money settled, and doing it again would replace
+            // that decision with a freshly computed one — quietly moving an
+            // allocation the operator may have corrected in between.
+            $allocations = $transaction->isDraft() || ! $transaction->wasRecentlyCreated
+                ? new Collection
+                : $this->settlements->allocate($transaction, $request->allocations());
+
+            return [$transaction, $allocations];
+        });
 
         return $this->respondToCreate(
             $transaction,

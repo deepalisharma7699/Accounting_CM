@@ -507,6 +507,10 @@ function paintPay() {
         <p class="field-error hidden" data-error-for="party_id"></p>`;
 
     // Paid in full at less than is owing — the rest booked as discount received.
+    // One per payment, reused on every retry — so a request that timed out
+    // after the server had posted cannot put the same money in twice.
+    drawer.clientRef = crypto.randomUUID();
+
     drawer.settle = settleAgainst(bill.due ?? '0.00');
 
     drawer.payments = mountPaymentRows(el('[data-pay-host]'), {
@@ -548,6 +552,7 @@ async function submitPayment() {
             body: {
                 date: el('[data-pay-date]').value,
                 post: true,
+                client_ref: drawer.clientRef,
                 party_id: bill.party?.id,
                 payments: split,
                 // What the supplier let the workshop off, where they took less.

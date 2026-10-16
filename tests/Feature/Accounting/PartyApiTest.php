@@ -95,6 +95,34 @@ class PartyApiTest extends TestCase
     }
 
     #[Test]
+    public function a_reversed_payment_is_neither_purchased_nor_paid(): void
+    {
+        // The case that reached production: a payment posted by mistake and
+        // reversed. Counted gross, the reversal's credit to Payables read as
+        // ₹50,000 more purchased, and the original as ₹50,000 more paid.
+        $party = $this->party(['roles' => ['vendor']]);
+
+        $this->postSimpleJournal(
+            $this->tenant, SystemAccount::Inventory, SystemAccount::Payables, '111215.00', party: $party
+        );
+        $this->postSimpleJournal(
+            $this->tenant, SystemAccount::Payables, SystemAccount::Bank, '50000.00', party: $party
+        );
+        $mistake = $this->postSimpleJournal(
+            $this->tenant, SystemAccount::Payables, SystemAccount::Bank, '50000.00', party: $party
+        );
+
+        $this->actingForTenant($this->tenant, fn () => $this->engine()->reverse($mistake));
+
+        $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/parties?with_position=1')
+            ->assertOk()
+            ->assertJsonPath('data.0.outstanding.payable', '61215.00')
+            ->assertJsonPath('data.0.lifetime.purchased', '111215.00')
+            ->assertJsonPath('data.0.lifetime.paid', '50000.00');
+    }
+
+    #[Test]
     public function it_reports_what_has_gone_through_a_relationship_beside_what_is_left_of_it(): void
     {
         // The customer and vendor screens show both: the outstanding figure is

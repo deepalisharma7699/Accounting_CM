@@ -638,7 +638,8 @@ export function peoplePanel(data) {
         statTile({
             label: 'Advances out',
             value: advances.outstanding,
-            note: `With ${advances.people ?? 0} ${advances.people === 1 ? 'person' : 'people'}`,
+            note: `With ${advances.people ?? 0} ${advances.people === 1 ? 'person' : 'people'}`
+                + (Number(advances.given_in_period) > 0 ? ` · ${formatMoney(advances.given_in_period)} given in period` : ''),
             tone: Number(advances.outstanding) > 0 ? 'warn' : 'neutral',
         }),
         statTile({
@@ -662,12 +663,15 @@ export function peoplePanel(data) {
             note: 'Always monthly — payroll is. A run belongs to the month it is for, not the day it was paid.',
         })
 
-        + card('Advances outstanding', table(
-            [['Name'], ['Designation'], ['Paid', 'text-right'], ['Recovered', 'text-right'], ['Still out', 'text-right'], ['Of a month', 'text-right']],
+        + card('Advances', table(
+            [['Name'], ['Designation'], ['Given in period', 'text-right'], ['Paid, all time', 'text-right'], ['Recovered', 'text-right'], ['Still out', 'text-right'], ['Of a month', 'text-right']],
             (advances.rows ?? []).map((row) => `
-                <tr class="border-b border-border/60">
+                <tr class="cursor-pointer border-b border-border/60 hover:bg-secondary/40" data-person="${esc(String(row.employee_id))}">
                     ${cell(`<span class="font-medium">${esc(row.name)}</span>`)}
                     ${cell(esc(row.designation ?? '—'), 'text-muted-foreground')}
+                    ${num(Number(row.given_in_period) > 0
+        ? `${money(row.given_in_period)}${row.given_count > 1 ? ` <span class="text-muted-foreground">(${row.given_count})</span>` : ''}`
+        : dash)}
                     ${num(money(row.paid))}
                     ${num(money(row.recovered))}
                     ${num(`<span class="font-semibold">${money(row.outstanding)}</span>`)}
@@ -675,9 +679,9 @@ export function peoplePanel(data) {
         ? dash
         : `<span class="${Number(row.share_of_pay) > 100 ? 'text-rose-700' : ''}">${esc(row.share_of_pay)}%</span>`)}
                 </tr>`),
-            'Nothing is out with anybody.',
+            'No advance was given in this period and nothing is out with anybody.',
         ), {
-            note: 'An advance is an asset, recovered from a payslip. Over 100% of a month cannot come out of one.',
+            note: 'Given in period is the advances paid inside the window. Still out is today\'s position, whatever the window — an advance is an asset, recovered from a payslip, and over 100% of a month cannot come out of one.',
         })
 
         + card('Person by person', table(
@@ -685,25 +689,33 @@ export function peoplePanel(data) {
                 ['Name'], ['Designation'],
                 ['Present', 'text-right'], ['Half day', 'text-right'], ['Absent', 'text-right'],
                 ['Leave', 'text-right'], ['Off', 'text-right'], ['Unmarked', 'text-right'],
-                ['Payslips', 'text-right'], ['Cost', 'text-right'],
+                ['Payslips', 'text-right'], ['Cost', 'text-right'], ['Advanced', 'text-right'],
                 ['Invoices', 'text-right'], ['Those invoices', 'text-right'], ['Trades'],
             ],
             (data.people ?? []).map((row) => {
-                const days = row.attendance ?? {};
+                // A row with no register block is a server that did not send
+                // one, and that is a dash — a zero would claim nobody turned up.
+                const days = row.attendance ?? null;
+                const day = (value, tone) => {
+                    if (!days) return dash;
+
+                    return value && tone ? `<span class="${tone}">${value}</span>` : (value ?? 0);
+                };
 
                 return `
                 <tr class="cursor-pointer border-b border-border/60 hover:bg-secondary/40 ${row.is_active ? '' : 'opacity-60'}"
                     data-person="${esc(String(row.employee_id))}">
                     ${cell(`<button type="button" class="font-medium text-foreground hover:underline" data-person="${esc(String(row.employee_id))}">${esc(row.name)}</button>${row.is_active ? '' : ' <span class="badge bg-muted text-secondary-foreground">left</span>'}`)}
                     ${cell(esc(row.designation ?? '—'), 'text-muted-foreground')}
-                    ${num(days.present ?? 0)}
-                    ${num(days.half_day ?? 0)}
-                    ${num(days.absent ? `<span class="text-rose-700">${days.absent}</span>` : 0)}
-                    ${num(days.paid_leave ?? 0)}
-                    ${num(days.off ?? 0)}
-                    ${num(days.unmarked ? `<span class="text-amber-700">${days.unmarked}</span>` : 0)}
+                    ${num(day(days?.present))}
+                    ${num(day(days?.half_day))}
+                    ${num(day(days?.absent, 'text-rose-700'))}
+                    ${num(day(days?.paid_leave))}
+                    ${num(day(days?.off))}
+                    ${num(day(days?.unmarked, 'text-amber-700'))}
                     ${num(row.payslips)}
                     ${num(money(row.cost))}
+                    ${num(Number(row.advance_given) > 0 ? money(row.advance_given) : dash)}
                     ${num(row.work_jobs || dash)}
                     ${num(Number(row.work_value) === 0 ? dash : money(row.work_value))}
                     ${cell(trades(row.work_trades), 'text-muted-foreground')}
@@ -725,7 +737,9 @@ export function peoplePanel(data) {
                 The day columns are the attendance register over the same period. <strong class="font-semibold">Off</strong>
                 is holidays and weekly offs together, and <strong class="font-semibold">Unmarked</strong> is days the
                 person was on the staff with nothing recorded — left as it is, never counted as present or absent.
-                Open a row for that person's invoices.
+                <strong class="font-semibold">Cost</strong> is posted payslips for months inside the window, and
+                <strong class="font-semibold">Advanced</strong> is advances paid inside it. Open a row for the whole
+                person — pay, advances, attendance and the invoices naming them.
            </p>
            <p class="px-1 pb-2 text-[0.75rem] text-muted-foreground">
                 None of it is an input to pay. Many of the workshop's people never appear on a document at all,

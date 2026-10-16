@@ -318,7 +318,7 @@ class PartyLedgerService
      * that showed ₹1,42,500 billed and a ₹13,500 receivable is showing two
      * views of one set of entries, not two numbers that have to be reconciled.
      *
-     * @param  Collection<int, array{account_id: int, debit: string, credit: string}>  $totals
+     * @param  Collection<int, array{account_id: int, cancelled?: bool, debit: string, credit: string}>  $totals
      * @return array{billed: string, received: string, purchased: string, paid: string}
      */
     private function foldLifetime(Collection $totals): array
@@ -333,7 +333,10 @@ class PartyLedgerService
         foreach ($totals as $row) {
             $role = $roles[(int) $row['account_id']] ?? null;
 
-            if ($role === null) {
+            // A reversed document and its reversal are neither business done
+            // nor money moved: counted gross, a reversed payment would read as
+            // that much purchased again.
+            if ($role === null || ($row['cancelled'] ?? false)) {
                 continue;
             }
 

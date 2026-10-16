@@ -796,6 +796,85 @@ class WorkAttributionTest extends TestCase
     }
 
     #[Test]
+    public function the_people_panel_reports_the_periods_advances_and_the_whole_person(): void
+    {
+        $this->travelTo('2026-10-15 12:00:00');
+
+        // In service since last year, so the financial year is all theirs.
+        $this->actingForTenant($this->tenant, fn () => $this->ramesh->update([
+            'joined_on' => '2025-06-01', 'phone' => '9876500000',
+        ]));
+
+        foreach (['2026-10-01' => 'present', '2026-10-02' => 'absent', '2026-10-03' => 'half_day'] as $date => $status) {
+            $this->withHeaders($this->authHeader($this->owner))
+                ->putJson('/api/v1/staff/attendance', [
+                    'date' => $date, 'rows' => [['employee_id' => $this->ramesh->id, 'status' => $status]],
+                ])
+                ->assertOk();
+        }
+
+        $advance = function (string $date, string $amount) {
+            return $this->withHeaders($this->authHeader($this->owner))
+                ->postJson('/api/v1/staff/advances', [
+                    'employee_id' => $this->ramesh->id,
+                    'date' => $date,
+                    'payments' => [['mode' => 'cash', 'amount' => $amount]],
+                ])
+                ->assertCreated()
+                ->json('data');
+        };
+
+        // One last month, one this month, and one this month that was cancelled.
+        $advance('2026-09-20', '1000.00');
+        $advance('2026-10-05', '2000.00');
+        $cancelled = $advance('2026-10-06', '500.00');
+
+        $this->withHeaders($this->authHeader($this->owner))
+            ->postJson("/api/v1/staff/advances/{$cancelled['id']}/reverse")
+            ->assertSuccessful();
+
+        $panel = $this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/insights/people?period=this_month')
+            ->assertOk()
+            ->json('data');
+
+        // The card: given in October is October's voucher alone; still out is
+        // the position, whatever the window.
+        $this->assertSame('3000.00', $panel['advances']['outstanding']);
+        $this->assertSame('2000.00', $panel['advances']['given_in_period']);
+        $this->assertSame(1, $panel['advances']['given_count']);
+        $this->assertSame('2000.00', $panel['advances']['rows'][0]['given_in_period']);
+
+        $row = collect($panel['people'])->keyBy('employee_id')[$this->ramesh->id];
+
+        $this->assertSame('2000.00', $row['advance_given']);
+        $this->assertSame(1, $row['advance_given_count']);
+        $this->assertSame('3000.00', $row['advance_outstanding']);
+        $this->assertSame('0.00', $row['advance_recovered']);
+
+        // Who they are — what the drawer paints without a second request.
+        $this->assertSame('9876500000', $row['phone']);
+        $this->assertSame('monthly', $row['salary_basis']);
+        $this->assertSame('18000.00', $row['pay_rate']);
+        $this->assertSame('2025-06-01', $row['joined_on']);
+
+        // 1–15 October, three of them marked.
+        $this->assertSame([
+            'present' => 1, 'half_day' => 1, 'absent' => 1, 'paid_leave' => 0, 'off' => 0, 'unmarked' => 12,
+        ], $row['attendance']);
+
+        // The screen's own default window reads the same register.
+        $year = collect($this->withHeaders($this->authHeader($this->owner))
+            ->getJson('/api/v1/insights/people?period=this_financial_year')
+            ->assertOk()
+            ->json('data.people'))->keyBy('employee_id')[$this->ramesh->id];
+
+        $this->assertSame(1, $year['attendance']['present']);
+        $this->assertSame('3000.00', $year['advance_given']);
+        $this->assertSame(2, $year['advance_given_count']);
+    }
+
+    #[Test]
     public function a_reversed_invoice_stops_counting_as_work_done(): void
     {
         $sale = $this->postSale(

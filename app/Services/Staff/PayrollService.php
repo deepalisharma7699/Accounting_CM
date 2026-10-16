@@ -117,6 +117,18 @@ class PayrollService
     }
 
     /**
+     * Advances paid to each of these people inside a window — see
+     * {@see PayrollRepositoryInterface::advancesPaidBetween()}.
+     *
+     * @param  array<int, int>  $employeeIds
+     * @return array<int, array{amount: string, count: int}>
+     */
+    public function advancesPaidBetween(array $employeeIds, ?string $from, ?string $to): array
+    {
+        return $this->payroll->advancesPaidBetween($employeeIds, $from, $to);
+    }
+
+    /**
      * Every payslip for one employee, most recent first — the drawer's history.
      *
      * @return \Illuminate\Support\Collection<int, \App\Models\PayrollLine>
